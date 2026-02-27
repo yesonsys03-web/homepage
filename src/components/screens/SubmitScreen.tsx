@@ -27,19 +27,16 @@ export function SubmitScreen() {
     const file = e.target.files?.[0]
     if (!file) return
 
-    // 이미지 파일만 허용
     if (!file.type.startsWith("image/")) {
       alert("이미지 파일만 업로드 가능합니다")
       return
     }
 
-    // 파일 크기 체크 (5MB 이하)
-    if (file.size > 5 * 1024 * 1024) {
-      alert("5MB 이하의 이미지만 업로드 가능합니다")
+    if (file.size > 500 * 1024) {
+      alert("500KB 이하의 이미지만 업로드 가능합니다")
       return
     }
 
-    // Base64로 변환하여 미리보기
     const reader = new FileReader()
     reader.onload = (event) => {
       const result = event.target?.result as string
@@ -185,11 +182,9 @@ export function SubmitScreen() {
               </div>
             </div>
 
-            {/* 썸네일 이미지 - 파일 업로드 + URL 입력 */}
             <div>
               <label className="block text-[#F4F7FF] font-medium mb-2">썸네일 이미지</label>
               
-              {/* 파일 선택 버튼 */}
               <div className="mb-3">
                 <input
                   ref={fileInputRef}
@@ -208,10 +203,9 @@ export function SubmitScreen() {
                   </svg>
                   파일 선택
                 </label>
-                <span className="ml-3 text-[#B8C3E6] text-sm">(5MB 이하, JPG/PNG)</span>
+                <span className="ml-3 text-[#B8C3E6] text-sm">(500KB 이하, JPG/PNG)</span>
               </div>
 
-              {/* 또는 URL 입력 */}
               <div className="border-2 border-dashed border-[#111936] rounded-lg p-4">
                 <p className="text-[#B8C3E6] text-sm mb-2">또는 이미지 URL을 입력하세요</p>
                 <Input 
@@ -225,7 +219,6 @@ export function SubmitScreen() {
                 />
               </div>
 
-              {/* 미리보기 */}
               {(thumbnailPreview || formData.thumbnail_url) && (
                 <div className="mt-3 relative inline-block">
                   <img 
