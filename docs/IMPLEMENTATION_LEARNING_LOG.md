@@ -584,3 +584,117 @@ git add server/main.py server/db.py server/pyproject.toml server/uv.lock docs/IM
 git commit -m "feat(db): Neon PostgreSQL 연동 및 API 구현"
 git push origin main
 ```
+
+## Session 2026-02-28-02
+
+### 1) Goal
+JWT 기반 사용자 인증 시스템을 구현한다.
+
+### 2) Inputs
+- **참고 문서**: `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`
+- **사용자 피드백/이슈**: "인증 (Auth)" 선택
+- **제약 조건**: Neon DB users 테이블 사용
+
+### 3) Design Decisions
+
+#### 기술 스택
+| 패키지 | 용도 |
+|--------|------|
+| python-jose | JWT 토큰 생성/검증 |
+| bcrypt | 비밀번호 해시화 |
+| fastapi.security | OAuth2PasswordBearer |
+
+#### API 엔드포인트
+| 메서드 | 엔드포인트 | 설명 |
+|--------|----------|------|
+| POST | `/api/auth/register` | 회원가입 |
+| POST | `/api/auth/login` | 로그인 |
+| GET | `/api/me` | 현재 사용자 (토큰 필요) |
+
+### 4) Implementation Notes
+
+#### 4.1 인증 모듈
+
+**파일**: `server/auth.py`
+
+```python
+import bcrypt
+from jose import jwt
+
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
+ALGORITHM = "HS256"
+
+def get_password_hash(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
+
+def create_access_token(data: dict) -> str:
+    return jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
+
+def decode_token(token: str) -> Optional[dict]:
+    return jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+```
+
+#### 4.2 데이터베이스
+
+- users 테이블에 `password_hash` 컬럼 추가
+- `create_user()`, `get_user_by_email()`, `get_user_by_id()` 함수 추가
+
+#### 4.3 의존성 주입
+
+```python
+from fastapi.security import OAuth2PasswordBearer
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = decode_token(token)
+    user = get_user_by_id(payload.get("sub"))
+    return user
+```
+
+### 5) Validation
+
+#### API 테스트
+```bash
+# 회원가입
+curl -X POST http://localhost:8000/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","nickname":"testuser","password":"password123"}'
+
+# 로그인
+curl -X POST http://localhost:8000/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"test@example.com","password":"password123"}'
+
+# 현재 사용자 조회
+curl -H "Authorization: Bearer <TOKEN>" http://localhost:8000/api/me
+```
+
+### 6) Outcome
+
+#### 잘된 점
+- ✅ JWT 기반 인증 시스템 완성
+- ✅ bcrypt로 안전하게 비밀번호 해시화
+- ✅ 보호된 라우트 (의존성 주입) 지원
+- ✅ GitHub 푸시 완료 (커밋: fd6dbef0)
+
+#### 아쉬운 점
+- ❌ 이미지 업로드 미구현
+- ❌ 프론트엔드 인증 폼 미연동
+
+#### 다음 액션
+1. 이미지 업로드 기능 추가
+2. 프론트엔드 로그인/회원가입 화면 연동
+3. 배포 (Vercel 등)
+
+---
+
+## GitHub Push 완료 (2026-02-28)
+
+###推送 정보
+- **Repo**: https://github.com/yesonsys03-web/homepage.git
+- **커밋**: fd6dbef0 - `feat(auth): JWT 인증 구현`
+- **Branch**: main
