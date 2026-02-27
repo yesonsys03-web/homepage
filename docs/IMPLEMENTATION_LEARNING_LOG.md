@@ -422,3 +422,165 @@ git push origin "sprint-01-complete-2026-02-27"
 - 잘된 점: 즉시 실행 가능한 API 베이스라인 확보
 - 아쉬운 점: 실제 도메인 라우트(project/comment/report)는 아직 미구현
 - 다음 액션: `projects` 라우터와 Pydantic 스키마 추가
+
+
+## Session 2026-02-28-01
+
+### 1) Goal
+Neon PostgreSQL 데이터베이스를 연결하고 실제 API 연동을 완료한다.
+
+### 2) Inputs
+- **참고 문서**: `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`
+- **사용자 피드백/이슈": "다음 단계 진행" 요청
+- **제약 조건**: Neon DB 무료 티어 사용, uv 기반 실행 유지
+
+### 3) Design Decisions
+
+#### Neon DB 연결 문자열
+```
+postgresql://neondb_owner:npg_***@ep-summer-bar-a10gq0xl-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
+```
+
+#### 테이블 스키마
+| 테이블 | 설명 |
+|--------|-------|
+| users | 사용자 (id, nickname, role) |
+| projects | 프로젝트 (title, summary, description, tags, like_count, comment_count) |
+| comments | 댓글 (content, parent_id, status) |
+| reports | 신고 (target_type, target_id, reason, status) |
+
+### 4) Implementation Notes
+
+#### 4.1 DB 연결 설정
+
+**파일**: `server/db.py`
+
+```python
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from dotenv import load_dotenv
+
+load_dotenv(".env")
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+@contextmanager
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    try:
+        yield conn
+    finally:
+        conn.close()
+```
+
+#### 4.2 테이블 초기화
+
+```python
+def init_db():
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            # users 테이블
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    nickname VARCHAR(100) UNIQUE NOT NULL,
+                    role VARCHAR(20) DEFAULT 'user',
+                    ...
+                )
+            """)
+            # projects, comments, reports 테이블同样创建
+            conn.commit()
+```
+
+#### 4.3 CRUD 함수
+
+| 함수 | 설명 |
+|------|-------|
+| `get_projects()` | 프로젝트 목록 조회 (정렬/필터 지원) |
+| `get_project()` | 프로젝트 상세 조회 |
+| `create_project()` | 프로젝트 생성 |
+| `like_project()` / `unlike_project()` | 좋아요/취소 |
+| `get_comments()` | 댓글 목록 |
+| `create_comment()` | 댓글 작성 |
+| `report_comment()` | 댓글 신고 |
+| `get_reports()` / `update_report()` | 신고 관리 |
+
+#### 4.4 백엔드 연동
+
+**파일**: `server/main.py`
+
+```python
+@app.on_event("startup")
+async def startup_event():
+    try:
+        init_db()
+    except Exception as e:
+        print(f"⚠️  DB initialization warning: {e}")
+```
+
+#### 4.5 수정된 에러
+
+| 에러 | 원인 | 해결 |
+|------|------|------|
+| `Address already in use` | 포트 8000 사용 중 | `kill -9 <PID>` |
+| `DATABASE_URL not set` | .env 경로 오류 | `load_dotenv(".env")` 변경 |
+| `column "tags" does not exist` | 테이블에 tags 컬럼 누락 | `ALTER TABLE projects ADD COLUMN tags TEXT[]` |
+
+### 5) Validation
+
+#### 빌드 확인
+```bash
+cd /Users/usabatch/coding/web
+pnpm build
+# ✓ built in 1.66s
+```
+
+#### API 테스트
+```bash
+# 헬스체크
+curl http://localhost:8000/health
+{"status":"ok"}
+
+# 프로젝트 생성
+curl -X POST http://localhost:8000/api/projects \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test Project","summary":"Test"}'
+
+# 프로젝트 목록
+curl http://localhost:8000/api/projects
+{"items":[{"id":"...","title":"Test Project",...}],"next_cursor":null}
+```
+
+### 6) Outcome
+
+#### 잘된 점
+- ✅ Neon PostgreSQL 연동 완료
+- ✅ 실제 DB로 CRUD operations 동작
+- ✅ 프론트엔드-백엔드-API-DB 전체 데이터 플로우 완성
+- ✅ GitHub 푸시 완료 (커밋: fc989ae7)
+
+#### 아쉬운 점
+- ❌ 사용자 인증 미구현
+- ❌ 이미지 업로드 미구현
+- ❌ tags 필터 검색 미검증
+
+#### 다음 액션
+1. 사용자 인증 (JWT/OAuth) 구현
+2. 이미지 업로드 기능 추가
+3. 태그 기반 필터링 검증
+4. 배포 (Vercel 등)
+
+---
+
+## GitHub Push 완료 (2026-02-28)
+
+###推送 정보
+- **Repo**: https://github.com/yesonsys03-web/homepage.git
+- **커밋**: fc989ae7 - `feat(db): Neon PostgreSQL 연동 및 API 구현`
+- **Branch**: main
+
+###推送 명령어
+```bash
+git add server/main.py server/db.py server/pyproject.toml server/uv.lock docs/IMPLEMENTATION_LEARNING_LOG.md
+git commit -m "feat(db): Neon PostgreSQL 연동 및 API 구현"
+git push origin main
+```
