@@ -698,3 +698,78 @@ curl -H "Authorization: Bearer <TOKEN>" http://localhost:8000/api/me
 - **Repo**: https://github.com/yesonsys03-web/homepage.git
 - **커밋**: fd6dbef0 - `feat(auth): JWT 인증 구현`
 - **Branch**: main
+
+## Session 2026-02-28-03
+
+### 1) Goal
+프로젝트 등록 폼에 이미지 URL 입력을 추가하고 미리보기를 구현한다.
+
+### 2) Inputs
+- **사용자 피드백/이슈**: "이미지 업로드" 선택
+- **제약 조건**: MVP에서는 파일 업로드 없이 URL 방식만 지원
+
+### 3) Design Decisions
+
+#### 이미지 입력 방식
+| 방식 | 장점 | 단점 |
+|------|------|------|
+| URL 입력 | 간단, 서버 부하 없음 | 외부 이미지 의존 |
+| 파일 업로드 | 자체 관리 | S3 등 스토리지 필요 |
+
+**선택**: URL 입력 방식 (MVP)
+
+### 4) Implementation Notes
+
+#### SubmitScreen.tsx 업데이트
+
+```typescript
+const [formData, setFormData] = useState({
+  title: "",
+  summary: "",
+  thumbnail_url: "",
+  // ...
+})
+
+// 이미지 미리보기
+{formData.thumbnail_url && (
+  <img src={formData.thumbnail_url} alt="preview" />
+)}
+```
+
+#### API 연동
+- 기존 `createProject` API에 `thumbnail_url` 필드 already supported
+- 테스트: `POST /api/projects` with `thumbnail_url` ✅
+
+### 5) Validation
+
+```bash
+# 썸네일 포함 프로젝트 생성 테스트
+curl -X POST http://localhost:8000/api/projects \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Image Test","summary":"Test","thumbnail_url":"https://picsum.photos/400/300"}'
+```
+
+### 6) Outcome
+
+#### 잘된 점
+- ✅ 이미지 URL 입력 및 미리보기 구현
+- ✅ 폼 상태 관리 및 유효성 검사
+- ✅ 라이브 미리보기 (입력 시 즉시 반영)
+- ✅ GitHub 푸시 완료 (커밋: f1f357e8)
+
+#### 아쉬운 점
+- ❌ 실제 파일 업로드 미지원 (URL 방식만)
+- ❌ 프론트엔드 인증 폼 미연동
+
+#### 다음 액션
+1. 프론트엔드 로그인/회원가입 화면 연동
+2. 배포 (Vercel 등)
+
+---
+
+## GitHub Push 완료 (2026-02-28)
+
+###推送 정보
+- **Repo**: https://github.com/yesonsys03-web/homepage.git
+- **커밋**: f1f357e8 - `feat(submit): 프로젝트 등록 폼에 이미지 URL 입력 추가`
+- **Branch**: main
