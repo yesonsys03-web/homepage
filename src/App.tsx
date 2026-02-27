@@ -12,6 +12,7 @@ function AppContent() {
 
   const handleLoginSwitch = () => setCurrentScreen('login')
   const handleRegisterSwitch = () => setCurrentScreen('register')
+  const handleAuthSuccess = () => setCurrentScreen('home')
 
   if (isLoading) {
     return (
@@ -22,11 +23,11 @@ function AppContent() {
   }
 
   if (currentScreen === 'login') {
-    return <LoginScreen onSwitchToRegister={handleRegisterSwitch} />
+    return <LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />
   }
 
   if (currentScreen === 'register') {
-    return <RegisterScreen onSwitchToLogin={handleLoginSwitch} />
+    return <RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />
   }
 
   const screens = {
@@ -35,8 +36,8 @@ function AppContent() {
     submit: <SubmitScreen />,
     profile: <ProfileScreen />,
     admin: <AdminScreen />,
-    login: <LoginScreen onSwitchToRegister={handleRegisterSwitch} />,
-    register: <RegisterScreen onSwitchToLogin={handleLoginSwitch} />,
+    login: <LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />,
+    register: <RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />,
   }
 
   return (
