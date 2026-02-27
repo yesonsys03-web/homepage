@@ -1,4 +1,4 @@
-import { useState, useRef } from "react"
+import { useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -20,31 +20,7 @@ export function SubmitScreen() {
     tags: [] as string[],
   })
   const [submitting, setSubmitting] = useState(false)
-  const [thumbnailPreview, setThumbnailPreview] = useState<string>("")
-  const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-
-    if (!file.type.startsWith("image/")) {
-      alert("이미지 파일만 업로드 가능합니다")
-      return
-    }
-
-    if (file.size > 500 * 1024) {
-      alert("500KB 이하의 이미지만 업로드 가능합니다")
-      return
-    }
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const result = event.target?.result as string
-      setThumbnailPreview(result)
-      setFormData({ ...formData, thumbnail_url: result })
-    }
-    reader.readAsDataURL(file)
-  }
+  const [thumbnailPreview, setThumbnailPreview] = useState("")
 
   const handleSubmit = async () => {
     if (!formData.title || !formData.summary) {
@@ -96,12 +72,9 @@ export function SubmitScreen() {
     setFormData({ ...formData, tags: newTags })
   }
 
-  const clearThumbnail = () => {
-    setFormData({ ...formData, thumbnail_url: "" })
-    setThumbnailPreview("")
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ""
-    }
+  const handleThumbnailChange = (url: string) => {
+    setFormData({ ...formData, thumbnail_url: url })
+    setThumbnailPreview(url)
   }
 
   return (
@@ -183,57 +156,25 @@ export function SubmitScreen() {
             </div>
 
             <div>
-              <label className="block text-[#F4F7FF] font-medium mb-2">썸네일 이미지</label>
-              
-              <div className="mb-3">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="image/*"
-                  onChange={handleFileChange}
-                  className="hidden"
-                  id="thumbnail-upload"
-                />
-                <label
-                  htmlFor="thumbnail-upload"
-                  className="inline-flex items-center px-4 py-2 bg-[#161F42] text-[#B8C3E6] rounded-lg cursor-pointer hover:bg-[#111936] transition-colors"
-                >
-                  <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                  </svg>
-                  파일 선택
-                </label>
-                <span className="ml-3 text-[#B8C3E6] text-sm">(500KB 이하, JPG/PNG)</span>
-              </div>
-
+              <label className="block text-[#F4F7FF] font-medium mb-2">썸네일 이미지 URL</label>
               <div className="border-2 border-dashed border-[#111936] rounded-lg p-4">
-                <p className="text-[#B8C3E6] text-sm mb-2">또는 이미지 URL을 입력하세요</p>
                 <Input 
-                  placeholder="https://..."
-                  value={formData.thumbnail_url.startsWith("data:") ? "" : formData.thumbnail_url}
-                  onChange={(e) => {
-                    setFormData({ ...formData, thumbnail_url: e.target.value })
-                    setThumbnailPreview(e.target.value)
-                  }}
+                  placeholder="https://... (이미지 URL)"
+                  value={formData.thumbnail_url}
+                  onChange={(e) => handleThumbnailChange(e.target.value)}
                   className="bg-[#111936] border-[#111936] text-[#F4F7FF] placeholder-[#B8C3E6]/50"
                 />
+                {thumbnailPreview && (
+                  <div className="mt-3">
+                    <img 
+                      src={thumbnailPreview} 
+                      alt="Thumbnail preview" 
+                      className="w-full aspect-video object-cover rounded-lg"
+                      onError={() => setThumbnailPreview("")}
+                    />
+                  </div>
+                )}
               </div>
-
-              {(thumbnailPreview || formData.thumbnail_url) && (
-                <div className="mt-3 relative inline-block">
-                  <img 
-                    src={thumbnailPreview || formData.thumbnail_url} 
-                    alt="Thumbnail preview" 
-                    className="w-40 h-28 object-cover rounded-lg border border-[#111936]"
-                  />
-                  <button
-                    onClick={clearThumbnail}
-                    className="absolute -top-2 -right-2 bg-[#FF6B6B] text-white rounded-full w-6 h-6 flex items-center justify-center text-sm hover:bg-[#FF5252]"
-                  >
-                    ×
-                  </button>
-                </div>
-              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -299,8 +240,8 @@ export function SubmitScreen() {
             <Card className="bg-[#161F42] border-0 sticky top-24">
               <span className="absolute -top-2 -right-2 px-2 py-0.5 text-xs font-bold rounded bg-[#23D5AB] text-[#0B1020] rotate-3 z-10">NEW</span>
               <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center rounded-t-xl overflow-hidden">
-                {(thumbnailPreview || formData.thumbnail_url) ? (
-                  <img src={thumbnailPreview || formData.thumbnail_url} alt="Preview" className="w-full h-full object-cover" />
+                {thumbnailPreview ? (
+                  <img src={thumbnailPreview} alt="Preview" className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-[#B8C3E6] text-sm">Thumbnail</span>
                 )}
