@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:backend": "cd server && ./.venv/bin/uvicorn main:app --reload --port 8000",
+    "dev:backend": "cd server && uv run uvicorn main:app --reload --port 8000",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
