@@ -773,3 +773,80 @@ curl -X POST http://localhost:8000/api/projects \
 - **Repo**: https://github.com/yesonsys03-web/homepage.git
 - **커밋**: f1f357e8 - `feat(submit): 프로젝트 등록 폼에 이미지 URL 입력 추가`
 - **Branch**: main
+
+## Session 2026-02-28-04
+
+### 1) Goal
+프론트엔드 로그인/회원가입 화면을 구현하고 인증 상태를 관리한다.
+
+### 2) Inputs
+- **사용자 피드백/이슈**: "프론트엔드 인증" 선택
+- **제약 조건**: 기존 JWT 인증 API와 연동
+
+### 3) Design Decisions
+
+#### 아키텍처
+- AuthContext로 전역 인증 상태 관리
+- localStorage에 토큰/사용자 정보 저장
+- api.ts에 auth 함수 추가 (login, register, getMe)
+
+### 4) Implementation Notes
+
+#### AuthContext
+
+```typescript
+// src/lib/auth-context.tsx
+export function AuthProvider({ children }) {
+  const [user, setUser] = useState<User | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  
+  const login = (newToken, newUser) => {
+    localStorage.setItem(TOKEN_KEY, newToken)
+    setToken(newToken)
+    setUser(newUser)
+  }
+  
+  const logout = () => { /* ... */ }
+}
+```
+
+#### LoginScreen
+- 이메일/비밀번호 입력
+- API 호출 후 토큰 저장
+- 에러 처리 및 로딩 상태
+
+#### RegisterScreen
+- 이메일/닉네임/비밀번호 입력
+- 비밀번호 확인
+- 로그인 화면 전환
+
+### 5) Validation
+
+```bash
+# 로그인 API 테스트
+curl -X POST http://localhost:8000/api/auth/login \
+  -d '{"email":"test@example.com","password":"password123"}'
+# ✅ 성공
+```
+
+### 6) Outcome
+
+#### 잘된 점
+- ✅ 프론트엔드 인증 화면 완성
+- ✅ 상태 관리 및 로컬 스토리지 연동
+- ✅ GitHub 푸시 완료 (커밋: fd14f20b)
+
+#### 아쉬운 점
+- ❌ 실제 배포 미진행
+
+#### 다음 액션
+1. 배포 (Vercel 등)
+
+---
+
+## GitHub Push 완료 (2026-02-28)
+
+###推送 정보
+- **Repo**: https://github.com/yesonsys03-web/homepage.git
+- **커밋**: fd14f20b - `feat(auth): 프론트엔드 인증 화면 구현`
+- **Branch**: main
