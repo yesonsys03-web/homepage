@@ -1,10 +1,10 @@
 import { useState } from 'react'
-import { HomeScreen, ProjectDetailScreen, SubmitScreen, ProfileScreen, AdminScreen } from './components/screens'
+import { HomeScreen, ProjectDetailScreen, SubmitScreen, ProfileScreen, AdminScreen, ExploreScreen, ChallengesScreen, AboutScreen } from './components/screens'
 import { LoginScreen } from './components/screens/LoginScreen'
 import { RegisterScreen } from './components/screens/RegisterScreen'
 import { AuthProvider, useAuth } from './lib/auth-context'
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 function AppContent() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('home')
@@ -31,11 +31,14 @@ function AppContent() {
   }
 
   const screens = {
-    home: <HomeScreen />,
+    home: <HomeScreen onNavigate={setCurrentScreen} />,
     detail: <ProjectDetailScreen />,
     submit: <SubmitScreen />,
     profile: <ProfileScreen />,
     admin: <AdminScreen />,
+    explore: <ExploreScreen />,
+    challenges: <ChallengesScreen />,
+    about: <AboutScreen />,
     login: <LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />,
     register: <RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />,
   }
@@ -48,6 +51,24 @@ function AppContent() {
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'home' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Home
+        </button>
+        <button
+          onClick={() => setCurrentScreen('explore')}
+          className={`px-3 py-1 rounded text-sm ${currentScreen === 'explore' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
+        >
+          Explore
+        </button>
+        <button
+          onClick={() => setCurrentScreen('challenges')}
+          className={`px-3 py-1 rounded text-sm ${currentScreen === 'challenges' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
+        >
+          Challenges
+        </button>
+        <button
+          onClick={() => setCurrentScreen('about')}
+          className={`px-3 py-1 rounded text-sm ${currentScreen === 'about' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
+        >
+          About
         </button>
         <button
           onClick={() => setCurrentScreen('detail')}

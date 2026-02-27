@@ -4,6 +4,12 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { api, type Project } from "@/lib/api"
 
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+
+interface HomeScreenProps {
+  onNavigate?: (screen: Screen) => void
+}
+
 interface ProjectWithMeta extends Project {
   isNew?: boolean
   isHot?: boolean
@@ -70,7 +76,7 @@ function ProjectCard({ project, index }: { project: ProjectWithMeta; index: numb
 
 const filterChips = ["전체", "Web", "App", "AI", "Tool", "Game", "和学习"]
 
-export function HomeScreen() {
+export function HomeScreen({ onNavigate }: HomeScreenProps) {
   const [projects, setProjects] = useState<ProjectWithMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [sort, setSort] = useState<"latest" | "popular">("latest")
@@ -109,12 +115,12 @@ export function HomeScreen() {
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
           <nav className="flex gap-6">
-            <a href="#" className="text-[#23D5AB] font-medium">Home</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</a>
+            <button onClick={() => onNavigate?.('home')} className="text-[#23D5AB] font-medium">Home</button>
+            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
+            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
+            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
           </nav>
-          <Button className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
+          <Button onClick={() => onNavigate?.('submit')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
             작품 올리기
           </Button>
         </div>
@@ -132,7 +138,7 @@ export function HomeScreen() {
             바이브코더들의 놀이터에서 당신의 작품을 공유하고,<br />
             서로의 바이브를 피드백하세요.
           </p>
-          <Button size="lg" className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6">
+          <Button size="lg" onClick={() => onNavigate?.('explore')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6">
             지금 시작하기
           </Button>
         </div>
