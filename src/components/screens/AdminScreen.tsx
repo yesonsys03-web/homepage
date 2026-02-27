@@ -2,8 +2,14 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
-export function AdminScreen() {
+interface ScreenProps {
+  onNavigate?: (screen: Screen) => void
+}
+
+
+export function AdminScreen({ onNavigate }: ScreenProps) {
   const stats = [
     { label: "총 신고", value: "24", color: "text-[#F4F7FF]" },
     { label: "미처리", value: "5", color: "text-[#FF6B6B]" },
@@ -77,10 +83,10 @@ export function AdminScreen() {
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder <span className="text-[#FF5D8F]">Admin</span></h1>
           <nav className="flex gap-6">
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">대시보드</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">신고 관리</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">사용자 관리</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">설정</a>
+            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
+            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
+            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
+            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
           </nav>
           <Button className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
             로그아웃

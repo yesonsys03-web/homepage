@@ -32,10 +32,10 @@ function AppContent() {
 
   const screens = {
     home: <HomeScreen onNavigate={setCurrentScreen} />,
-    detail: <ProjectDetailScreen />,
+    detail: <ProjectDetailScreen onNavigate={setCurrentScreen} />,
     submit: <SubmitScreen onNavigate={setCurrentScreen} />,
-    profile: <ProfileScreen />,
-    admin: <AdminScreen />,
+    profile: <ProfileScreen onNavigate={setCurrentScreen} />,
+    admin: <AdminScreen onNavigate={setCurrentScreen} />,
     explore: <ExploreScreen onNavigate={setCurrentScreen} />,
     challenges: <ChallengesScreen onNavigate={setCurrentScreen} />,
     about: <AboutScreen onNavigate={setCurrentScreen} />,
