@@ -34,11 +34,16 @@ function ProjectCard({ project, index }: { project: ProjectWithMeta; index: numb
       }}
     >
       <StickerBadge type={project.isNew ? "new" : project.isHot ? "hot" : "new"} />
-      <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center">
+      <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center overflow-hidden">
         {project.thumbnail_url ? (
           <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
         ) : (
-          <span className="text-[#B8C3E6] text-sm">Thumbnail</span>
+          <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-gradient-to-br from-[#161F42] to-[#0B1020]">
+            <span className="text-[#23D5AB] text-xs font-bold mb-1">{project.platform.toUpperCase()}</span>
+            <h4 className="text-[#F4F7FF] font-display font-bold text-sm leading-tight line-clamp-3">
+              {project.title}
+            </h4>
+          </div>
         )}
       </div>
       <CardContent className="p-4">
@@ -81,7 +86,6 @@ export function HomeScreen() {
         }
         const data = await api.getProjects(params)
         
-        // 메타 정보 추가
         const projectsWithMeta: ProjectWithMeta[] = data.items.map((p: Project) => ({
           ...p,
           isNew: new Date(p.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
@@ -101,7 +105,6 @@ export function HomeScreen() {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      {/* Top Navigation */}
       <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
@@ -117,7 +120,6 @@ export function HomeScreen() {
         </div>
       </header>
 
-      {/* Hero Section */}
       <section className="relative py-20 px-4 overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-br from-[#161F42]/50 via-[#0B1020] to-[#111936]/30" />
         <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
@@ -136,7 +138,6 @@ export function HomeScreen() {
         </div>
       </section>
 
-      {/* Trending Strip */}
       <section className="py-8 px-4 border-y border-[#111936]">
         <div className="max-w-7xl mx-auto">
           <h3 className="font-display text-lg font-semibold text-[#F4F7FF] mb-4 flex items-center gap-2">
@@ -154,10 +155,8 @@ export function HomeScreen() {
         </div>
       </section>
 
-      {/* Main Feed */}
       <section className="py-8 px-4">
         <div className="max-w-7xl mx-auto">
-          {/* Filter Chips */}
           <div className="flex gap-2 mb-6 flex-wrap">
             {filterChips.map(chip => (
               <button
@@ -182,7 +181,6 @@ export function HomeScreen() {
             </select>
           </div>
 
-          {/* Project Grid */}
           {loading ? (
             <div className="text-center py-20 text-[#B8C3E6]">로딩 중...</div>
           ) : (
@@ -195,10 +193,9 @@ export function HomeScreen() {
         </div>
       </section>
 
-      {/* Footer */}
       <footer className="py-8 px-4 border-t border-[#111936]">
         <div className="max-w-7xl mx-auto text-center text-[#B8C3E6]">
-          <p>© 2026 VibeCoder Playground. Made with ❤️ byバイ브코더들</p>
+          <p>© 2026 VibeCoder Playground. Made with ❤️ byバイブコダー</p>
         </div>
       </footer>
     </div>

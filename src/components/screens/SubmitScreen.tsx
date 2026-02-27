@@ -243,7 +243,12 @@ export function SubmitScreen() {
                 {thumbnailPreview ? (
                   <img src={thumbnailPreview} alt="Preview" className="w-full h-full object-cover" />
                 ) : (
-                  <span className="text-[#B8C3E6] text-sm">Thumbnail</span>
+                  <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-gradient-to-br from-[#161F42] to-[#0B1020]">
+                    <span className="text-[#23D5AB] text-xs font-bold mb-1">{formData.platform.toUpperCase()}</span>
+                    <h4 className="text-[#F4F7FF] font-display font-bold text-sm leading-tight line-clamp-3">
+                      {formData.title || "작품 제목"}
+                    </h4>
+                  </div>
                 )}
               </div>
               <CardContent className="p-4">
