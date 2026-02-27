@@ -97,7 +97,18 @@ def init_db():
                 VALUES ('11111111-1111-1111-1111-111111111111', 'devkim', 'admin')
                 ON CONFLICT (nickname) DO NOTHING
             """)
+            # 컬럼 추가 (password - 해시된 비밀번호)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)
+            """)
+            
             # 컬럼 추가 (tags - 배열 타입)
+            cur.execute("""
+                ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'
+            """)
+            
+            conn.commit()
+            print("✅ Database tables initialized successfully!")
             cur.execute("""
                 ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'
             """)
@@ -284,4 +295,51 @@ def update_report(report_id: str, new_status: str):
                     RETURNING *
                 """, (new_status, report_id))
             conn.commit()
+            return cur.fetchone()
+
+
+
+def create_user(email: str, nickname: str, password_hash: str):
+    """사용자 생성 (회원가입)"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                INSERT INTO users (email, nickname, password_hash)
+                VALUES (%s, %s, %s)
+                RETURNING id, email, nickname, role, created_at
+            """, (email, nickname, password_hash))
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_user_by_email(email: str):
+    """이메일로 사용자 조회"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, email, nickname, password_hash, role, avatar_url, bio, created_at
+                FROM users WHERE email = %s
+            """, (email,))
+            return cur.fetchone()
+
+
+def get_user_by_nickname(nickname: str):
+    """닉네임으로 사용자 조회"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, email, nickname, role, avatar_url, bio, created_at
+                FROM users WHERE nickname = %s
+            """, (nickname,))
+            return cur.fetchone()
+
+
+def get_user_by_id(user_id: str):
+    """ID로 사용자 조회"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("""
+                SELECT id, email, nickname, role, avatar_url, bio, created_at
+                FROM users WHERE id = %s
+            """, (user_id,))
             return cur.fetchone()
