@@ -1,0 +1,93 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* VibeCoder Playground Design System */
+@theme {
+  /* Brand Colors */
+  --color-bg-0: #0B1020;
+  --color-bg-1: #111936;
+  --color-card: #161F42;
+  --color-text-0: #F4F7FF;
+  --color-text-1: #B8C3E6;
+  --color-accent-0: #23D5AB;
+  --color-accent-1: #FFB547;
+  --color-accent-2: #FF5D8F;
+  --color-danger: #FF6B6B;
+
+  /* Typography */
+  --font-display: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "Pretendard", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+/* Base styles */
+:root {
+  --radius: 0.625rem;
+  /* Override shadcn colors with design system */
+  --background: #0B1020;
+  --foreground: #F4F7FF;
+  --card: #161F42;
+  --card-foreground: #F4F7FF;
+  --popover: #111936;
+  --popover-foreground: #F4F7FF;
+  --primary: #23D5AB;
+  --primary-foreground: #0B1020;
+  --secondary: #111936;
+  --secondary-foreground: #F4F7FF;
+  --muted: #161F42;
+  --muted-foreground: #B8C3E6;
+  --accent: #FFB547;
+  --accent-foreground: #0B1020;
+  --destructive: #FF6B6B;
+  --border: #111936;
+  --input: #111936;
+  --ring: #23D5AB;
+  --chart-1: #23D5AB;
+  --chart-2: #FFB547;
+  --chart-3: #FF5D8F;
+  --chart-4: #B8C3E6;
+  --chart-5: #F4F7FF;
+  --sidebar: #0B1020;
+  --sidebar-foreground: #F4F7FF;
+  --sidebar-primary: #23D5AB;
+  --sidebar-primary-foreground: #0B1020;
+  --sidebar-accent: #111936;
+  --sidebar-accent-foreground: #F4F7FF;
+  --sidebar-border: #111936;
+  --sidebar-ring: #23D5AB;
+}
+
+body {
+  font-family: var(--font-body);
+  line-height: 1.6;
+  font-weight: 400;
+  color-scheme: dark;
+  color: var(--foreground);
+  background-color: var(--background);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  margin: 0;
+  min-height: 100vh;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Typography classes */
+.font-display {
+  font-family: var(--font-display);
+}
+
+.font-body {
+  font-family: var(--font-body);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+}
