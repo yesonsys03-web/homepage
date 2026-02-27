@@ -182,3 +182,243 @@
 - 잘된 점: 즉시 실행 가능한 API 베이스라인 확보
 - 아쉬운 점: 실제 도메인 라우트(project/comment/report)는 아직 미구현
 - 다음 액션: `projects` 라우터와 Pydantic 스키마 추가
+
+---
+
+## Session 2026-02-27-04
+
+### 1) Goal
+FastAPI 백엔드를 구현하고 프론트엔드와 연결한다.同一个 폴더에서 실행 가능한 구조로 만든다.
+
+### 2) Inputs
+- **참고 문서**: `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md` (9.2 MVP API)
+- **사용자 피드백/이슈**: "다음 단계 진행" 요청
+- **제약 조건**:同一个 폴더에서 프론트+백엔드 실행
+
+### 3) Design Decisions
+
+#### 아키텍처
+```
+프로젝트 구조:
+/web
+├── src/                    # React 프론트엔드
+│   ├── components/
+│   ├── lib/
+│   └── App.tsx
+├── server/                 # FastAPI 백엔드
+│   ├── main.py
+│   ├── pyproject.toml
+│   └── .venv/
+└── package.json            # pnpm 스크립트
+```
+
+#### 실행 명령어
+```bash
+# 프론트엔드
+pnpm dev              # http://localhost:5173
+
+# 백엔드
+pnpm dev:backend     # http://localhost:8000
+```
+
+#### API 엔드포인트 설계
+| 메서드 | 엔드포인트 | 설명 |
+|--------|----------|------|
+| GET | `/api/projects` | 프로젝트 목록 (정렬/필터) |
+| GET | `/api/projects/{id}` | 프로젝트 상세 |
+| POST | `/api/projects` | 프로젝트 생성 |
+| POST | `/api/projects/{id}/like` | 좋아요 |
+| DELETE | `/api/projects/{id}/like` | 좋아요 취소 |
+| GET | `/api/projects/{id}/comments` | 댓글 목록 |
+| POST | `/api/projects/{id}/comments` | 댓글 작성 |
+| POST | `/api/comments/{id}/report` | 댓글 신고 |
+| GET | `/api/admin/reports` | 신고 목록 (관리자) |
+| PATCH | `/api/admin/reports/{id}` | 신고 처리 |
+| GET | `/api/me/projects` | 내 프로젝트 |
+| GET | `/health` | 헬스체크 |
+
+### 4) Implementation Notes
+
+#### 4.1 FastAPI 백엔드 구현
+
+**위치**: `server/main.py`
+
+```python
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import Optional
+from datetime import datetime
+import uuid
+
+app = FastAPI(title="VibeCoder Playground API")
+
+# CORS 설정
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+**주요 모델**:
+```python
+class Project(BaseModel):
+    id: str
+    title: str
+    summary: str
+    description: Optional[str]
+    thumbnail_url: Optional[str]
+    demo_url: Optional[str]
+    repo_url: Optional[str]
+    platform: str
+    tags: list[str]
+    author_id: str
+    author_nickname: str
+    like_count: int
+    comment_count: int
+    created_at: str
+
+class Comment(BaseModel):
+    id: str
+    project_id: str
+    author_id: str
+    author_nickname: str
+    content: str
+    like_count: int
+    status: str
+    created_at: str
+```
+
+#### 4.2 프론트엔드 API 클라이언트
+
+**파일**: `src/lib/api.ts`
+
+```typescript
+const API_BASE = "http://localhost:8000"
+
+export const api = {
+  getProjects: async (params?: { sort?: string; platform?: string }) => {
+    const res = await fetch(`${API_BASE}/api/projects?${params}`)
+    return res.json()
+  },
+  
+  getProject: async (id: string) => {
+    const res = await fetch(`${API_BASE}/api/projects/${id}`)
+    return res.json()
+  },
+  
+  likeProject: async (id: string) => { /* ... */ },
+  getComments: async (projectId: string) => { /* ... */ },
+  createComment: async (projectId: string, content: string) => { /* ... */ },
+  // ...
+}
+```
+
+#### 4.3 package.json 스크립트
+
+```json
+{
+  "scripts": {
+    "dev": "vite",
+    "dev:backend": "cd server && ./.venv/bin/uvicorn main:app --reload --port 8000",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview"
+  }
+}
+```
+
+#### 4.4 화면 연동
+
+**HomeScreen.tsx**:
+```typescript
+useEffect(() => {
+  const fetchProjects = async () => {
+    const data = await api.getProjects({ sort, platform: filter })
+    setProjects(data.items)
+  }
+  fetchProjects()
+}, [sort, filter])
+```
+
+**ProjectDetailScreen.tsx**:
+```typescript
+const handleLike = async () => {
+  if (liked) {
+    const result = await api.unlikeProject("1")
+  } else {
+    const result = await api.likeProject("1")
+  }
+}
+
+const handleCommentSubmit = async () => {
+  const newComment = await api.createComment("1", commentText)
+  setComments([newComment, ...comments])
+}
+```
+
+### 5) Validation
+
+#### 빌드 확인
+```bash
+cd /Users/usabatch/coding/web
+pnpm build
+# ✓ 152 modules transformed
+# ✓ built in 1.48s
+```
+
+#### 백엔드 실행 확인
+```bash
+curl http://localhost:8000/health
+{"status":"ok"}
+
+curl http://localhost:8000/api/projects
+{"items":[...], "next_cursor": null}
+```
+
+#### 확인된 문제
+| 문제 | 해결 |
+|------|------|
+| 타입 import 오류 | `import { type Project }`로 수정 |
+| uvicorn 실행 오류 | `.venv/bin/uvicorn` 직접 경로 사용 |
+
+### 6) Outcome
+
+#### 잘된 점
+- ✅ FastAPI MVP API 완비
+- ✅ 프론트-백엔드同一个 폴더 통합
+- ✅ 좋아요/댓글 기능 연동
+- ✅ GitHub 푸시 완료
+
+#### 아쉬운 점
+- ❌ 실제 DB 연동 안됨 (인메모리 데이터)
+- ❌ 사용자 인증 안됨
+- ❌ 이미지 업로드 안됨
+
+#### 다음 액션
+1. 실제 DB (PostgreSQL/Neon) 연결
+2. 사용자 인증 구현
+3. 이미지 업로드 기능
+4. Vercel 등 배포
+
+---
+
+## GitHub Push 완료
+
+###推送 정보
+- **Repo**: https://github.com/yesonsys03-web/homepage.git
+- **태그**: `sprint-01-complete-2026-02-27`
+- **커밋**: 2개 (Initial + Merge)
+
+###推送 명령어
+```bash
+git remote add origin https://github.com/yesonsys03-web/homepage.git
+git tag -a "sprint-01-complete-2026-02-27" -m "Sprint 01 완료"
+git push -u origin main
+git push origin "sprint-01-complete-2026-02-27"
+```
+- 잘된 점: 즉시 실행 가능한 API 베이스라인 확보
+- 아쉬운 점: 실제 도메인 라우트(project/comment/report)는 아직 미구현
+- 다음 액션: `projects` 라우터와 Pydantic 스키마 추가
