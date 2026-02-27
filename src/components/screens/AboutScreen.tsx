@@ -1,5 +1,11 @@
 import { Button } from "@/components/ui/button"
 
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+
+interface ScreenProps {
+  onNavigate?: (screen: Screen) => void
+}
+
 const teamMembers = [
   { name: "devkim", role: "Founder & Lead Dev", description: "AI와 웹 개발을 좋아합니다" },
   { name: "codemaster", role: "Backend Engineer", description: "Rust와 Python을 좋아합니다" },
@@ -25,19 +31,19 @@ const faqs = [
   },
 ]
 
-export function AboutScreen() {
+export function AboutScreen({ onNavigate }: ScreenProps) {
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
           <nav className="flex gap-6">
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</a>
-            <a href="#" className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</a>
-            <a href="#" className="text-[#23D5AB] font-medium">About</a>
+            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
+            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
+            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
+            <button onClick={() => onNavigate?.('about')} className="text-[#23D5AB] font-medium">About</button>
           </nav>
-          <Button className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
+          <Button onClick={() => onNavigate?.('submit')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
             작품 올리기
           </Button>
         </div>
@@ -55,11 +61,8 @@ export function AboutScreen() {
             완벽한 코드보다 재미있는 시도가 더 가치 있다고 믿습니다.
           </p>
           <div className="flex gap-4 justify-center">
-            <Button className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold text-lg px-8">
+            <Button onClick={() => onNavigate?.('explore')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold text-lg px-8">
               시작하기
-            </Button>
-            <Button variant="outline" className="border-[#B8C3E6] text-[#B8C3E6] hover:bg-[#B8C3E6]/10 text-lg px-8">
-              더 알아보기
             </Button>
           </div>
         </section>

@@ -36,9 +36,9 @@ function AppContent() {
     submit: <SubmitScreen />,
     profile: <ProfileScreen />,
     admin: <AdminScreen />,
-    explore: <ExploreScreen />,
-    challenges: <ChallengesScreen />,
-    about: <AboutScreen />,
+    explore: <ExploreScreen onNavigate={setCurrentScreen} />,
+    challenges: <ChallengesScreen onNavigate={setCurrentScreen} />,
+    about: <AboutScreen onNavigate={setCurrentScreen} />,
     login: <LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />,
     register: <RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />,
   }
