@@ -22,6 +22,9 @@ from db import (
     get_user_by_email,
     get_user_by_id,
     get_user_projects,
+    get_admin_projects,
+    update_project_admin,
+    set_project_status,
     create_admin_action_log,
     get_admin_action_logs,
     get_latest_policy_update_action,
@@ -136,6 +139,30 @@ class AdminUserLimitRequest(BaseModel):
 class AdminPolicyUpdateRequest(BaseModel):
     blocked_keywords: list[str]
     auto_hide_report_threshold: int
+
+
+class AdminProjectUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    demo_url: Optional[str] = None
+    repo_url: Optional[str] = None
+    platform: Optional[str] = None
+    tags: Optional[list[str]] = None
+    status: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class AdminActionReasonRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+def require_action_reason(reason: Optional[str]) -> str:
+    normalized_reason = (reason or "").strip()
+    if not normalized_reason:
+        raise HTTPException(status_code=400, detail="처리 사유(reason)는 필수입니다")
+    return normalized_reason
 
 
 def normalize_text_for_filter(text: str) -> str:
@@ -282,6 +309,8 @@ def get_project_detail(project_id: str):
     """프로젝트 상세 조회"""
     project = get_project(project_id)
     if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if project.get("status") != "published":
         raise HTTPException(status_code=404, detail="Project not found")
     project["id"] = str(project["id"])
     project["author_id"] = str(project["author_id"])
@@ -451,6 +480,120 @@ def list_admin_users(limit: int = 200, current_user: dict = Depends(require_admi
     for user in users:
         user["id"] = str(user["id"])
     return {"items": users}
+
+
+@app.get("/api/admin/projects")
+def list_admin_projects(
+    status: Optional[str] = None,
+    limit: int = 200,
+    current_user: dict = Depends(require_admin),
+):
+    _ = current_user
+    projects = get_admin_projects(status=status, limit=limit)
+    for project in projects:
+        project["id"] = str(project["id"])
+        project["author_id"] = str(project["author_id"])
+    return {"items": projects}
+
+
+@app.patch("/api/admin/projects/{project_id}")
+def update_admin_project(
+    project_id: str,
+    payload: AdminProjectUpdateRequest,
+    current_user: dict = Depends(require_admin),
+):
+    updates = payload.model_dump(exclude_none=True)
+    reason = require_action_reason(updates.pop("reason", None))
+    if not updates:
+        raise HTTPException(status_code=400, detail="변경할 프로젝트 필드가 없습니다")
+
+    updated = update_project_admin(project_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="project_updated",
+        target_type="project",
+        target_id=project_id,
+        reason=reason,
+    )
+
+    updated["id"] = str(updated["id"])
+    updated["author_id"] = str(updated["author_id"])
+    return updated
+
+
+@app.post("/api/admin/projects/{project_id}/hide")
+def hide_admin_project(
+    project_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: dict = Depends(require_admin),
+):
+    reason = require_action_reason(payload.reason)
+    updated = set_project_status(project_id=project_id, status="hidden")
+    if not updated:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="project_hidden",
+        target_type="project",
+        target_id=project_id,
+        reason=reason,
+    )
+
+    updated["id"] = str(updated["id"])
+    updated["author_id"] = str(updated["author_id"])
+    return updated
+
+
+@app.post("/api/admin/projects/{project_id}/restore")
+def restore_admin_project(
+    project_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: dict = Depends(require_admin),
+):
+    reason = require_action_reason(payload.reason)
+    updated = set_project_status(project_id=project_id, status="published")
+    if not updated:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="project_restored",
+        target_type="project",
+        target_id=project_id,
+        reason=reason,
+    )
+
+    updated["id"] = str(updated["id"])
+    updated["author_id"] = str(updated["author_id"])
+    return updated
+
+
+@app.delete("/api/admin/projects/{project_id}")
+def delete_admin_project(
+    project_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: dict = Depends(require_admin),
+):
+    reason = require_action_reason(payload.reason)
+    updated = set_project_status(project_id=project_id, status="deleted")
+    if not updated:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="project_deleted",
+        target_type="project",
+        target_id=project_id,
+        reason=reason,
+    )
+
+    updated["id"] = str(updated["id"])
+    updated["author_id"] = str(updated["author_id"])
+    return updated
 
 
 @app.post("/api/admin/users/{user_id}/limit")
