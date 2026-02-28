@@ -1,111 +1,246 @@
 import { useEffect, useMemo, useState } from "react"
+
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { api } from "@/lib/api"
+import { api, type AdminActionLog, type AdminManagedUser } from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+
+type Screen =
+  | "home"
+  | "detail"
+  | "submit"
+  | "profile"
+  | "admin"
+  | "login"
+  | "register"
+  | "explore"
+  | "challenges"
+  | "about"
+
+type ReportStatus = "open" | "reviewing" | "resolved" | "rejected" | "all"
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
 }
 
+interface AdminReportRow {
+  id: string
+  targetType: string
+  targetContent: string
+  reason: string
+  status: string
+  reporter: string
+  createdAt: string
+}
+
+const STATUS_TABS: Array<{ value: ReportStatus; label: string }> = [
+  { value: "all", label: "전체" },
+  { value: "open", label: "미처리" },
+  { value: "reviewing", label: "검토중" },
+  { value: "resolved", label: "처리완료" },
+  { value: "rejected", label: "거절" },
+]
+
+function statusToText(status: string): string {
+  if (status === "open") return "미처리"
+  if (status === "reviewing") return "검토중"
+  if (status === "resolved") return "처리완료"
+  if (status === "rejected") return "거절"
+  return status
+}
+
+function actionToText(actionType: string): string {
+  if (actionType === "report_resolved") return "신고 처리"
+  if (actionType === "report_rejected") return "신고 거절"
+  if (actionType === "report_reviewing") return "검토 시작"
+  if (actionType === "user_limited") return "사용자 제한"
+  if (actionType === "user_unlimited") return "사용자 제한 해제"
+  return actionType
+}
+
+function getUserLimitState(user: AdminManagedUser): {
+  isLimited: boolean
+  label: string
+} {
+  if (!user.limited_until) {
+    return { isLimited: false, label: "정상" }
+  }
+
+  const limitDate = new Date(user.limited_until)
+  if (Number.isNaN(limitDate.getTime())) {
+    return { isLimited: false, label: "정상" }
+  }
+
+  if (limitDate.getTime() > Date.now()) {
+    return { isLimited: true, label: "제한중" }
+  }
+
+  return { isLimited: false, label: "만료" }
+}
 
 export function AdminScreen({ onNavigate }: ScreenProps) {
-  const { user, logout } = useAuth()
-  const [reports, setReports] = useState<Array<{
-    id: string
-    targetType: string
-    targetContent: string
-    reason: string
-    status: string
-    reporter: string
-    targetUser: string
-    createdAt: string
-  }>>([])
-  const [loading, setLoading] = useState(true)
+  const { logout } = useAuth()
 
-  const loadReports = async () => {
-    setLoading(true)
+  const [reports, setReports] = useState<AdminReportRow[]>([])
+  const [actionLogs, setActionLogs] = useState<AdminActionLog[]>([])
+  const [users, setUsers] = useState<AdminManagedUser[]>([])
+  const [loadingReports, setLoadingReports] = useState(true)
+  const [loadingLogs, setLoadingLogs] = useState(true)
+  const [loadingUsers, setLoadingUsers] = useState(true)
+  const [activeStatus, setActiveStatus] = useState<ReportStatus>("all")
+  const [searchQuery, setSearchQuery] = useState("")
+
+  const loadReports = async (status?: Exclude<ReportStatus, "all">) => {
+    setLoadingReports(true)
     try {
-      const data = await api.getReports()
+      const data = await api.getReports(status)
       const items = Array.isArray(data.items) ? data.items : []
-      const mapped = items.map((item: {
-        id: string
-        target_type: string
-        target_id: string
-        reason: string
-        status: string
-        reporter_id?: string
-        created_at: string
-      }) => ({
-        id: item.id,
-        targetType: item.target_type,
-        targetContent: item.target_id,
-        reason: item.reason,
-        status: item.status,
-        reporter: item.reporter_id || "unknown",
-        targetUser: item.target_id,
-        createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
-      }))
+      const mapped: AdminReportRow[] = items.map(
+        (item: {
+          id: string
+          target_type: string
+          target_id: string
+          reason: string
+          status: string
+          reporter_id?: string
+          created_at: string
+        }) => ({
+          id: item.id,
+          targetType: item.target_type,
+          targetContent: item.target_id,
+          reason: item.reason,
+          status: item.status,
+          reporter: item.reporter_id || "unknown",
+          createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
+        })
+      )
       setReports(mapped)
     } catch (error) {
       console.error("Failed to fetch reports:", error)
       setReports([])
     } finally {
-      setLoading(false)
+      setLoadingReports(false)
+    }
+  }
+
+  const loadActionLogs = async () => {
+    setLoadingLogs(true)
+    try {
+      const data = await api.getAdminActionLogs(100)
+      setActionLogs(Array.isArray(data.items) ? data.items : [])
+    } catch (error) {
+      console.error("Failed to fetch action logs:", error)
+      setActionLogs([])
+    } finally {
+      setLoadingLogs(false)
+    }
+  }
+
+  const loadUsers = async () => {
+    setLoadingUsers(true)
+    try {
+      const data = await api.getAdminUsers(200)
+      setUsers(Array.isArray(data.items) ? data.items : [])
+    } catch (error) {
+      console.error("Failed to fetch users:", error)
+      setUsers([])
+    } finally {
+      setLoadingUsers(false)
     }
   }
 
   useEffect(() => {
-    loadReports()
+    const selectedStatus = activeStatus === "all" ? undefined : activeStatus
+    loadReports(selectedStatus)
+  }, [activeStatus])
+
+  useEffect(() => {
+    loadActionLogs()
+    loadUsers()
   }, [])
+
+  const filteredReports = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return reports
+
+    return reports.filter((report) => {
+      return (
+        report.targetContent.toLowerCase().includes(query)
+        || report.reason.toLowerCase().includes(query)
+        || report.reporter.toLowerCase().includes(query)
+        || report.status.toLowerCase().includes(query)
+      )
+    })
+  }, [reports, searchQuery])
 
   const stats = useMemo(() => {
     const open = reports.filter((r) => r.status === "open").length
     const reviewing = reports.filter((r) => r.status === "reviewing").length
-    const resolvedToday = reports.filter((r) => r.status === "resolved").length
+    const resolved = reports.filter((r) => r.status === "resolved").length
     return [
       { label: "총 신고", value: String(reports.length), color: "text-[#F4F7FF]" },
       { label: "미처리", value: String(open), color: "text-[#FF6B6B]" },
       { label: "검토중", value: String(reviewing), color: "text-[#FFB547]" },
-      { label: "처리완료", value: String(resolvedToday), color: "text-[#23D5AB]" },
+      { label: "처리완료", value: String(resolved), color: "text-[#23D5AB]" },
     ]
   }, [reports])
 
-  const recentActions = useMemo(() => {
-    return reports
-      .filter((report) => report.status === "resolved" || report.status === "rejected")
-      .slice(0, 5)
-      .map((report) => ({
-        action: report.status === "resolved" ? "신고 처리" : "신고 거절",
-        target: report.targetUser,
-        admin: user?.nickname || "admin",
-        time: report.createdAt,
-      }))
-  }, [reports, user?.nickname])
-
-  const handleUpdateReport = async (reportId: string, status: string) => {
+  const handleUpdateReport = async (
+    reportId: string,
+    status: Exclude<ReportStatus, "all">,
+  ) => {
+    const reason = window.prompt("처리 사유를 입력하세요 (선택)", "")
     try {
-      await api.updateReport(reportId, status)
-      await loadReports()
+      await api.updateReport(reportId, status, reason || undefined)
+      const selectedStatus = activeStatus === "all" ? undefined : activeStatus
+      await Promise.all([loadReports(selectedStatus), loadActionLogs()])
     } catch (error) {
       console.error("Failed to update report:", error)
     }
   }
 
+  const handleLimitUser = async (userId: string) => {
+    const hoursText = window.prompt("제한 시간을 입력하세요 (시간)", "24")
+    if (!hoursText) return
+
+    const hours = Number(hoursText)
+    if (!Number.isFinite(hours) || hours <= 0) {
+      window.alert("유효한 시간(1 이상)을 입력해주세요")
+      return
+    }
+
+    const reason = window.prompt("제한 사유를 입력하세요", "운영 정책 위반")
+    try {
+      await api.limitUser(userId, hours, reason || undefined)
+      await Promise.all([loadUsers(), loadActionLogs()])
+    } catch (error) {
+      console.error("Failed to limit user:", error)
+    }
+  }
+
+  const handleUnlimitUser = async (userId: string) => {
+    try {
+      await api.unlimitUser(userId)
+      await Promise.all([loadUsers(), loadActionLogs()])
+    } catch (error) {
+      console.error("Failed to unlimit user:", error)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      {/* Top Navigation */}
       <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder <span className="text-[#FF5D8F]">Admin</span></h1>
+          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">
+            VibeCoder <span className="text-[#FF5D8F]">Admin</span>
+          </h1>
           <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
-            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
-            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
-            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
+            <button onClick={() => onNavigate?.("home")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
+            <button onClick={() => onNavigate?.("explore")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
+            <button onClick={() => onNavigate?.("challenges")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
+            <button onClick={() => onNavigate?.("about")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
           </nav>
           <Button onClick={logout} className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
             로그아웃
@@ -114,10 +249,9 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        {/* Stats */}
-        <div className="grid grid-cols-4 gap-4 mb-8">
-          {stats.map((stat, i) => (
-            <Card key={i} className="bg-[#161F42] border-0">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          {stats.map((stat) => (
+            <Card key={stat.label} className="bg-[#161F42] border-0">
               <CardContent className="p-4 text-center">
                 <div className={`text-3xl font-bold ${stat.color}`}>{stat.value}</div>
                 <div className="text-sm text-[#B8C3E6]">{stat.label}</div>
@@ -128,88 +262,107 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
 
         <Tabs defaultValue="reports">
           <TabsList className="bg-[#161F42] border-0 mb-6">
-            <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">
-              📋 신고 큐
-            </TabsTrigger>
-            <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">
-              👤 사용자
-            </TabsTrigger>
-            <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">
-              📝 작업 로그
-            </TabsTrigger>
+            <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
+            <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
+            <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
           </TabsList>
 
           <TabsContent value="reports">
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex gap-2 flex-wrap">
+                {STATUS_TABS.map((tab) => (
+                  <button
+                    key={tab.value}
+                    type="button"
+                    onClick={() => setActiveStatus(tab.value)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                      activeStatus === tab.value
+                        ? "bg-[#FF5D8F] text-white"
+                        : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="사유/대상/신고자 검색"
+                className="w-full md:w-72 bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+              />
+            </div>
+
             <Card className="bg-[#161F42] border-0">
               <CardContent className="p-0">
-                {loading ? (
+                {loadingReports ? (
                   <div className="p-6 text-[#B8C3E6]">로딩 중...</div>
                 ) : (
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-[#111936]">
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">유형</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">내용</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">사유</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">대상</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">신고자</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">시간</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reports.map(report => (
-                      <tr key={report.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
-                        <td className="p-4">
-                          <Badge variant={
-                            report.status === "open" ? "destructive" : 
-                            report.status === "reviewing" ? "secondary" :
-                            report.status === "resolved" ? "default" : "outline"
-                          }>
-                            {report.status === "open" ? "미처리" : 
-                             report.status === "reviewing" ? "검토중" :
-                             report.status === "resolved" ? "처리완료" : "거절"}
-                          </Badge>
-                        </td>
-                        <td className="p-4 text-[#F4F7FF]">{report.targetType}</td>
-                        <td className="p-4 text-[#F4F7FF] max-w-xs truncate">{report.targetContent}</td>
-                        <td className="p-4 text-[#B8C3E6]">{report.reason}</td>
-                        <td className="p-4 text-[#FF5D8F]">{report.targetUser}</td>
-                        <td className="p-4 text-[#B8C3E6]">{report.reporter}</td>
-                        <td className="p-4 text-[#B8C3E6]">{report.createdAt}</td>
-                        <td className="p-4">
-                          <div className="flex gap-1">
-                            <Button 
-                              size="sm" 
-                              className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
-                              disabled={report.status === "resolved"}
-                              onClick={() => handleUpdateReport(report.id, "resolved")}
-                            >
-                              숨기기
-                            </Button>
-                            <Button 
-                              size="sm" 
-                              variant="outline" 
-                              className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                              onClick={() => handleUpdateReport(report.id, "reviewing")}
-                            >
-                              제한
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                              onClick={() => handleUpdateReport(report.id, "rejected")}
-                            >
-                              거절
-                            </Button>
-                          </div>
-                        </td>
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#111936]">
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">유형</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">내용</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">사유</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">신고자</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">시간</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {filteredReports.map((report) => (
+                        <tr key={report.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
+                          <td className="p-4">
+                            <Badge variant={
+                              report.status === "open"
+                                ? "destructive"
+                                : report.status === "reviewing"
+                                  ? "secondary"
+                                  : report.status === "resolved"
+                                    ? "default"
+                                    : "outline"
+                            }>
+                              {statusToText(report.status)}
+                            </Badge>
+                          </td>
+                          <td className="p-4 text-[#F4F7FF]">{report.targetType}</td>
+                          <td className="p-4 text-[#F4F7FF] max-w-xs truncate">{report.targetContent}</td>
+                          <td className="p-4 text-[#B8C3E6]">{report.reason}</td>
+                          <td className="p-4 text-[#B8C3E6]">{report.reporter}</td>
+                          <td className="p-4 text-[#B8C3E6]">{report.createdAt}</td>
+                          <td className="p-4">
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
+                                disabled={report.status === "resolved"}
+                                onClick={() => handleUpdateReport(report.id, "resolved")}
+                              >
+                                처리
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                onClick={() => handleUpdateReport(report.id, "reviewing")}
+                              >
+                                검토
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                onClick={() => handleUpdateReport(report.id, "rejected")}
+                              >
+                                거절
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </CardContent>
             </Card>
@@ -217,8 +370,64 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
 
           <TabsContent value="users">
             <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-6">
-                <p className="text-[#B8C3E6]">사용자 관리 화면입니다.</p>
+              <CardContent className="p-0">
+                {loadingUsers ? (
+                  <div className="p-6 text-[#B8C3E6]">사용자 로딩 중...</div>
+                ) : (
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#111936]">
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">닉네임</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">이메일</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">권한</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">제한 종료</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users.map((user) => {
+                        const limitState = getUserLimitState(user)
+                        return (
+                          <tr key={user.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
+                            <td className="p-4 text-[#F4F7FF]">{user.nickname}</td>
+                            <td className="p-4 text-[#B8C3E6]">{user.email || "-"}</td>
+                            <td className="p-4 text-[#B8C3E6]">{user.role}</td>
+                            <td className="p-4">
+                              <Badge variant={limitState.isLimited ? "destructive" : "secondary"}>
+                                {limitState.label}
+                              </Badge>
+                            </td>
+                            <td className="p-4 text-[#B8C3E6]">
+                              {user.limited_until ? new Date(user.limited_until).toLocaleString("ko-KR") : "-"}
+                            </td>
+                            <td className="p-4">
+                              <div className="flex gap-1">
+                                <Button
+                                  size="sm"
+                                  className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
+                                  disabled={user.role === "admin" || limitState.isLimited}
+                                  onClick={() => handleLimitUser(user.id)}
+                                >
+                                  24h 제한
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                  disabled={user.role === "admin" || !limitState.isLimited}
+                                  onClick={() => handleUnlimitUser(user.id)}
+                                >
+                                  제한 해제
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
@@ -226,26 +435,32 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           <TabsContent value="actions">
             <Card className="bg-[#161F42] border-0">
               <CardContent className="p-0">
-                <table className="w-full">
-                  <thead>
-                    <tr className="border-b border-[#111936]">
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">대상</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">관리자</th>
-                      <th className="text-left p-4 text-[#B8C3E6] font-medium">시간</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentActions.map((action, i) => (
-                      <tr key={i} className="border-b border-[#111936]/50">
-                        <td className="p-4 text-[#F4F7FF]">{action.action}</td>
-                        <td className="p-4 text-[#FF5D8F]">{action.target}</td>
-                        <td className="p-4 text-[#B8C3E6]">{action.admin}</td>
-                        <td className="p-4 text-[#B8C3E6]">{action.time}</td>
+                {loadingLogs ? (
+                  <div className="p-6 text-[#B8C3E6]">로그 로딩 중...</div>
+                ) : (
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#111936]">
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">대상</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">사유</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">관리자</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">시간</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {actionLogs.map((log) => (
+                        <tr key={log.id} className="border-b border-[#111936]/50">
+                          <td className="p-4 text-[#F4F7FF]">{actionToText(log.action_type)}</td>
+                          <td className="p-4 text-[#FF5D8F]">{log.target_type}:{log.target_id}</td>
+                          <td className="p-4 text-[#B8C3E6]">{log.reason || "-"}</td>
+                          <td className="p-4 text-[#B8C3E6]">{log.admin_nickname || "admin"}</td>
+                          <td className="p-4 text-[#B8C3E6]">{new Date(log.created_at).toLocaleString("ko-KR")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

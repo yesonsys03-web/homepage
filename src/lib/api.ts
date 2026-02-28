@@ -49,6 +49,27 @@ export interface Report {
   resolved_at?: string
 }
 
+export interface AdminActionLog {
+  id: string
+  admin_id?: string
+  admin_nickname?: string
+  action_type: string
+  target_type: string
+  target_id: string
+  reason?: string
+  created_at: string
+}
+
+export interface AdminManagedUser {
+  id: string
+  email: string
+  nickname: string
+  role: string
+  created_at: string
+  limited_until?: string | null
+  limited_reason?: string | null
+}
+
 async function authFetch(url: string, options: RequestInit = {}) {
   const token = getToken()
   const headers: HeadersInit = {
@@ -169,13 +190,39 @@ export const api = {
     return res.json()
   },
 
-  updateReport: async (reportId: string, status: string) => {
+  updateReport: async (reportId: string, status: string, reason?: string) => {
     const res = await authFetch(`${API_BASE}/api/admin/reports/${reportId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, reason }),
     })
     return res.json() as Promise<Report>
+  },
+
+  getAdminActionLogs: async (limit: number = 50) => {
+    const res = await authFetch(`${API_BASE}/api/admin/action-logs?limit=${limit}`)
+    return res.json() as Promise<{ items: AdminActionLog[] }>
+  },
+
+  getAdminUsers: async (limit: number = 200) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users?limit=${limit}`)
+    return res.json() as Promise<{ items: AdminManagedUser[] }>
+  },
+
+  limitUser: async (userId: string, hours: number, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/limit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hours, reason }),
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  unlimitUser: async (userId: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/limit`, {
+      method: "DELETE",
+    })
+    return res.json() as Promise<AdminManagedUser>
   },
 
   // My Projects

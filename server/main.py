@@ -20,6 +20,11 @@ from db import (
     get_user_by_email,
     get_user_by_id,
     get_user_projects,
+    create_admin_action_log,
+    get_admin_action_logs,
+    get_admin_users,
+    limit_user,
+    unlimit_user,
 )
 from auth import (
     verify_password,
@@ -84,6 +89,12 @@ class TokenResponse(BaseModel):
 
 class AdminReportUpdateRequest(BaseModel):
     status: str
+    reason: Optional[str] = None
+
+
+class AdminUserLimitRequest(BaseModel):
+    hours: int = 24
+    reason: Optional[str] = None
 
 
 # ============ Startup Event ============
@@ -262,6 +273,81 @@ def list_reports(
     return {"items": reports}
 
 
+@app.get("/api/admin/action-logs")
+def list_admin_action_logs(
+    limit: int = 50, current_user: dict = Depends(require_admin)
+):
+    _ = current_user
+    logs = get_admin_action_logs(limit=limit)
+    for log in logs:
+        log["id"] = str(log["id"])
+        if log.get("admin_id"):
+            log["admin_id"] = str(log["admin_id"])
+        log["target_id"] = str(log["target_id"])
+    return {"items": logs}
+
+
+@app.get("/api/admin/users")
+def list_admin_users(limit: int = 200, current_user: dict = Depends(require_admin)):
+    _ = current_user
+    users = get_admin_users(limit=limit)
+    for user in users:
+        user["id"] = str(user["id"])
+    return {"items": users}
+
+
+@app.post("/api/admin/users/{user_id}/limit")
+def limit_user_endpoint(
+    user_id: str,
+    payload: AdminUserLimitRequest,
+    current_user: dict = Depends(require_admin),
+):
+    if payload.hours <= 0:
+        raise HTTPException(status_code=400, detail="hours는 1 이상이어야 합니다")
+
+    limited_user = limit_user(
+        user_id=user_id, hours=payload.hours, reason=payload.reason
+    )
+    if not limited_user:
+        raise HTTPException(
+            status_code=404, detail="사용자를 찾을 수 없거나 제한할 수 없습니다"
+        )
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_limited",
+        target_type="user",
+        target_id=user_id,
+        reason=payload.reason,
+    )
+
+    limited_user["id"] = str(limited_user["id"])
+    return limited_user
+
+
+@app.delete("/api/admin/users/{user_id}/limit")
+def unlimit_user_endpoint(
+    user_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    released_user = unlimit_user(user_id=user_id)
+    if not released_user:
+        raise HTTPException(
+            status_code=404, detail="사용자를 찾을 수 없거나 해제할 수 없습니다"
+        )
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_unlimited",
+        target_type="user",
+        target_id=user_id,
+        reason="제한 해제",
+    )
+
+    released_user["id"] = str(released_user["id"])
+    return released_user
+
+
 @app.patch("/api/admin/reports/{report_id}")
 def update_report_endpoint(
     report_id: str,
@@ -276,6 +362,15 @@ def update_report_endpoint(
     updated["id"] = str(updated["id"])
     if updated.get("reporter_id"):
         updated["reporter_id"] = str(updated["reporter_id"])
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type=f"report_{payload.status}",
+        target_type="report",
+        target_id=report_id,
+        reason=payload.reason,
+    )
+
     return updated
 
 

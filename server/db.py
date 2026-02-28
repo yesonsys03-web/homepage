@@ -92,6 +92,18 @@ def init_db():
                 )
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS admin_action_logs (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    admin_id UUID REFERENCES users(id),
+                    action_type VARCHAR(50) NOT NULL,
+                    target_type VARCHAR(20) NOT NULL,
+                    target_id UUID NOT NULL,
+                    reason TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+
             # 기본 사용자 생성 (테스트용)
             cur.execute("""
                 INSERT INTO users (id, nickname, role)
@@ -101,6 +113,12 @@ def init_db():
             # 컬럼 추가 (password - 해시된 비밀번호)
             cur.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS limited_until TIMESTAMP
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS limited_reason TEXT
             """)
 
             # 컬럼 추가 (tags - 배열 타입)
@@ -349,6 +367,92 @@ def update_report(report_id: str, new_status: str):
                 """,
                     (new_status, report_id),
                 )
+            conn.commit()
+            return cur.fetchone()
+
+
+def create_admin_action_log(
+    admin_id: str,
+    action_type: str,
+    target_type: str,
+    target_id: str,
+    reason: Optional[str] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO admin_action_logs (admin_id, action_type, target_type, target_id, reason)
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (admin_id, action_type, target_type, target_id, reason),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_admin_action_logs(limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT l.*, u.nickname as admin_nickname
+                FROM admin_action_logs l
+                LEFT JOIN users u ON l.admin_id = u.id
+                ORDER BY l.created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+
+
+def get_admin_users(limit: int = 200):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, email, nickname, role, created_at, limited_until, limited_reason
+                FROM users
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            return cur.fetchall()
+
+
+def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET limited_until = NOW() + (%s || ' hours')::INTERVAL,
+                    limited_reason = %s
+                WHERE id = %s AND role != 'admin'
+                RETURNING id, email, nickname, role, created_at, limited_until, limited_reason
+                """,
+                (hours, reason, user_id),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def unlimit_user(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET limited_until = NULL,
+                    limited_reason = NULL
+                WHERE id = %s AND role != 'admin'
+                RETURNING id, email, nickname, role, created_at, limited_until, limited_reason
+                """,
+                (user_id,),
+            )
             conn.commit()
             return cur.fetchone()
 
