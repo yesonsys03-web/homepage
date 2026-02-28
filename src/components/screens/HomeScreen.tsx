@@ -165,7 +165,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
             className="h-full w-full object-cover opacity-70"
           />
         </picture>
-        <div className="absolute inset-0 bg-gradient-to-br from-[#0B1020]/56 via-[#0B1020]/50 to-[#111936]/40" />
+        <div className="absolute inset-0 bg-gradient-to-br from-[#0B1020]/39 via-[#0B1020]/35 to-[#111936]/28" />
         <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
         <div className="max-w-7xl mx-auto relative z-10 flex flex-col items-center">
           <h2 className="w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left">
