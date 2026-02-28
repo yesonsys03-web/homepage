@@ -1,70 +1,55 @@
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
+import { api, type Project } from "@/lib/api"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
+const HOT_PROJECT_THRESHOLD = 30
+
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
+  onOpenProject?: (projectId: string) => void
 }
-
-interface Project {
-  id: string
-  title: string
-  summary: string
-  thumbnail_url: string | null
-  demo_url: string | null
-  repo_url: string | null
-  platform: string
-  tags: string[]
-  author_nickname: string
-  like_count: number
-  comment_count: number
-  created_at: string
-}
-
-// 샘플 데이터
-const trendingProjects: Project[] = [
-  {
-    id: "1",
-    title: "AI Music Generator",
-    summary: "AI로 나만의 음악을 생성하세요",
-    thumbnail_url: null,
-    demo_url: "https://example.com",
-    repo_url: "https://github.com",
-    platform: "Web",
-    tags: ["AI", "Music"],
-    author_nickname: "devkim",
-    like_count: 128,
-    comment_count: 32,
-    created_at: "2026-02-20",
-  },
-  {
-    id: "2",
-    title: "Three.js Game",
-    summary: "브라우저 3D 게임",
-    thumbnail_url: null,
-    demo_url: "https://example.com",
-    repo_url: "https://github.com",
-    platform: "Game",
-    tags: ["Three.js", "3D"],
-    author_nickname: "gamedev",
-    like_count: 156,
-    comment_count: 42,
-    created_at: "2026-02-18",
-  },
-]
 
 const categories = [
-  { id: "all", label: "전체", count: 234 },
-  { id: "web", label: "Web", count: 89 },
-  { id: "game", label: "Game", count: 56 },
-  { id: "tool", label: "Tool", count: 45 },
-  { id: "ai", label: "AI", count: 44 },
-  { id: "mobile", label: "Mobile", count: 23 },
+  { id: "all", label: "전체" },
+  { id: "web", label: "Web" },
+  { id: "game", label: "Game" },
+  { id: "tool", label: "Tool" },
+  { id: "ai", label: "AI" },
+  { id: "mobile", label: "Mobile" },
 ]
 
-export function ExploreScreen({ onNavigate }: ScreenProps) {
+export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
+  const [projects, setProjects] = useState<Project[]>([])
+  const [loading, setLoading] = useState(true)
+  const [sort, setSort] = useState<"popular" | "latest">("popular")
+  const [category, setCategory] = useState("all")
+
+  useEffect(() => {
+    const fetchProjects = async () => {
+      setLoading(true)
+      try {
+        const params: { sort?: string; platform?: string } = { sort }
+        if (category !== "all") {
+          params.platform = category
+        }
+        const data = await api.getProjects(params)
+        setProjects(data.items || [])
+      } catch (error) {
+        console.error("Failed to fetch explore projects:", error)
+        setProjects([])
+      } finally {
+        setLoading(false)
+      }
+    }
+
+    fetchProjects()
+  }, [sort, category])
+
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
@@ -86,14 +71,19 @@ export function ExploreScreen({ onNavigate }: ScreenProps) {
         <div className="flex items-center justify-between mb-8">
           <h2 className="font-display text-3xl font-bold text-[#F4F7FF]">Explore</h2>
           <div className="flex gap-2">
-            <Button variant="outline" className="border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10">
+            <Button
+              variant="outline"
+              className={sort === "popular" ? "border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10" : "border-[#B8C3E6] text-[#B8C3E6] hover:bg-[#B8C3E6]/10"}
+              onClick={() => setSort("popular")}
+            >
               🔥 Hot
             </Button>
-            <Button variant="outline" className="border-[#B8C3E6] text-[#B8C3E6] hover:bg-[#B8C3E6]/10">
+            <Button
+              variant="outline"
+              className={sort === "latest" ? "border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10" : "border-[#B8C3E6] text-[#B8C3E6] hover:bg-[#B8C3E6]/10"}
+              onClick={() => setSort("latest")}
+            >
               🆕 New
-            </Button>
-            <Button variant="outline" className="border-[#B8C3E6] text-[#B8C3E6] hover:bg-[#B8C3E6]/10">
-              🏆 Top
             </Button>
           </div>
         </div>
@@ -104,28 +94,38 @@ export function ExploreScreen({ onNavigate }: ScreenProps) {
             <button
               key={cat.id}
               className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
-                cat.id === "all"
+                cat.id === category
                   ? "bg-[#23D5AB] text-[#0B1020]"
                   : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1f2a52]"
               }`}
+              onClick={() => setCategory(cat.id)}
             >
-              {cat.label} ({cat.count})
+              {cat.label}
             </button>
           ))}
         </div>
 
         {/* Projects Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {trendingProjects.map((project) => (
-            <Card key={project.id} className="bg-[#161F42] border-[#111936] overflow-hidden hover:border-[#23D5AB]/50 transition-colors cursor-pointer">
+          {loading ? (
+            <div className="text-[#B8C3E6]">로딩 중...</div>
+          ) : (
+            projects.map((project) => (
+            <Card key={project.id} onClick={() => onOpenProject?.(project.id)} className="bg-[#161F42] border-[#111936] overflow-hidden hover:border-[#23D5AB]/50 transition-colors cursor-pointer">
               <div className="aspect-video bg-gradient-to-br from-[#161F42] to-[#0B1020] flex items-center justify-center">
                 {project.thumbnail_url ? (
                   <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
                 ) : (
-                  <div className="text-center p-4">
-                    <span className="text-[#23D5AB] text-xs font-bold">{project.platform.toUpperCase()}</span>
-                    <h4 className="text-[#F4F7FF] font-display font-bold mt-2 line-clamp-2">{project.title}</h4>
-                  </div>
+                  <ProjectCoverPlaceholder
+                    title={project.title}
+                    summary={project.summary}
+                    platform={project.platform}
+                    tags={project.tags}
+                    likeCount={project.like_count}
+                    createdAt={project.created_at}
+                    isHot={project.like_count >= HOT_PROJECT_THRESHOLD}
+                    size="card"
+                  />
                 )}
               </div>
               <CardContent className="p-4">
@@ -147,7 +147,8 @@ export function ExploreScreen({ onNavigate }: ScreenProps) {
                 </div>
               </CardContent>
             </Card>
-          ))}
+          ))
+          )}
         </div>
       </main>
     </div>

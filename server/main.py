@@ -19,6 +19,7 @@ from db import (
     create_user,
     get_user_by_email,
     get_user_by_id,
+    get_user_projects,
 )
 from auth import (
     verify_password,
@@ -81,6 +82,10 @@ class TokenResponse(BaseModel):
     user: dict
 
 
+class AdminReportUpdateRequest(BaseModel):
+    status: str
+
+
 # ============ Startup Event ============
 
 
@@ -138,6 +143,8 @@ def get_project_detail(project_id: str):
 def create_project_endpoint(project: ProjectCreate):
     """프로젝트 생성"""
     new_project = create_project(project.model_dump())
+    if not new_project:
+        raise HTTPException(status_code=500, detail="프로젝트 생성에 실패했습니다")
     new_project["id"] = str(new_project["id"])
     new_project["author_id"] = str(new_project["author_id"])
     return new_project
@@ -183,6 +190,8 @@ def list_comments(project_id: str, sort: str = "latest"):
 def create_comment_endpoint(project_id: str, comment: CommentCreate):
     """댓글 작성"""
     new_comment = create_comment(project_id, comment.content)
+    if not new_comment:
+        raise HTTPException(status_code=500, detail="댓글 작성에 실패했습니다")
     new_comment["id"] = str(new_comment["id"])
     new_comment["project_id"] = str(new_comment["project_id"])
     new_comment["author_id"] = str(new_comment["author_id"])
@@ -198,17 +207,53 @@ def report_comment_endpoint(comment_id: str, report: ReportCreate):
     new_report = report_comment(
         comment_id=comment_id, reason=report.reason, memo=report.memo
     )
+    if not new_report:
+        raise HTTPException(status_code=500, detail="신고 생성에 실패했습니다")
     new_report["id"] = str(new_report["id"])
-    new_report["reporter_id"] = str(new_report["reporter_id"])
+    if new_report.get("reporter_id"):
+        new_report["reporter_id"] = str(new_report["reporter_id"])
     return new_report
+
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+
+async def get_current_user(token: str = Depends(oauth2_scheme)):
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    return {
+        "id": str(user["id"]),
+        "email": user["email"],
+        "nickname": user["nickname"],
+        "role": user["role"],
+    }
+
+
+async def require_admin(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
+    return current_user
 
 
 # ============ Admin API ============
 
 
 @app.get("/api/admin/reports")
-def list_reports(status: Optional[str] = None):
+def list_reports(
+    status: Optional[str] = None, current_user: dict = Depends(require_admin)
+):
     """신고 목록 조회 (관리자)"""
+    _ = current_user
     reports = get_reports(status=status)
     for r in reports:
         r["id"] = str(r["id"])
@@ -218,9 +263,16 @@ def list_reports(status: Optional[str] = None):
 
 
 @app.patch("/api/admin/reports/{report_id}")
-def update_report_endpoint(report_id: str, new_status: str):
+def update_report_endpoint(
+    report_id: str,
+    payload: AdminReportUpdateRequest,
+    current_user: dict = Depends(require_admin),
+):
     """신고 처리 상태 변경 (관리자)"""
-    updated = update_report(report_id, new_status)
+    _ = current_user
+    updated = update_report(report_id, payload.status)
+    if not updated:
+        raise HTTPException(status_code=404, detail="신고를 찾을 수 없습니다")
     updated["id"] = str(updated["id"])
     if updated.get("reporter_id"):
         updated["reporter_id"] = str(updated["reporter_id"])
@@ -241,6 +293,8 @@ def register(request: RegisterRequest):
     # 사용자 생성
     password_hash = get_password_hash(request.password)
     user = create_user(request.email, request.nickname, password_hash)
+    if not user:
+        raise HTTPException(status_code=500, detail="회원가입 처리에 실패했습니다")
 
     # 토큰 생성
     access_token = create_access_token(
@@ -267,7 +321,8 @@ def login(request: LoginRequest):
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
         )
 
-    if not verify_password(request.password, user["password_hash"]):
+    password_hash = user.get("password_hash")
+    if not password_hash or not verify_password(request.password, password_hash):
         raise HTTPException(
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
         )
@@ -287,32 +342,6 @@ def login(request: LoginRequest):
     )
 
 
-# OAuth2 의존성
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
-
-
-async def get_current_user(token: str = Depends(oauth2_scheme)):
-    """현재 사용자 검증"""
-    payload = decode_token(token)
-    if not payload:
-        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
-
-    user_id = payload.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
-
-    user = get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
-
-    return {
-        "id": str(user["id"]),
-        "email": user["email"],
-        "nickname": user["nickname"],
-        "role": user["role"],
-    }
-
-
 @app.get("/api/me")
 async def get_me(current_user: dict = Depends(get_current_user)):
     """현재 사용자 정보"""
@@ -322,5 +351,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 @app.get("/api/me/projects")
 def get_my_projects(current_user: dict = Depends(get_current_user)):
     """내 프로젝트 목록"""
-    # TODO: 실제 조회로 변경
-    return {"items": []}
+    projects = get_user_projects(current_user["id"])
+    for p in projects:
+        p["id"] = str(p["id"])
+        p["author_id"] = str(p["author_id"])
+    return {"items": projects}

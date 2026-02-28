@@ -2,17 +2,38 @@ import { useState } from 'react'
 import { HomeScreen, ProjectDetailScreen, SubmitScreen, ProfileScreen, AdminScreen, ExploreScreen, ChallengesScreen, AboutScreen } from './components/screens'
 import { LoginScreen } from './components/screens/LoginScreen'
 import { RegisterScreen } from './components/screens/RegisterScreen'
-import { AuthProvider, useAuth } from './lib/auth-context'
+import { AuthProvider } from './lib/auth-context'
+import { useAuth } from './lib/use-auth'
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 function AppContent() {
   const [currentScreen, setCurrentScreen] = useState<Screen>('home')
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
   const { user, logout, isLoading } = useAuth()
 
   const handleLoginSwitch = () => setCurrentScreen('login')
   const handleRegisterSwitch = () => setCurrentScreen('register')
   const handleAuthSuccess = () => setCurrentScreen('home')
+
+  const handleNavigate = (screen: Screen) => {
+    if ((screen === 'submit' || screen === 'profile') && !user) {
+      setCurrentScreen('login')
+      return
+    }
+
+    if (screen === 'admin' && user?.role !== 'admin') {
+      setCurrentScreen(user ? 'home' : 'login')
+      return
+    }
+
+    setCurrentScreen(screen)
+  }
+
+  const openProjectDetail = (projectId: string) => {
+    setSelectedProjectId(projectId)
+    setCurrentScreen('detail')
+  }
 
   if (isLoading) {
     return (
@@ -31,14 +52,14 @@ function AppContent() {
   }
 
   const screens = {
-    home: <HomeScreen onNavigate={setCurrentScreen} />,
-    detail: <ProjectDetailScreen onNavigate={setCurrentScreen} />,
-    submit: <SubmitScreen onNavigate={setCurrentScreen} />,
-    profile: <ProfileScreen onNavigate={setCurrentScreen} />,
-    admin: <AdminScreen onNavigate={setCurrentScreen} />,
-    explore: <ExploreScreen onNavigate={setCurrentScreen} />,
-    challenges: <ChallengesScreen onNavigate={setCurrentScreen} />,
-    about: <AboutScreen onNavigate={setCurrentScreen} />,
+    home: <HomeScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />,
+    detail: <ProjectDetailScreen onNavigate={handleNavigate} projectId={selectedProjectId ?? undefined} />,
+    submit: <SubmitScreen onNavigate={handleNavigate} />,
+    profile: <ProfileScreen onNavigate={handleNavigate} />,
+    admin: <AdminScreen onNavigate={handleNavigate} />,
+    explore: <ExploreScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />,
+    challenges: <ChallengesScreen onNavigate={handleNavigate} />,
+    about: <AboutScreen onNavigate={handleNavigate} />,
     login: <LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />,
     register: <RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />,
   }
@@ -47,49 +68,49 @@ function AppContent() {
     <>
       <div className="fixed bottom-4 right-4 z-[100] flex gap-2 bg-[#161F42] p-2 rounded-lg shadow-lg">
         <button
-          onClick={() => setCurrentScreen('home')}
+          onClick={() => handleNavigate('home')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'home' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Home
         </button>
         <button
-          onClick={() => setCurrentScreen('explore')}
+          onClick={() => handleNavigate('explore')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'explore' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Explore
         </button>
         <button
-          onClick={() => setCurrentScreen('challenges')}
+          onClick={() => handleNavigate('challenges')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'challenges' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Challenges
         </button>
         <button
-          onClick={() => setCurrentScreen('about')}
+          onClick={() => handleNavigate('about')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'about' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           About
         </button>
         <button
-          onClick={() => setCurrentScreen('detail')}
+          onClick={() => handleNavigate('detail')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'detail' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Detail
         </button>
         <button
-          onClick={() => setCurrentScreen('submit')}
+          onClick={() => handleNavigate('submit')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'submit' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Submit
         </button>
         <button
-          onClick={() => setCurrentScreen('profile')}
+          onClick={() => handleNavigate('profile')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'profile' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Profile
         </button>
         <button
-          onClick={() => setCurrentScreen('admin')}
+          onClick={() => handleNavigate('admin')}
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'admin' ? 'bg-[#FF5D8F] text-white' : 'text-[#B8C3E6]'}`}
         >
           Admin

@@ -1,7 +1,10 @@
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { api } from "@/lib/api"
+import { useAuth } from "@/lib/use-auth"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 interface ScreenProps {
@@ -19,12 +22,6 @@ interface Project {
   createdAt: string
 }
 
-const myProjects: Project[] = [
-  { id: "1", title: "AI Music Generator", summary: "AI로 음악 생성하기", thumbnail: "/placeholder.jpg", likes: 128, comments: 32, createdAt: "2026-02-20" },
-  { id: "2", title: "React Dashboard", summary: "모던한 관리자 대시보드", thumbnail: "/placeholder.jpg", likes: 89, comments: 15, createdAt: "2026-02-15" },
-  { id: "3", title: "Python Automation", summary: "자동화 스크립트 모음", thumbnail: "/placeholder.jpg", likes: 67, comments: 8, createdAt: "2026-02-10" },
-]
-
 const myComments = [
   { id: "1", projectTitle: "AI Music Generator", content: "정말 amazing해요!", likes: 5, createdAt: "1시간 전" },
   { id: "2", projectTitle: "React Dashboard", content: "디자인이很漂亮", likes: 3, createdAt: "3시간 전" },
@@ -36,6 +33,41 @@ const likedProjects = [
 ]
 
 export function ProfileScreen({ onNavigate }: ScreenProps) {
+  const { user } = useAuth()
+  const [myProjects, setMyProjects] = useState<Project[]>([])
+
+  useEffect(() => {
+    const fetchMyProjects = async () => {
+      try {
+        const data = await api.getMyProjects()
+        const items = Array.isArray(data.items) ? data.items : []
+        const mapped: Project[] = items.map((item: {
+          id: string
+          title: string
+          summary: string
+          thumbnail_url?: string
+          like_count: number
+          comment_count: number
+          created_at: string
+        }) => ({
+          id: item.id,
+          title: item.title,
+          summary: item.summary,
+          thumbnail: item.thumbnail_url || "/placeholder.jpg",
+          likes: item.like_count,
+          comments: item.comment_count,
+          createdAt: item.created_at,
+        }))
+        setMyProjects(mapped)
+      } catch (error) {
+        console.error("Failed to fetch my projects:", error)
+        setMyProjects([])
+      }
+    }
+
+    fetchMyProjects()
+  }, [])
+
   return (
     <div className="min-h-screen bg-[#0B1020]">
       {/* Top Navigation */}
@@ -61,15 +93,15 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
         {/* Profile Header */}
         <div className="flex items-start gap-6 mb-8">
           <div className="w-24 h-24 rounded-full bg-gradient-to-br from-[#23D5AB] to-[#FF5D8F] flex items-center justify-center text-3xl font-bold text-[#0B1020]">
-            김
+            {user?.nickname?.slice(0, 1).toUpperCase() || "U"}
           </div>
           <div className="flex-1">
-            <h1 className="font-display text-3xl font-bold text-[#F4F7FF] mb-1">devkim</h1>
-            <p className="text-[#B8C3E6] mb-3">AI와 웹 개발을 좋아하는 개발자입니다. 새로운 것을 시도하는 것을 좋아해요!</p>
+            <h1 className="font-display text-3xl font-bold text-[#F4F7FF] mb-1">{user?.nickname || "사용자"}</h1>
+            <p className="text-[#B8C3E6] mb-3">{user?.email || ""}</p>
             <div className="flex gap-4 text-sm text-[#B8C3E6]">
-              <span><strong className="text-[#F4F7FF]">3</strong> 작품</span>
+              <span><strong className="text-[#F4F7FF]">{myProjects.length}</strong> 작품</span>
               <span><strong className="text-[#F4F7FF]">12</strong> 댓글</span>
-              <span><strong className="text-[#F4F7FF]">284</strong> 좋아요</span>
+              <span><strong className="text-[#F4F7FF]">{myProjects.reduce((acc, cur) => acc + cur.likes, 0)}</strong> 좋아요</span>
             </div>
           </div>
           <Button variant="outline" className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]">
@@ -105,7 +137,9 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             <TabsTrigger value="projects" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">작품</TabsTrigger>
             <TabsTrigger value="comments" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">댓글</TabsTrigger>
             <TabsTrigger value="liked" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">좋아요</TabsTrigger>
-            <TabsTrigger value="admin" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-[#0B1020]">⚠️ 관리자</TabsTrigger>
+            {user?.role === "admin" && (
+              <TabsTrigger value="admin" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-[#0B1020]">⚠️ 관리자</TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="projects">
@@ -141,9 +175,11 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             </div>
           </TabsContent>
 
-          <TabsContent value="admin">
-            <AdminPanel />
-          </TabsContent>
+          {user?.role === "admin" && (
+            <TabsContent value="admin">
+              <AdminPanel />
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </div>

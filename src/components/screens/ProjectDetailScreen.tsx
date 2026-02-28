@@ -3,11 +3,13 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { api, type Project, type Comment } from "@/lib/api"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
+  projectId?: string
 }
 
 
@@ -42,24 +44,26 @@ const sampleProject: Project = {
   updated_at: "2026-02-25T10:00:00Z",
 }
 
-export function ProjectDetailScreen({ onNavigate }: ScreenProps) {
+export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
   const [project, setProject] = useState<Project | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
   const [loading, setLoading] = useState(true)
   const [liked, setLiked] = useState(false)
   const [likeCount, setLikeCount] = useState(0)
   const [commentText, setCommentText] = useState("")
+  const [isSubmittingComment, setIsSubmittingComment] = useState(false)
+  const targetProjectId = projectId ?? "1"
 
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true)
       try {
         // 실제 API 호출
-        const projectData = await api.getProject("1")
+        const projectData = await api.getProject(targetProjectId)
         setProject(projectData)
         setLikeCount(projectData.like_count)
 
-        const commentsData = await api.getComments("1")
+        const commentsData = await api.getComments(targetProjectId)
         setComments(commentsData.items || [])
       } catch (error) {
         // 실패 시 샘플 데이터 사용
@@ -67,9 +71,9 @@ export function ProjectDetailScreen({ onNavigate }: ScreenProps) {
         setProject(sampleProject)
         setLikeCount(sampleProject.like_count)
         setComments([
-          { id: "1", project_id: "1", author_id: "5", author_nickname: "coder01", content: "정말 amazing해요! 어떻게 만드셨나요?", like_count: 12, status: "visible", created_at: "2026-02-21T10:00:00Z" },
-          { id: "2", project_id: "1", author_id: "6", author_nickname: "musicfan", content: "음악 생성이 이렇게 쉽게 될 줄이야...", like_count: 8, status: "visible", created_at: "2026-02-21T11:00:00Z" },
-          { id: "3", project_id: "1", author_id: "7", author_nickname: "aidev", content: "코드 공개해주실 수 있나요?", like_count: 5, status: "visible", created_at: "2026-02-21T12:00:00Z" },
+          { id: "1", project_id: targetProjectId, author_id: "5", author_nickname: "coder01", content: "정말 amazing해요! 어떻게 만드셨나요?", like_count: 12, status: "visible", created_at: "2026-02-21T10:00:00Z" },
+          { id: "2", project_id: targetProjectId, author_id: "6", author_nickname: "musicfan", content: "음악 생성이 이렇게 쉽게 될 줄이야...", like_count: 8, status: "visible", created_at: "2026-02-21T11:00:00Z" },
+          { id: "3", project_id: targetProjectId, author_id: "7", author_nickname: "aidev", content: "코드 공개해주실 수 있나요?", like_count: 5, status: "visible", created_at: "2026-02-21T12:00:00Z" },
         ])
       } finally {
         setLoading(false)
@@ -77,15 +81,15 @@ export function ProjectDetailScreen({ onNavigate }: ScreenProps) {
     }
 
     fetchData()
-  }, [])
+  }, [targetProjectId])
 
   const handleLike = async () => {
     try {
       if (liked) {
-        const result = await api.unlikeProject("1")
+        const result = await api.unlikeProject(targetProjectId)
         setLikeCount(result.like_count)
       } else {
-        const result = await api.likeProject("1")
+        const result = await api.likeProject(targetProjectId)
         setLikeCount(result.like_count)
       }
       setLiked(!liked)
@@ -95,14 +99,34 @@ export function ProjectDetailScreen({ onNavigate }: ScreenProps) {
   }
 
   const handleCommentSubmit = async () => {
-    if (!commentText.trim()) return
-    
+    const content = commentText.trim()
+    if (!content || isSubmittingComment) return
+
+    const optimisticComment: Comment = {
+      id: `temp-${Date.now()}`,
+      project_id: targetProjectId,
+      author_id: "me",
+      author_nickname: "나",
+      content,
+      like_count: 0,
+      status: "visible",
+      created_at: new Date().toISOString(),
+    }
+
+    setComments((prev) => [optimisticComment, ...prev])
+    setCommentText("")
+    setIsSubmittingComment(true)
+
     try {
-      const newComment = await api.createComment("1", commentText)
-      setComments([newComment, ...comments])
-      setCommentText("")
+      await api.createComment(targetProjectId, content)
+      const commentsData = await api.getComments(targetProjectId)
+      setComments(commentsData.items || [])
     } catch (error) {
       console.error("Comment failed:", error)
+      setComments((prev) => prev.filter((comment) => comment.id !== optimisticComment.id))
+      setCommentText(content)
+    } finally {
+      setIsSubmittingComment(false)
     }
   }
 
@@ -186,7 +210,16 @@ export function ProjectDetailScreen({ onNavigate }: ScreenProps) {
           {project.thumbnail_url ? (
             <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover rounded-xl" />
           ) : (
-            <span className="text-[#B8C3E6]">Media / Screenshot / Demo</span>
+            <ProjectCoverPlaceholder
+              title={project.title}
+              summary={project.summary}
+              platform={project.platform}
+              tags={project.tags}
+              likeCount={project.like_count}
+              createdAt={project.created_at}
+              size="detail"
+              className="rounded-xl"
+            />
           )}
         </div>
 
@@ -261,8 +294,9 @@ export function ProjectDetailScreen({ onNavigate }: ScreenProps) {
             <Button 
               className="mt-2 bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020]"
               onClick={handleCommentSubmit}
+              disabled={isSubmittingComment}
             >
-              댓글 작성
+              {isSubmittingComment ? "작성 중..." : "댓글 작성"}
             </Button>
           </div>
 

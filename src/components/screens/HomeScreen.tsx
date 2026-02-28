@@ -2,18 +2,22 @@ import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { api, type Project } from "@/lib/api"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 interface HomeScreenProps {
   onNavigate?: (screen: Screen) => void
+  onOpenProject?: (projectId: string) => void
 }
 
 interface ProjectWithMeta extends Project {
   isNew?: boolean
   isHot?: boolean
 }
+
+const HOT_PROJECT_THRESHOLD = 30
 
 function StickerBadge({ type }: { type: "new" | "hot" | "weird" | "wip" }) {
   const colors = {
@@ -31,25 +35,39 @@ function StickerBadge({ type }: { type: "new" | "hot" | "weird" | "wip" }) {
   )
 }
 
-function ProjectCard({ project, index }: { project: ProjectWithMeta; index: number }) {
+function ProjectCard({
+  project,
+  index,
+  onOpenProject,
+}: {
+  project: ProjectWithMeta
+  index: number
+  onOpenProject?: (projectId: string) => void
+}) {
   return (
     <Card 
       className="group relative bg-[#161F42] border-0 rounded-xl overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:rotate-1 hover:shadow-xl hover:shadow-[#23D5AB]/10 cursor-pointer"
       style={{ 
         transform: `rotate(${(index % 3 - 1) * 1.5}deg)`,
       }}
+      onClick={() => onOpenProject?.(project.id)}
     >
       <StickerBadge type={project.isNew ? "new" : project.isHot ? "hot" : "new"} />
       <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center overflow-hidden">
         {project.thumbnail_url ? (
           <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
         ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-gradient-to-br from-[#161F42] to-[#0B1020]">
-            <span className="text-[#23D5AB] text-xs font-bold mb-1">{project.platform.toUpperCase()}</span>
-            <h4 className="text-[#F4F7FF] font-display font-bold text-sm leading-tight line-clamp-3">
-              {project.title}
-            </h4>
-          </div>
+          <ProjectCoverPlaceholder
+            title={project.title}
+            summary={project.summary}
+            platform={project.platform}
+            tags={project.tags}
+            likeCount={project.like_count}
+            createdAt={project.created_at}
+            isNew={project.isNew}
+            isHot={project.isHot}
+            size="card"
+          />
         )}
       </div>
       <CardContent className="p-4">
@@ -76,7 +94,7 @@ function ProjectCard({ project, index }: { project: ProjectWithMeta; index: numb
 
 const filterChips = ["전체", "Web", "App", "AI", "Tool", "Game", "和学习"]
 
-export function HomeScreen({ onNavigate }: HomeScreenProps) {
+export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   const [projects, setProjects] = useState<ProjectWithMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [sort, setSort] = useState<"latest" | "popular">("latest")
@@ -95,7 +113,7 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
         const projectsWithMeta: ProjectWithMeta[] = data.items.map((p: Project) => ({
           ...p,
           isNew: new Date(p.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
-          isHot: p.like_count > 100,
+          isHot: p.like_count >= HOT_PROJECT_THRESHOLD,
         }))
         
         setProjects(projectsWithMeta)
@@ -192,7 +210,7 @@ export function HomeScreen({ onNavigate }: HomeScreenProps) {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {projects.map((project, index) => (
-                <ProjectCard key={project.id} project={project} index={index} />
+                <ProjectCard key={project.id} project={project} index={index} onOpenProject={onOpenProject} />
               ))}
             </div>
           )}

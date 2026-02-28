@@ -1,4 +1,4 @@
-import type { User } from "./auth-context"
+import type { User } from "./auth-types"
 
 const API_BASE = "http://localhost:8000"
 

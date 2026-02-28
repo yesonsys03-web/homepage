@@ -2,6 +2,7 @@ import os
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
+from typing import Optional
 from dotenv import load_dotenv
 
 # .env 파일 로드
@@ -40,7 +41,7 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            
+
             # Projects 테이블
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS projects (
@@ -60,7 +61,7 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            
+
             # Comments 테이블
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS comments (
@@ -75,7 +76,7 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
-            
+
             # Reports 테이블
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
@@ -90,7 +91,7 @@ def init_db():
                     resolved_at TIMESTAMP
                 )
             """)
-            
+
             # 기본 사용자 생성 (테스트용)
             cur.execute("""
                 INSERT INTO users (id, nickname, role)
@@ -101,25 +102,27 @@ def init_db():
             cur.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)
             """)
-            
+
             # 컬럼 추가 (tags - 배열 타입)
             cur.execute("""
                 ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'
             """)
-            
+
             conn.commit()
             print("✅ Database tables initialized successfully!")
             cur.execute("""
                 ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'
             """)
-            
+
             conn.commit()
             print("✅ Database tables initialized successfully!")
             conn.commit()
             print("✅ Database tables initialized successfully!")
 
 
-def get_projects(sort: str = "latest", platform: str = None, tag: str = None):
+def get_projects(
+    sort: str = "latest", platform: Optional[str] = None, tag: Optional[str] = None
+):
     """프로젝트 목록 조회"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -130,20 +133,20 @@ def get_projects(sort: str = "latest", platform: str = None, tag: str = None):
                 WHERE p.status = 'published'
             """
             params = []
-            
+
             if platform:
                 query += " AND p.platform = %s"
                 params.append(platform)
-            
+
             if tag:
                 query += " AND %s = ANY(p.tags)"
                 params.append(tag)
-            
+
             if sort == "popular":
                 query += " ORDER BY p.like_count DESC"
             else:
                 query += " ORDER BY p.created_at DESC"
-            
+
             cur.execute(query, params)
             return cur.fetchall()
 
@@ -152,34 +155,56 @@ def get_project(project_id: str):
     """프로젝트 상세 조회"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT p.*, u.nickname as author_nickname
                 FROM projects p
                 JOIN users u ON p.author_id = u.id
                 WHERE p.id = %s
-            """, (project_id,))
+            """,
+                (project_id,),
+            )
             return cur.fetchone()
+
+
+def get_user_projects(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT p.*, u.nickname as author_nickname
+                FROM projects p
+                JOIN users u ON p.author_id = u.id
+                WHERE p.author_id = %s
+                ORDER BY p.created_at DESC
+                """,
+                (user_id,),
+            )
+            return cur.fetchall()
 
 
 def create_project(data: dict):
     """프로젝트 생성"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO projects (author_id, title, summary, description, thumbnail_url, demo_url, repo_url, platform, tags)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
-            """, (
-                data.get('author_id', '11111111-1111-1111-1111-111111111111'),
-                data['title'],
-                data['summary'],
-                data.get('description'),
-                data.get('thumbnail_url'),
-                data.get('demo_url'),
-                data.get('repo_url'),
-                data.get('platform', 'web'),
-                data.get('tags', [])
-            ))
+            """,
+                (
+                    data.get("author_id", "11111111-1111-1111-1111-111111111111"),
+                    data["title"],
+                    data["summary"],
+                    data.get("description"),
+                    data.get("thumbnail_url"),
+                    data.get("demo_url"),
+                    data.get("repo_url"),
+                    data.get("platform", "web"),
+                    data.get("tags", []),
+                ),
+            )
             conn.commit()
             return cur.fetchone()
 
@@ -188,28 +213,34 @@ def like_project(project_id: str):
     """프로젝트 좋아요 증가"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 UPDATE projects SET like_count = like_count + 1
                 WHERE id = %s
                 RETURNING like_count
-            """, (project_id,))
+            """,
+                (project_id,),
+            )
             conn.commit()
             result = cur.fetchone()
-            return result['like_count'] if result else 0
+            return result["like_count"] if result else 0
 
 
 def unlike_project(project_id: str):
     """프로젝트 좋아요 취소"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 UPDATE projects SET like_count = GREATEST(0, like_count - 1)
                 WHERE id = %s
                 RETURNING like_count
-            """, (project_id,))
+            """,
+                (project_id,),
+            )
             conn.commit()
             result = cur.fetchone()
-            return result['like_count'] if result else 0
+            return result["like_count"] if result else 0
 
 
 def get_comments(project_id: str, sort: str = "latest"):
@@ -226,45 +257,63 @@ def get_comments(project_id: str, sort: str = "latest"):
                 query += " ORDER BY c.like_count DESC"
             else:
                 query += " ORDER BY c.created_at DESC"
-            
+
             cur.execute(query, (project_id,))
             return cur.fetchall()
 
 
-def create_comment(project_id: str, content: str, author_id: str = '11111111-1111-1111-1111-111111111111'):
+def create_comment(
+    project_id: str,
+    content: str,
+    author_id: str = "11111111-1111-1111-1111-111111111111",
+):
     """댓글 생성"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             # 댓글 생성
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO comments (project_id, author_id, content)
                 VALUES (%s, %s, %s)
                 RETURNING *
-            """, (project_id, author_id, content))
+            """,
+                (project_id, author_id, content),
+            )
             # 프로젝트 댓글 수 증가
-            cur.execute("""
+            cur.execute(
+                """
                 UPDATE projects SET comment_count = comment_count + 1
                 WHERE id = %s
-            """, (project_id,))
-            
+            """,
+                (project_id,),
+            )
+
             conn.commit()
             return cur.fetchone()
 
 
-def report_comment(comment_id: str, reason: str, reporter_id: str = '11111111-1111-1111-1111-111111111111', memo: str = None):
+def report_comment(
+    comment_id: str,
+    reason: str,
+    reporter_id: str = "11111111-1111-1111-1111-111111111111",
+    memo: Optional[str] = None,
+):
     """댓글 신고"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO reports (target_type, target_id, reporter_id, reason, memo)
                 VALUES ('comment', %s, %s, %s, %s)
                 RETURNING *
-            """, (comment_id, reporter_id, reason, memo))
+            """,
+                (comment_id, reporter_id, reason, memo),
+            )
             conn.commit()
             return cur.fetchone()
 
 
-def get_reports(status: str = None):
+def get_reports(status: Optional[str] = None):
     """신고 목록 (관리자)"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -283,31 +332,39 @@ def update_report(report_id: str, new_status: str):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             if new_status in ["resolved", "rejected"]:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE reports SET status = %s, resolved_at = NOW()
                     WHERE id = %s
                     RETURNING *
-                """, (new_status, report_id))
+                """,
+                    (new_status, report_id),
+                )
             else:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE reports SET status = %s
                     WHERE id = %s
                     RETURNING *
-                """, (new_status, report_id))
+                """,
+                    (new_status, report_id),
+                )
             conn.commit()
             return cur.fetchone()
-
 
 
 def create_user(email: str, nickname: str, password_hash: str):
     """사용자 생성 (회원가입)"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO users (email, nickname, password_hash)
                 VALUES (%s, %s, %s)
                 RETURNING id, email, nickname, role, created_at
-            """, (email, nickname, password_hash))
+            """,
+                (email, nickname, password_hash),
+            )
             conn.commit()
             return cur.fetchone()
 
@@ -316,10 +373,13 @@ def get_user_by_email(email: str):
     """이메일로 사용자 조회"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, email, nickname, password_hash, role, avatar_url, bio, created_at
                 FROM users WHERE email = %s
-            """, (email,))
+            """,
+                (email,),
+            )
             return cur.fetchone()
 
 
@@ -327,10 +387,13 @@ def get_user_by_nickname(nickname: str):
     """닉네임으로 사용자 조회"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, email, nickname, role, avatar_url, bio, created_at
                 FROM users WHERE nickname = %s
-            """, (nickname,))
+            """,
+                (nickname,),
+            )
             return cur.fetchone()
 
 
@@ -338,8 +401,11 @@ def get_user_by_id(user_id: str):
     """ID로 사용자 조회"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 SELECT id, email, nickname, role, avatar_url, bio, created_at
                 FROM users WHERE id = %s
-            """, (user_id,))
+            """,
+                (user_id,),
+            )
             return cur.fetchone()

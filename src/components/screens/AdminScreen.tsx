@@ -1,7 +1,10 @@
+import { useEffect, useMemo, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { api } from "@/lib/api"
+import { useAuth } from "@/lib/use-auth"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 interface ScreenProps {
@@ -10,71 +13,87 @@ interface ScreenProps {
 
 
 export function AdminScreen({ onNavigate }: ScreenProps) {
-  const stats = [
-    { label: "총 신고", value: "24", color: "text-[#F4F7FF]" },
-    { label: "미처리", value: "5", color: "text-[#FF6B6B]" },
-    { label: "검토중", value: "3", color: "text-[#FFB547]" },
-    { label: "오늘 처리", value: "8", color: "text-[#23D5AB]" },
-  ]
+  const { user, logout } = useAuth()
+  const [reports, setReports] = useState<Array<{
+    id: string
+    targetType: string
+    targetContent: string
+    reason: string
+    status: string
+    reporter: string
+    targetUser: string
+    createdAt: string
+  }>>([])
+  const [loading, setLoading] = useState(true)
 
-  const reports = [
-    { 
-      id: "1", 
-      targetType: "댓글", 
-      targetContent: "이 댓글은不当합니다", 
-      reason: "부정적 내용",
-      status: "open", 
-      reporter: "user_kim", 
-      targetUser: "spam_user",
-      createdAt: "10분 전" 
-    },
-    { 
-      id: "2", 
-      targetType: "작품", 
-      targetContent: "스팸 작품 제목", 
-      reason: "스팸",
-      status: "reviewing", 
-      reporter: "user_lee", 
-      targetUser: "spammer123",
-      createdAt: "2시간 전" 
-    },
-    { 
-      id: "3", 
-      targetType: "댓글", 
-      targetContent: "광고 링크", 
-      reason: "광고",
-      status: "open", 
-      reporter: "user_park", 
-      targetUser: "ad_bot",
-      createdAt: "3시간 전" 
-    },
-    { 
-      id: "4", 
-      targetType: "댓글", 
-      targetContent: "不当なコメント", 
-      reason: "부정적 내용",
-      status: "resolved", 
-      reporter: "user_choi", 
-      targetUser: "angry_user",
-      createdAt: "1일 전" 
-    },
-    { 
-      id: "5", 
-      targetType: "작품", 
-      targetContent: "可疑한 프로젝트", 
-      reason: "기타",
-      status: "rejected", 
-      reporter: "user_kang", 
-      targetUser: "newbie",
-      createdAt: "2일 전" 
-    },
-  ]
+  const loadReports = async () => {
+    setLoading(true)
+    try {
+      const data = await api.getReports()
+      const items = Array.isArray(data.items) ? data.items : []
+      const mapped = items.map((item: {
+        id: string
+        target_type: string
+        target_id: string
+        reason: string
+        status: string
+        reporter_id?: string
+        created_at: string
+      }) => ({
+        id: item.id,
+        targetType: item.target_type,
+        targetContent: item.target_id,
+        reason: item.reason,
+        status: item.status,
+        reporter: item.reporter_id || "unknown",
+        targetUser: item.target_id,
+        createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
+      }))
+      setReports(mapped)
+    } catch (error) {
+      console.error("Failed to fetch reports:", error)
+      setReports([])
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const recentActions = [
-    { action: "댓글 숨김", target: "user_abc", admin: "admin_kim", time: "5분 전" },
-    { action: "사용자 제한", target: "spam_bot", admin: "admin_kim", time: "1시간 전" },
-    { action: "댓글 복구", target: "user_xyz", admin: "admin_kim", time: "2시간 전" },
-  ]
+  useEffect(() => {
+    loadReports()
+  }, [])
+
+  const stats = useMemo(() => {
+    const open = reports.filter((r) => r.status === "open").length
+    const reviewing = reports.filter((r) => r.status === "reviewing").length
+    const resolvedToday = reports.filter((r) => r.status === "resolved").length
+    return [
+      { label: "총 신고", value: String(reports.length), color: "text-[#F4F7FF]" },
+      { label: "미처리", value: String(open), color: "text-[#FF6B6B]" },
+      { label: "검토중", value: String(reviewing), color: "text-[#FFB547]" },
+      { label: "처리완료", value: String(resolvedToday), color: "text-[#23D5AB]" },
+    ]
+  }, [reports])
+
+  const recentActions = useMemo(() => {
+    return reports
+      .filter((report) => report.status === "resolved" || report.status === "rejected")
+      .slice(0, 5)
+      .map((report) => ({
+        action: report.status === "resolved" ? "신고 처리" : "신고 거절",
+        target: report.targetUser,
+        admin: user?.nickname || "admin",
+        time: report.createdAt,
+      }))
+  }, [reports, user?.nickname])
+
+  const handleUpdateReport = async (reportId: string, status: string) => {
+    try {
+      await api.updateReport(reportId, status)
+      await loadReports()
+    } catch (error) {
+      console.error("Failed to update report:", error)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
@@ -88,7 +107,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
             <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
             <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
           </nav>
-          <Button className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
+          <Button onClick={logout} className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
             로그아웃
           </Button>
         </div>
@@ -123,6 +142,9 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           <TabsContent value="reports">
             <Card className="bg-[#161F42] border-0">
               <CardContent className="p-0">
+                {loading ? (
+                  <div className="p-6 text-[#B8C3E6]">로딩 중...</div>
+                ) : (
                 <table className="w-full">
                   <thead>
                     <tr className="border-b border-[#111936]">
@@ -162,6 +184,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                               size="sm" 
                               className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
                               disabled={report.status === "resolved"}
+                              onClick={() => handleUpdateReport(report.id, "resolved")}
                             >
                               숨기기
                             </Button>
@@ -169,8 +192,17 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                               size="sm" 
                               variant="outline" 
                               className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                              onClick={() => handleUpdateReport(report.id, "reviewing")}
                             >
                               제한
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                              onClick={() => handleUpdateReport(report.id, "rejected")}
+                            >
+                              거절
                             </Button>
                           </div>
                         </td>
@@ -178,6 +210,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                     ))}
                   </tbody>
                 </table>
+                )}
               </CardContent>
             </Card>
           </TabsContent>
