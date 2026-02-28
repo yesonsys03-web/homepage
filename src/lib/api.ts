@@ -70,6 +70,18 @@ export interface AdminManagedUser {
   limited_reason?: string | null
 }
 
+export interface ModerationPolicy {
+  id: number
+  blocked_keywords: string[]
+  custom_blocked_keywords: string[]
+  baseline_keyword_categories: Record<string, string[]>
+  auto_hide_report_threshold: number
+  updated_at: string
+  last_updated_by?: string | null
+  last_updated_by_id?: string | null
+  last_updated_action_at?: string | null
+}
+
 async function authFetch(url: string, options: RequestInit = {}) {
   const token = getToken()
   const headers: HeadersInit = {
@@ -223,6 +235,20 @@ export const api = {
       method: "DELETE",
     })
     return res.json() as Promise<AdminManagedUser>
+  },
+
+  getAdminPolicies: async () => {
+    const res = await authFetch(`${API_BASE}/api/admin/policies`)
+    return res.json() as Promise<ModerationPolicy>
+  },
+
+  updateAdminPolicies: async (blocked_keywords: string[], auto_hide_report_threshold: number) => {
+    const res = await authFetch(`${API_BASE}/api/admin/policies`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ blocked_keywords, auto_hide_report_threshold }),
+    })
+    return res.json() as Promise<ModerationPolicy>
   },
 
   // My Projects
