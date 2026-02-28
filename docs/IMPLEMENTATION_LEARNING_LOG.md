@@ -1023,3 +1023,59 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. DB 커넥션 풀 적용으로 관리자 API 응답 지연 감소
 2. 콘텐츠 관리 탭에 정렬/페이지네이션 추가
 3. Playwright로 관리자 핵심 시나리오(E2E) 자동화
+
+## Session 2026-02-28-08
+
+### 1) Goal
+- About 페이지를 하드코딩 화면에서 "관리자가 실시간 수정 가능한 운영 콘텐츠"로 전환한다.
+- 운영 기록(누가/왜 수정했는지)을 관리자 로그에 남긴다.
+
+### 2) Inputs
+- 사용자 요청: About 페이지도 관리자 수정 가능해야 함
+- 기존 상태: About 화면은 프론트 코드에 정적 데이터 하드코딩
+
+### 3) Design Decisions
+- About 콘텐츠는 별도 키-값 저장 구조(`site_contents`)로 분리 저장한다.
+- 공개 조회 API와 관리자 수정 API를 분리해 권한 경계를 명확히 한다.
+- 관리자 수정에는 `reason`을 필수로 받아 액션 로그 추적성을 유지한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `site_contents` 테이블 추가 (`content_key`, `content_json`, `updated_at`)
+    - `get_site_content`, `upsert_site_content` 추가
+  - `server/main.py`
+    - `GET /api/content/about` 추가 (공개 조회)
+    - `PATCH /api/admin/content/about` 추가 (관리자 수정, reason 필수)
+    - 앱 시작 시 About 기본값 시드 처리
+    - 로그 기록: `about_content_updated`
+- 프론트
+  - `src/lib/api.ts`
+    - `AboutContent` 관련 타입 추가
+    - `getAboutContent`, `updateAboutContent` 추가
+  - `src/components/screens/AboutScreen.tsx`
+    - 하드코딩 데이터 제거, API 기반 렌더링으로 전환
+  - `src/components/screens/AdminScreen.tsx`
+    - `페이지 관리` 탭 추가
+    - About Hero/Values/Team/FAQ/Contact 이메일 편집 및 저장 UI 추가
+    - 저장 시 reason 필수, 저장 후 로그/콘텐츠 재동기화
+
+### 5) Validation
+- `pnpm lint` -> 통과
+- `pnpm build` -> 통과
+- `uv run python -m py_compile main.py db.py auth.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 운영자가 코드 수정 없이 About 내용을 즉시 업데이트할 수 있게 됐다.
+- 공개 페이지와 관리자 편집 데이터 소스가 일치하게 정리됐다.
+- 수정 이력(사유 포함)이 관리자 로그로 추적 가능해졌다.
+
+#### 아쉬운 점
+- About 편집은 현재 텍스트 기반 입력(`|` 구분)이라 UX가 아직 기술자 친화적이다.
+
+#### 다음 액션
+1. About 편집 폼을 블록 단위(Values/Team/FAQ) 카드 에디터로 고도화
+2. 저장 전 미리보기 패널 추가
+3. About 변경 이력 전용 로그 필터/롤백 기능 검토
