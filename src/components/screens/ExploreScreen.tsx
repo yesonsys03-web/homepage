@@ -126,8 +126,10 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
                   <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
                 ) : (
                   <ProjectCoverPlaceholder
+                    seedKey={project.id}
                     title={project.title}
                     summary={project.summary}
+                    description={project.description}
                     platform={project.platform}
                     tags={project.tags}
                     likeCount={project.like_count}

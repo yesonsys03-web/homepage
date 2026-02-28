@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -61,8 +61,10 @@ function ProjectCard({
           <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
         ) : (
           <ProjectCoverPlaceholder
+            seedKey={project.id}
             title={project.title}
             summary={project.summary}
+            description={project.description}
             platform={project.platform}
             tags={project.tags}
             likeCount={project.like_count}
@@ -166,16 +168,18 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
           />
         </picture>
         <div className="absolute inset-0 bg-gradient-to-br from-[#0B1020]/39 via-[#0B1020]/35 to-[#111936]/28" />
+        <div className="hero-orb absolute -left-24 top-6 h-64 w-64 rounded-full bg-[#23D5AB]/20 blur-3xl" />
+        <div className="hero-orb absolute -right-20 bottom-4 h-56 w-56 rounded-full bg-[#FF5D8F]/20 blur-3xl" style={{ animationDelay: "-2s" }} />
         <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
         <div className="max-w-7xl mx-auto relative z-10 flex flex-col items-center">
-          <h2 className="w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left">
+          <h2 className="reveal-up w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left" style={{ "--reveal-delay": "80ms" } as CSSProperties}>
             완성도보다 바이브.<br />
             <span className="text-[#23D5AB]">실험도 작품이다.</span>
           </h2>
-          <Button size="lg" onClick={() => onNavigate?.('explore')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6">
+          <Button size="lg" onClick={() => onNavigate?.('explore')} className="reveal-up bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6" style={{ "--reveal-delay": "220ms" } as CSSProperties}>
             지금 시작하기
           </Button>
-          <p className="text-xl text-[#B8C3E6] mt-8 max-w-2xl text-center">
+          <p className="reveal-up text-xl text-[#B8C3E6] mt-8 max-w-2xl text-center" style={{ "--reveal-delay": "320ms" } as CSSProperties}>
             바이브코더들의 놀이터에서 당신의 작품을 공유하고,<br />
             서로의 바이브를 피드백하세요.
           </p>
@@ -188,8 +192,8 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
             <span className="text-[#FF5D8F]">🔥</span> Trending This Week
           </h3>
           <div className="flex gap-4 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
-            {projects.filter(p => p.isHot).slice(0, 6).map(project => (
-              <div key={project.id} className="flex-shrink-0 w-48">
+            {projects.filter(p => p.isHot).slice(0, 6).map((project, index) => (
+              <div key={project.id} className="reveal-up flex-shrink-0 w-48" style={{ "--reveal-delay": `${Math.min(index, 5) * 70}ms` } as CSSProperties}>
                 <div className="aspect-video bg-[#161F42] rounded-lg mb-2" />
                 <p className="text-sm text-[#F4F7FF] truncate">{project.title}</p>
                 <p className="text-xs text-[#B8C3E6]">❤️ {project.like_count}</p>
@@ -230,7 +234,9 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {projects.map((project, index) => (
-                <ProjectCard key={project.id} project={project} index={index} onOpenProject={onOpenProject} />
+                <div key={project.id} className="reveal-up" style={{ "--reveal-delay": `${Math.min(index, 8) * 45}ms` } as CSSProperties}>
+                  <ProjectCard project={project} index={index} onOpenProject={onOpenProject} />
+                </div>
               ))}
             </div>
           )}

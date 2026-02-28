@@ -224,8 +224,10 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
             <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover rounded-xl" />
           ) : (
             <ProjectCoverPlaceholder
+              seedKey={project.id}
               title={project.title}
               summary={project.summary}
+              description={project.description}
               platform={project.platform}
               tags={project.tags}
               likeCount={project.like_count}

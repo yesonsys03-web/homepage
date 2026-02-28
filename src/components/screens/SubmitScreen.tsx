@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
+import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { api } from "@/lib/api"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
@@ -249,12 +250,16 @@ export function SubmitScreen({ onNavigate }: ScreenProps) {
                 {thumbnailPreview ? (
                   <img src={thumbnailPreview} alt="Preview" className="w-full h-full object-cover" />
                 ) : (
-                  <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-gradient-to-br from-[#161F42] to-[#0B1020]">
-                    <span className="text-[#23D5AB] text-xs font-bold mb-1">{formData.platform.toUpperCase()}</span>
-                    <h4 className="text-[#F4F7FF] font-display font-bold text-sm leading-tight line-clamp-3">
-                      {formData.title || "작품 제목"}
-                    </h4>
-                  </div>
+                  <ProjectCoverPlaceholder
+                    title={formData.title || "작품 제목"}
+                    summary={formData.summary || "작품을 한 줄로 소개하는 내용"}
+                    description={formData.description || undefined}
+                    platform={formData.platform}
+                    tags={formData.tags}
+                    likeCount={0}
+                    isNew
+                    size="card"
+                  />
                 )}
               </div>
               <CardContent className="p-4">
