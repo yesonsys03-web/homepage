@@ -29,8 +29,6 @@ type ReportStatus = "open" | "reviewing" | "resolved" | "rejected" | "all"
 type ProjectStatus = "all" | "published" | "hidden" | "deleted"
 type ActionLogFilter = "all" | "project" | "report" | "user" | "moderation_settings"
 
-const ADMIN_DASHBOARD_POLLING_MS = 30000
-
 const ABOUT_CONTENT_FALLBACK: AboutContent = {
   hero_title: "완성도보다 바이브.",
   hero_highlight: "실험도 작품이다.",
@@ -371,23 +369,6 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     loadProjects()
     loadPolicies()
     loadAboutContent()
-  }, [])
-
-  useEffect(() => {
-    const poll = () => {
-      if (typeof document !== "undefined" && document.visibilityState !== "visible") {
-        return
-      }
-
-      loadReports()
-      loadActionLogs()
-      loadProjects()
-    }
-
-    const intervalId = window.setInterval(poll, ADMIN_DASHBOARD_POLLING_MS)
-    return () => {
-      window.clearInterval(intervalId)
-    }
   }, [])
 
   useEffect(() => {
@@ -841,6 +822,17 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const handleManualRefresh = async () => {
+    await Promise.all([
+      loadReports(),
+      loadActionLogs(),
+      loadUsers(),
+      loadProjects(),
+      loadPolicies(),
+      loadAboutContent(),
+    ])
+  }
+
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
@@ -873,14 +865,24 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         </div>
 
         <Tabs defaultValue="reports">
-          <TabsList className="bg-[#161F42] border-0 mb-6">
-            <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
-            <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
-            <TabsTrigger value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
-            <TabsTrigger value="pages" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 페이지 관리</TabsTrigger>
-            <TabsTrigger value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
-            <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
-          </TabsList>
+          <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <TabsList className="bg-[#161F42] border-0">
+              <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
+              <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
+              <TabsTrigger value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
+              <TabsTrigger value="pages" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 페이지 관리</TabsTrigger>
+              <TabsTrigger value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
+              <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
+            </TabsList>
+            <Button
+              type="button"
+              variant="outline"
+              className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+              onClick={handleManualRefresh}
+            >
+              데이터 새로고침
+            </Button>
+          </div>
 
           <TabsContent value="reports">
             <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
