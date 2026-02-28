@@ -963,3 +963,63 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. 실사용 데이터 1~2주 관찰 후 `HOT` 임계값(30) 재조정
 2. 태그 입력 UI에서 추천 태그를 제공해 분류 품질 향상
+
+## Session 2026-02-28-07
+
+### 1) Goal
+- 관리자 대시보드를 운영 실무 수준으로 확장한다.
+- 신고/유저 관리 중심에서 콘텐츠 모더레이션(프로젝트 수정/숨김/복구/삭제)까지 연결한다.
+
+### 2) Inputs
+- 사용자 요청: 관리자 카드(프로젝트) 직접 수정/삭제 기능 필요
+- 기존 상태: 신고 처리/정책/유저 제한은 구현 완료, 콘텐츠 직접 조치는 미구현
+
+### 3) Design Decisions
+- 즉시 삭제 대신 `status` 기반 소프트 삭제(`published/hidden/deleted`)를 채택했다.
+- 관리자 액션은 모두 이유(reason)와 로그를 남겨 추적 가능하도록 통일했다.
+- 관리자 탭 전환 성능을 위해 서버 재요청 필터 방식에서 클라이언트 필터 방식으로 변경했다.
+
+### 4) Implementation Notes
+- 백엔드 (`server/main.py`, `server/db.py`)
+  - 관리자 프로젝트 API 추가:
+    - `GET /api/admin/projects`
+    - `PATCH /api/admin/projects/{project_id}`
+    - `POST /api/admin/projects/{project_id}/hide`
+    - `POST /api/admin/projects/{project_id}/restore`
+    - `DELETE /api/admin/projects/{project_id}` (soft delete)
+  - 공용 상세 API는 `published` 상태만 노출되게 제한
+  - 관리자 액션 로그(`project_updated/hidden/restored/deleted`) 자동 기록
+  - 정책 응답에 `baseline_keyword_categories`, `custom_blocked_keywords`, 최근 수정자 메타 포함
+- 프론트 (`src/components/screens/AdminScreen.tsx`, `src/lib/api.ts`)
+  - 콘텐츠 관리 탭 추가 및 상태 필터/검색 지원
+  - 프로젝트 단건 액션(수정/숨김/복구/삭제) + 다중 선택 일괄 액션(숨김/복구)
+  - 정책 탭 고도화:
+    - 카테고리별 카운트
+    - 접기/펼치기
+    - 미리보기 검색
+    - CSV 내보내기 + CSV 가져오기
+  - 로그 탭에 대상 타입 필터 추가(`all/project/report/user/moderation_settings`)
+  - 관리자 신고 탭 성능 개선:
+    - 탭 클릭 시 서버 재요청 제거(클라이언트 필터)
+    - 30초 폴링 + 비가시 탭 스킵으로 최신성 유지
+
+### 5) Validation
+- `pnpm lint` -> 통과
+- `pnpm build` -> 통과
+- `uv run python -m py_compile main.py db.py auth.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 관리자 기능이 신고 중심에서 콘텐츠 운영까지 확장되어 실제 운영 대응 속도가 올라갔다.
+- 정책 룰이 카테고리 기반으로 시각화되어 운영자가 기준을 빠르게 이해할 수 있게 됐다.
+- 액션 로그/사유 필드 강화로 운영 결정의 사후 추적성이 좋아졌다.
+
+#### 아쉬운 점
+- 프로젝트 수정 폼은 아직 간단한 단일 패널이라 고급 편집 UX(필드 검증/미리보기)는 추가 여지가 있다.
+- DB 연결은 요청마다 새 연결 구조라 고트래픽 대비 성능 튜닝은 남아 있다.
+
+#### 다음 액션
+1. DB 커넥션 풀 적용으로 관리자 API 응답 지연 감소
+2. 콘텐츠 관리 탭에 정렬/페이지네이션 추가
+3. Playwright로 관리자 핵심 시나리오(E2E) 자동화
