@@ -1,6 +1,6 @@
 import os
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import Json, RealDictCursor
 from contextlib import contextmanager
 from typing import Optional
 from dotenv import load_dotenv
@@ -108,6 +108,13 @@ def init_db():
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     blocked_keywords TEXT[] DEFAULT '{}',
                     auto_hide_report_threshold INTEGER DEFAULT 3,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS site_contents (
+                    content_key VARCHAR(100) PRIMARY KEY,
+                    content_json JSONB NOT NULL,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -590,6 +597,37 @@ def update_moderation_settings(
                 RETURNING id, blocked_keywords, auto_hide_report_threshold, updated_at
                 """,
                 (blocked_keywords, auto_hide_report_threshold),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_site_content(content_key: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT content_key, content_json, updated_at
+                FROM site_contents
+                WHERE content_key = %s
+                """,
+                (content_key,),
+            )
+            return cur.fetchone()
+
+
+def upsert_site_content(content_key: str, content_json: dict):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO site_contents (content_key, content_json, updated_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (content_key)
+                DO UPDATE SET content_json = EXCLUDED.content_json, updated_at = NOW()
+                RETURNING content_key, content_json, updated_at
+                """,
+                (content_key, Json(content_json)),
             )
             conn.commit()
             return cur.fetchone()

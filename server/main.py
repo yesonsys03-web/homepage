@@ -33,6 +33,8 @@ from db import (
     unlimit_user,
     get_moderation_settings,
     update_moderation_settings,
+    get_site_content,
+    upsert_site_content,
 )
 from auth import (
     verify_password,
@@ -71,6 +73,67 @@ BASELINE_BLOCKED_KEYWORD_CATEGORIES: dict[str, list[str]] = {
         "작업대출",
         "고수익보장",
         "보이스피싱",
+    ],
+}
+
+ABOUT_CONTENT_KEY = "about_page"
+ABOUT_CONTENT_TARGET_ID = "00000000-0000-0000-0000-000000000003"
+ABOUT_CONTENT_DEFAULT = {
+    "hero_title": "완성도보다 바이브.",
+    "hero_highlight": "실험도 작품이다.",
+    "hero_description": "VibeCoder는 개발자들이 자유롭게 실험하고, 공유하고, 피드백을 받는 공간입니다. 완벽한 코드보다 재미있는 시도가 더 가치 있다고 믿습니다.",
+    "contact_email": "hello@vibecoder.dev",
+    "values": [
+        {
+            "emoji": "🎨",
+            "title": "창작의 자유",
+            "description": "완벽함보다 uniqueness를 중요시합니다. 당신만의 독특한 바이브를 보여주세요.",
+        },
+        {
+            "emoji": "🤝",
+            "title": "피드백 문화",
+            "description": "constructive한 피드백으로 서로 성장합니다. 비난보다 건전한 논의를 추구합니다.",
+        },
+        {
+            "emoji": "🚀",
+            "title": "실험정신",
+            "description": "실패를 두려워하지 말고 새로운 시도를 마음껏 해보세요.",
+        },
+    ],
+    "team_members": [
+        {
+            "name": "devkim",
+            "role": "Founder & Lead Dev",
+            "description": "AI와 웹 개발을 좋아합니다",
+        },
+        {
+            "name": "codemaster",
+            "role": "Backend Engineer",
+            "description": "Rust와 Python을 좋아합니다",
+        },
+        {
+            "name": "designer_y",
+            "role": "UI/UX Designer",
+            "description": "사용자 경험을 중요시합니다",
+        },
+    ],
+    "faqs": [
+        {
+            "question": "VibeCoder는 무엇인가요?",
+            "answer": "개발자들이 자신의 프로젝트를 공유하고, 서로의 작품에 대한 피드백을 받을 수 있는 커뮤니티입니다.",
+        },
+        {
+            "question": "프로젝트를 어떻게 올리나요?",
+            "answer": "로그인 후 '작품 올리기' 버튼을 클릭하여 프로젝트 정보를 입력하면 됩니다.",
+        },
+        {
+            "question": "챌린지에 참여하려면 어떻게 해야 하나요?",
+            "answer": "챌린지 페이지에서 마음에 드는 챌린지를 선택하고 '참가하기' 버튼을 클릭하면 됩니다.",
+        },
+        {
+            "question": "무료로 사용할 수 있나요?",
+            "answer": "네, 기본 기능은 모두 무료입니다. 추후 유료 기능이 추가될 예정입니다.",
+        },
     ],
 }
 
@@ -158,11 +221,54 @@ class AdminActionReasonRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class AboutValueItem(BaseModel):
+    emoji: str
+    title: str
+    description: str
+
+
+class AboutTeamMember(BaseModel):
+    name: str
+    role: str
+    description: str
+
+
+class AboutFaqItem(BaseModel):
+    question: str
+    answer: str
+
+
+class AboutContentUpdateRequest(BaseModel):
+    hero_title: str
+    hero_highlight: str
+    hero_description: str
+    contact_email: str
+    values: list[AboutValueItem]
+    team_members: list[AboutTeamMember]
+    faqs: list[AboutFaqItem]
+    reason: Optional[str] = None
+
+
 def require_action_reason(reason: Optional[str]) -> str:
     normalized_reason = (reason or "").strip()
     if not normalized_reason:
         raise HTTPException(status_code=400, detail="처리 사유(reason)는 필수입니다")
     return normalized_reason
+
+
+def get_about_content_payload() -> dict:
+    record = get_site_content(ABOUT_CONTENT_KEY)
+    if record and record.get("content_json"):
+        content = record["content_json"]
+        content["updated_at"] = record.get("updated_at")
+        return content
+
+    seeded = upsert_site_content(ABOUT_CONTENT_KEY, ABOUT_CONTENT_DEFAULT)
+    if not seeded:
+        raise HTTPException(status_code=500, detail="소개 페이지 초기화에 실패했습니다")
+    content = seeded["content_json"]
+    content["updated_at"] = seeded.get("updated_at")
+    return content
 
 
 def normalize_text_for_filter(text: str) -> str:
@@ -270,6 +376,7 @@ async def startup_event():
     try:
         init_db()
         ensure_baseline_moderation_settings()
+        get_about_content_payload()
     except Exception as e:
         print(f"⚠️  DB initialization warning: {e}")
 
@@ -280,6 +387,11 @@ async def startup_event():
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/content/about")
+def get_about_content_endpoint():
+    return get_about_content_payload()
 
 
 # ============ Projects API ============
@@ -681,6 +793,30 @@ def update_admin_policies(
     )
 
     return updated
+
+
+@app.patch("/api/admin/content/about")
+def update_about_content_endpoint(
+    payload: AboutContentUpdateRequest,
+    current_user: dict = Depends(require_admin),
+):
+    reason = require_action_reason(payload.reason)
+    content = payload.model_dump(exclude={"reason"})
+    updated = upsert_site_content(ABOUT_CONTENT_KEY, content)
+    if not updated:
+        raise HTTPException(status_code=500, detail="소개 페이지 저장에 실패했습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="about_content_updated",
+        target_type="content",
+        target_id=ABOUT_CONTENT_TARGET_ID,
+        reason=reason,
+    )
+
+    response = updated["content_json"]
+    response["updated_at"] = updated.get("updated_at")
+    return response
 
 
 @app.patch("/api/admin/reports/{report_id}")
