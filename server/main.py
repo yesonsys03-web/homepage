@@ -17,6 +17,7 @@ from db import (
     create_comment,
     report_comment,
     get_reports,
+    get_reports_count,
     update_report,
     create_user,
     get_user_by_email,
@@ -559,16 +560,20 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
 
 @app.get("/api/admin/reports")
 def list_reports(
-    status: Optional[str] = None, current_user: dict = Depends(require_admin)
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+    current_user: dict = Depends(require_admin),
 ):
     """신고 목록 조회 (관리자)"""
     _ = current_user
-    reports = get_reports(status=status)
+    reports = get_reports(status=status, limit=limit, offset=offset)
+    total = get_reports_count(status=status)
     for r in reports:
         r["id"] = str(r["id"])
         if r.get("reporter_id"):
             r["reporter_id"] = str(r["reporter_id"])
-    return {"items": reports}
+    return {"items": reports, "total": total}
 
 
 @app.get("/api/admin/action-logs")

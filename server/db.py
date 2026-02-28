@@ -432,18 +432,36 @@ def report_comment(
             return cur.fetchone()
 
 
-def get_reports(status: Optional[str] = None):
+def get_reports(status: Optional[str] = None, limit: int = 50, offset: int = 0):
     """신고 목록 (관리자)"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             query = "SELECT * FROM reports"
+            params: list[object] = []
             if status:
                 query += " WHERE status = %s ORDER BY created_at DESC"
-                cur.execute(query, (status,))
+                params.append(status)
             else:
                 query += " ORDER BY created_at DESC"
-                cur.execute(query)
+
+            query += " LIMIT %s OFFSET %s"
+            params.extend([limit, offset])
+            cur.execute(query, params)
             return cur.fetchall()
+
+
+def get_reports_count(status: Optional[str] = None):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if status:
+                cur.execute(
+                    "SELECT COUNT(*) AS count FROM reports WHERE status = %s", (status,)
+                )
+            else:
+                cur.execute("SELECT COUNT(*) AS count FROM reports")
+
+            result = cur.fetchone()
+            return int(result["count"]) if result else 0
 
 
 def update_report(report_id: str, new_status: str):
