@@ -1,10 +1,15 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { api, type AdminActionLog, type AdminManagedUser } from "@/lib/api"
+import {
+  api,
+  type AdminActionLog,
+  type AdminManagedProject,
+  type AdminManagedUser,
+} from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
 
 type Screen =
@@ -20,8 +25,42 @@ type Screen =
   | "about"
 
 type ReportStatus = "open" | "reviewing" | "resolved" | "rejected" | "all"
+type ProjectStatus = "all" | "published" | "hidden" | "deleted"
+type ActionLogFilter = "all" | "project" | "report" | "user" | "moderation_settings"
 
 const ADMIN_DASHBOARD_POLLING_MS = 30000
+
+function parseCsvLine(line: string): string[] {
+  const values: string[] = []
+  let current = ""
+  let inQuotes = false
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i]
+
+    if (char === '"') {
+      const nextChar = line[i + 1]
+      if (inQuotes && nextChar === '"') {
+        current += '"'
+        i += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (char === "," && !inQuotes) {
+      values.push(current)
+      current = ""
+      continue
+    }
+
+    current += char
+  }
+
+  values.push(current)
+  return values.map((value) => value.trim())
+}
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -59,6 +98,11 @@ function actionToText(actionType: string): string {
   if (actionType === "report_reviewing") return "검토 시작"
   if (actionType === "user_limited") return "사용자 제한"
   if (actionType === "user_unlimited") return "사용자 제한 해제"
+  if (actionType === "project_updated") return "프로젝트 수정"
+  if (actionType === "project_hidden") return "프로젝트 숨김"
+  if (actionType === "project_restored") return "프로젝트 복구"
+  if (actionType === "project_deleted") return "프로젝트 삭제"
+  if (actionType === "policy_updated") return "정책 수정"
   return actionType
 }
 
@@ -88,9 +132,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [reports, setReports] = useState<AdminReportRow[]>([])
   const [actionLogs, setActionLogs] = useState<AdminActionLog[]>([])
   const [users, setUsers] = useState<AdminManagedUser[]>([])
+  const [projects, setProjects] = useState<AdminManagedProject[]>([])
   const [loadingReports, setLoadingReports] = useState(true)
   const [loadingLogs, setLoadingLogs] = useState(true)
   const [loadingUsers, setLoadingUsers] = useState(true)
+  const [loadingProjects, setLoadingProjects] = useState(true)
   const [loadingPolicies, setLoadingPolicies] = useState(true)
   const [savingPolicies, setSavingPolicies] = useState(false)
   const [activeStatus, setActiveStatus] = useState<ReportStatus>("all")
@@ -102,6 +148,16 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [autoHideThreshold, setAutoHideThreshold] = useState(3)
   const [policyUpdatedBy, setPolicyUpdatedBy] = useState<string | null>(null)
   const [policyUpdatedAt, setPolicyUpdatedAt] = useState<string | null>(null)
+  const csvImportInputRef = useRef<HTMLInputElement | null>(null)
+  const [projectStatusFilter, setProjectStatusFilter] = useState<ProjectStatus>("all")
+  const [projectSearchQuery, setProjectSearchQuery] = useState("")
+  const [projectActionReason, setProjectActionReason] = useState("")
+  const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
+  const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
+  const [editingProjectTitle, setEditingProjectTitle] = useState("")
+  const [editingProjectSummary, setEditingProjectSummary] = useState("")
+  const [editingProjectReason, setEditingProjectReason] = useState("")
+  const [actionLogFilter, setActionLogFilter] = useState<ActionLogFilter>("all")
 
   const loadReports = async () => {
     setLoadingReports(true)
@@ -162,6 +218,19 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const loadProjects = async () => {
+    setLoadingProjects(true)
+    try {
+      const data = await api.getAdminProjects(undefined, 300)
+      setProjects(Array.isArray(data.items) ? data.items : [])
+    } catch (error) {
+      console.error("Failed to fetch projects:", error)
+      setProjects([])
+    } finally {
+      setLoadingProjects(false)
+    }
+  }
+
   const loadPolicies = async () => {
     setLoadingPolicies(true)
     try {
@@ -194,6 +263,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     loadReports()
     loadActionLogs()
     loadUsers()
+    loadProjects()
     loadPolicies()
   }, [])
 
@@ -205,6 +275,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
 
       loadReports()
       loadActionLogs()
+      loadProjects()
     }
 
     const intervalId = window.setInterval(poll, ADMIN_DASHBOARD_POLLING_MS)
@@ -212,6 +283,13 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       window.clearInterval(intervalId)
     }
   }, [])
+
+  useEffect(() => {
+    setSelectedProjectIds((prev) => prev.filter((id) => projects.some((project) => project.id === id)))
+    if (editingProjectId && !projects.some((project) => project.id === editingProjectId)) {
+      cancelEditingProject()
+    }
+  }, [projects, editingProjectId])
 
   const filteredReports = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -245,6 +323,40 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       { label: "처리완료", value: String(resolved), color: "text-[#23D5AB]" },
     ]
   }, [reports])
+
+  const filteredProjects = useMemo(() => {
+    const query = projectSearchQuery.trim().toLowerCase()
+
+    return projects.filter((project) => {
+      const statusMatched = projectStatusFilter === "all" || project.status === projectStatusFilter
+      if (!statusMatched) {
+        return false
+      }
+
+      if (!query) {
+        return true
+      }
+
+      return (
+        project.title.toLowerCase().includes(query)
+        || project.summary.toLowerCase().includes(query)
+        || project.author_nickname.toLowerCase().includes(query)
+        || project.platform.toLowerCase().includes(query)
+      )
+    })
+  }, [projects, projectStatusFilter, projectSearchQuery])
+
+  const filteredActionLogs = useMemo(() => {
+    if (actionLogFilter === "all") {
+      return actionLogs
+    }
+    return actionLogs.filter((log) => log.target_type === actionLogFilter)
+  }, [actionLogs, actionLogFilter])
+
+  const isProjectActionReasonValid = projectActionReason.trim().length > 0
+  const areAllFilteredProjectsSelected =
+    filteredProjects.length > 0
+    && filteredProjects.every((project) => selectedProjectIds.includes(project.id))
 
   const filteredBaselineKeywordCategories = useMemo(() => {
     const query = policyPreviewQuery.trim().toLowerCase()
@@ -321,6 +433,69 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     URL.revokeObjectURL(url)
   }
 
+  const handleImportPoliciesCsvClick = () => {
+    csvImportInputRef.current?.click()
+  }
+
+  const handleImportPoliciesCsvFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      return
+    }
+
+    try {
+      const text = await file.text()
+      const lines = text
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+
+      if (lines.length < 2) {
+        window.alert("CSV 내용이 비어 있습니다")
+        return
+      }
+
+      const header = parseCsvLine(lines[0]).map((column) => column.toLowerCase())
+      if (header.join(",") !== "group,category,keyword") {
+        window.alert("CSV 헤더 형식이 올바르지 않습니다. (group,category,keyword)")
+        return
+      }
+
+      const importedCustomKeywords = new Set<string>()
+
+      lines.slice(1).forEach((line) => {
+        const [group, , keyword] = parseCsvLine(line)
+        if (!keyword) {
+          return
+        }
+        if (group?.toLowerCase() === "custom") {
+          importedCustomKeywords.add(keyword.trim())
+        }
+      })
+
+      if (importedCustomKeywords.size === 0) {
+        window.alert("CSV에서 가져올 custom 키워드가 없습니다")
+        return
+      }
+
+      const mergedKeywords = Array.from(
+        new Set([...customKeywords, ...Array.from(importedCustomKeywords)])
+      )
+
+      setBlockedKeywordsInput(mergedKeywords.join(", "))
+      setSavingPolicies(true)
+      await api.updateAdminPolicies(mergedKeywords, autoHideThreshold)
+      await Promise.all([loadPolicies(), loadActionLogs()])
+      window.alert(`CSV에서 custom 키워드 ${importedCustomKeywords.size}개를 반영했습니다`)
+    } catch (error) {
+      console.error("Failed to import policies CSV:", error)
+      window.alert("CSV 가져오기에 실패했습니다")
+    } finally {
+      event.target.value = ""
+      setSavingPolicies(false)
+    }
+  }
+
   const handleUpdateReport = async (
     reportId: string,
     status: Exclude<ReportStatus, "all">,
@@ -359,6 +534,122 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       await Promise.all([loadUsers(), loadActionLogs()])
     } catch (error) {
       console.error("Failed to unlimit user:", error)
+    }
+  }
+
+  const toggleProjectSelection = (projectId: string) => {
+    setSelectedProjectIds((prev) =>
+      prev.includes(projectId)
+        ? prev.filter((id) => id !== projectId)
+        : [...prev, projectId]
+    )
+  }
+
+  const toggleSelectAllFilteredProjects = () => {
+    if (areAllFilteredProjectsSelected) {
+      setSelectedProjectIds((prev) =>
+        prev.filter((id) => !filteredProjects.some((project) => project.id === id))
+      )
+      return
+    }
+
+    setSelectedProjectIds((prev) => {
+      const merged = new Set(prev)
+      filteredProjects.forEach((project) => merged.add(project.id))
+      return Array.from(merged)
+    })
+  }
+
+  const startEditingProject = (project: AdminManagedProject) => {
+    setEditingProjectId(project.id)
+    setEditingProjectTitle(project.title)
+    setEditingProjectSummary(project.summary)
+    setEditingProjectReason("")
+  }
+
+  const cancelEditingProject = () => {
+    setEditingProjectId(null)
+    setEditingProjectTitle("")
+    setEditingProjectSummary("")
+    setEditingProjectReason("")
+  }
+
+  const handleSaveProjectEdit = async () => {
+    if (!editingProjectId) return
+
+    const reason = editingProjectReason.trim()
+    if (!reason) {
+      window.alert("수정 사유를 입력해주세요")
+      return
+    }
+
+    try {
+      await api.updateAdminProject(editingProjectId, {
+        title: editingProjectTitle.trim(),
+        summary: editingProjectSummary.trim(),
+        reason,
+      })
+      await Promise.all([loadProjects(), loadActionLogs()])
+      cancelEditingProject()
+    } catch (error) {
+      console.error("Failed to update project:", error)
+    }
+  }
+
+  const handleProjectSingleAction = async (
+    action: "hide" | "restore" | "delete",
+    projectId: string,
+  ) => {
+    const reason = projectActionReason.trim()
+    if (!reason) {
+      window.alert("작업 사유를 입력해주세요")
+      return
+    }
+
+    if (action === "delete") {
+      const confirmed = window.confirm("정말 삭제(소프트 삭제) 처리하시겠습니까?")
+      if (!confirmed) return
+    }
+
+    try {
+      if (action === "hide") {
+        await api.hideAdminProject(projectId, reason)
+      } else if (action === "restore") {
+        await api.restoreAdminProject(projectId, reason)
+      } else {
+        await api.deleteAdminProject(projectId, reason)
+      }
+      await Promise.all([loadProjects(), loadActionLogs()])
+      setSelectedProjectIds((prev) => prev.filter((id) => id !== projectId))
+    } catch (error) {
+      console.error(`Failed to ${action} project:`, error)
+    }
+  }
+
+  const handleProjectBulkAction = async (action: "hide" | "restore") => {
+    if (selectedProjectIds.length === 0) {
+      window.alert("먼저 프로젝트를 선택해주세요")
+      return
+    }
+
+    const reason = projectActionReason.trim()
+    if (!reason) {
+      window.alert("작업 사유를 입력해주세요")
+      return
+    }
+
+    try {
+      await Promise.all(
+        selectedProjectIds.map((projectId) =>
+          action === "hide"
+            ? api.hideAdminProject(projectId, reason)
+            : api.restoreAdminProject(projectId, reason)
+        )
+      )
+      await Promise.all([loadProjects(), loadActionLogs()])
+      setSelectedProjectIds([])
+    } catch (error) {
+      console.error(`Failed to bulk-${action} projects:`, error)
     }
   }
 
@@ -421,6 +712,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           <TabsList className="bg-[#161F42] border-0 mb-6">
             <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
             <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
+            <TabsTrigger value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
             <TabsTrigger value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
             <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
           </TabsList>
@@ -459,6 +751,13 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-[#111936]">
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">
+                          <input
+                            type="checkbox"
+                            checked={areAllFilteredProjectsSelected}
+                            onChange={toggleSelectAllFilteredProjects}
+                          />
+                        </th>
                         <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
                         <th className="text-left p-4 text-[#B8C3E6] font-medium">유형</th>
                         <th className="text-left p-4 text-[#B8C3E6] font-medium">내용</th>
@@ -590,6 +889,195 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
             </Card>
           </TabsContent>
 
+          <TabsContent value="content">
+            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div className="flex gap-2 flex-wrap">
+                {(["all", "published", "hidden", "deleted"] as const).map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => setProjectStatusFilter(status)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                      projectStatusFilter === status
+                        ? "bg-[#FF5D8F] text-white"
+                        : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
+                    }`}
+                  >
+                    {status === "all" ? "전체" : status}
+                  </button>
+                ))}
+              </div>
+              <input
+                value={projectSearchQuery}
+                onChange={(event) => setProjectSearchQuery(event.target.value)}
+                placeholder="제목/요약/작성자/플랫폼 검색"
+                className="w-full md:w-72 bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+              />
+            </div>
+
+            <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
+              <input
+                value={projectActionReason}
+                onChange={(event) => setProjectActionReason(event.target.value)}
+                placeholder="콘텐츠 작업 사유 (필수)"
+                className="w-full bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+              />
+              <div className="flex gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                  onClick={() => handleProjectBulkAction("hide")}
+                  disabled={!isProjectActionReasonValid || selectedProjectIds.length === 0}
+                >
+                  선택 숨김
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                  onClick={() => handleProjectBulkAction("restore")}
+                  disabled={!isProjectActionReasonValid || selectedProjectIds.length === 0}
+                >
+                  선택 복구
+                </Button>
+              </div>
+            </div>
+
+            {editingProjectId && (
+              <Card className="bg-[#161F42] border border-[#FF5D8F]/40 mb-4">
+                <CardContent className="p-4 space-y-3">
+                  <p className="text-sm font-semibold text-[#F4F7FF]">프로젝트 수정</p>
+                  <input
+                    value={editingProjectTitle}
+                    onChange={(event) => setEditingProjectTitle(event.target.value)}
+                    placeholder="제목"
+                    className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                  />
+                  <textarea
+                    value={editingProjectSummary}
+                    onChange={(event) => setEditingProjectSummary(event.target.value)}
+                    placeholder="요약"
+                    rows={3}
+                    className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                  />
+                  <input
+                    value={editingProjectReason}
+                    onChange={(event) => setEditingProjectReason(event.target.value)}
+                    placeholder="수정 사유 (필수)"
+                    className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                  />
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white"
+                      onClick={handleSaveProjectEdit}
+                    >
+                      수정 저장
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                      onClick={cancelEditingProject}
+                    >
+                      취소
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            <Card className="bg-[#161F42] border-0">
+              <CardContent className="p-0">
+                {loadingProjects ? (
+                  <div className="p-6 text-[#B8C3E6]">프로젝트 로딩 중...</div>
+                ) : (
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-[#111936]">
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">제목</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작성자</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">플랫폼</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">반응</th>
+                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredProjects.map((project) => (
+                        <tr key={project.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
+                          <td className="p-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedProjectIds.includes(project.id)}
+                              onChange={() => toggleProjectSelection(project.id)}
+                            />
+                          </td>
+                          <td className="p-4">
+                            <Badge
+                              variant={
+                                project.status === "published"
+                                  ? "default"
+                                  : project.status === "hidden"
+                                    ? "secondary"
+                                    : "destructive"
+                              }
+                            >
+                              {project.status}
+                            </Badge>
+                          </td>
+                          <td className="p-4 text-[#F4F7FF] max-w-xs truncate">{project.title}</td>
+                          <td className="p-4 text-[#B8C3E6]">{project.author_nickname}</td>
+                          <td className="p-4 text-[#B8C3E6]">{project.platform}</td>
+                          <td className="p-4 text-[#B8C3E6]">❤️ {project.like_count} · 💬 {project.comment_count}</td>
+                          <td className="p-4">
+                            <div className="flex gap-1 flex-wrap">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                onClick={() => startEditingProject(project)}
+                              >
+                                수정
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                onClick={() => handleProjectSingleAction("hide", project.id)}
+                                disabled={project.status === "hidden" || project.status === "deleted"}
+                              >
+                                숨김
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                onClick={() => handleProjectSingleAction("restore", project.id)}
+                                disabled={project.status === "published"}
+                              >
+                                복구
+                              </Button>
+                              <Button
+                                size="sm"
+                                className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
+                                onClick={() => handleProjectSingleAction("delete", project.id)}
+                                disabled={project.status === "deleted"}
+                              >
+                                삭제
+                              </Button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="policies">
             <Card className="bg-[#161F42] border-0">
               <CardContent className="p-6 space-y-6">
@@ -637,6 +1125,21 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                         >
                           CSV 내보내기
                         </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                          onClick={handleImportPoliciesCsvClick}
+                        >
+                          CSV 가져오기
+                        </Button>
+                        <input
+                          ref={csvImportInputRef}
+                          type="file"
+                          accept=".csv,text/csv"
+                          className="hidden"
+                          onChange={handleImportPoliciesCsvFile}
+                        />
                       </div>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                         {Object.entries(filteredBaselineKeywordCategories).map(([category, keywords]) => (
@@ -709,6 +1212,28 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           </TabsContent>
 
           <TabsContent value="actions">
+            <div className="mb-3 flex gap-2 flex-wrap">
+              {([
+                { value: "all", label: "전체" },
+                { value: "project", label: "프로젝트" },
+                { value: "report", label: "신고" },
+                { value: "user", label: "사용자" },
+                { value: "moderation_settings", label: "정책" },
+              ] as const).map((tab) => (
+                <button
+                  key={tab.value}
+                  type="button"
+                  onClick={() => setActionLogFilter(tab.value)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    actionLogFilter === tab.value
+                      ? "bg-[#FF5D8F] text-white"
+                      : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
             <Card className="bg-[#161F42] border-0">
               <CardContent className="p-0">
                 {loadingLogs ? (
@@ -725,7 +1250,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                       </tr>
                     </thead>
                     <tbody>
-                      {actionLogs.map((log) => (
+                      {filteredActionLogs.map((log) => (
                         <tr key={log.id} className="border-b border-[#111936]/50">
                           <td className="p-4 text-[#F4F7FF]">{actionToText(log.action_type)}</td>
                           <td className="p-4 text-[#FF5D8F]">{log.target_type}:{log.target_id}</td>

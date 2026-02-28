@@ -70,6 +70,25 @@ export interface AdminManagedUser {
   limited_reason?: string | null
 }
 
+export interface AdminManagedProject {
+  id: string
+  author_id: string
+  author_nickname: string
+  title: string
+  summary: string
+  description?: string
+  thumbnail_url?: string | null
+  demo_url?: string | null
+  repo_url?: string | null
+  platform: string
+  tags: string[]
+  status: string
+  like_count: number
+  comment_count: number
+  created_at: string
+  updated_at: string
+}
+
 export interface ModerationPolicy {
   id: number
   blocked_keywords: string[]
@@ -219,6 +238,53 @@ export const api = {
   getAdminUsers: async (limit: number = 200) => {
     const res = await authFetch(`${API_BASE}/api/admin/users?limit=${limit}`)
     return res.json() as Promise<{ items: AdminManagedUser[] }>
+  },
+
+  getAdminProjects: async (status?: string, limit: number = 200) => {
+    const params = new URLSearchParams()
+    if (status) params.set("status", status)
+    params.set("limit", String(limit))
+    const res = await authFetch(`${API_BASE}/api/admin/projects?${params.toString()}`)
+    return res.json() as Promise<{ items: AdminManagedProject[] }>
+  },
+
+  updateAdminProject: async (
+    projectId: string,
+    data: Partial<AdminManagedProject> & { reason?: string },
+  ) => {
+    const res = await authFetch(`${API_BASE}/api/admin/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    })
+    return res.json() as Promise<AdminManagedProject>
+  },
+
+  hideAdminProject: async (projectId: string, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/projects/${projectId}/hide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<AdminManagedProject>
+  },
+
+  restoreAdminProject: async (projectId: string, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/projects/${projectId}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<AdminManagedProject>
+  },
+
+  deleteAdminProject: async (projectId: string, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/projects/${projectId}`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<AdminManagedProject>
   },
 
   limitUser: async (userId: string, hours: number, reason?: string) => {
