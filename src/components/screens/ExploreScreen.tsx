@@ -31,14 +31,23 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
 
   useEffect(() => {
     const fetchProjects = async () => {
-      setLoading(true)
-      try {
-        const params: { sort?: string; platform?: string } = { sort }
-        if (category !== "all") {
-          params.platform = category
-        }
-        const data = await api.getProjects(params)
+      const params: { sort?: string; platform?: string } = { sort }
+      if (category !== "all") {
+        params.platform = category
+      }
+
+      const hasCache = api.hasProjectsCache(params)
+      if (!hasCache) {
+        setLoading(true)
+      }
+
+      const applyProjects = (data: { items: Project[] }) => {
         setProjects(data.items || [])
+      }
+
+      try {
+        const data = await api.getProjects(params, { onRevalidate: applyProjects })
+        applyProjects(data)
       } catch (error) {
         console.error("Failed to fetch explore projects:", error)
         setProjects([])

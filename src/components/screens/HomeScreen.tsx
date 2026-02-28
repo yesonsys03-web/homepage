@@ -102,21 +102,28 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
 
   useEffect(() => {
     const fetchProjects = async () => {
-      setLoading(true)
-      try {
-        const params: { sort?: string; platform?: string } = { sort }
-        if (filter !== "전체") {
-          params.platform = filter
-        }
-        const data = await api.getProjects(params)
-        
-        const projectsWithMeta: ProjectWithMeta[] = data.items.map((p: Project) => ({
+      const params: { sort?: string; platform?: string } = { sort }
+      if (filter !== "전체") {
+        params.platform = filter
+      }
+
+      const hasCache = api.hasProjectsCache(params)
+      if (!hasCache) {
+        setLoading(true)
+      }
+
+      const applyProjects = (data: { items: Project[] }) => {
+        const projectsWithMeta: ProjectWithMeta[] = (data.items || []).map((p: Project) => ({
           ...p,
           isNew: new Date(p.created_at) > new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
           isHot: p.like_count >= HOT_PROJECT_THRESHOLD,
         }))
-        
         setProjects(projectsWithMeta)
+      }
+
+      try {
+        const data = await api.getProjects(params, { onRevalidate: applyProjects })
+        applyProjects(data)
       } catch (error) {
         console.error("Failed to fetch projects:", error)
       } finally {

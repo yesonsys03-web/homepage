@@ -56,15 +56,28 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
 
   useEffect(() => {
     const fetchData = async () => {
-      setLoading(true)
-      try {
-        // 실제 API 호출
-        const projectData = await api.getProject(targetProjectId)
+      const hasProjectCache = api.hasProjectDetailCache(targetProjectId)
+      const hasCommentsCache = api.hasCommentsCache(targetProjectId)
+      if (!(hasProjectCache && hasCommentsCache)) {
+        setLoading(true)
+      }
+
+      const applyProject = (projectData: Project) => {
         setProject(projectData)
         setLikeCount(projectData.like_count)
+      }
 
-        const commentsData = await api.getComments(targetProjectId)
+      const applyComments = (commentsData: { items: Comment[] }) => {
         setComments(commentsData.items || [])
+      }
+
+      try {
+        const [projectData, commentsData] = await Promise.all([
+          api.getProject(targetProjectId, { onRevalidate: applyProject }),
+          api.getComments(targetProjectId, "latest", { onRevalidate: applyComments }),
+        ])
+        applyProject(projectData)
+        applyComments(commentsData)
       } catch (error) {
         // 실패 시 샘플 데이터 사용
         console.error("API failed, using sample data:", error)
@@ -119,7 +132,7 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
 
     try {
       await api.createComment(targetProjectId, content)
-      const commentsData = await api.getComments(targetProjectId)
+      const commentsData = await api.getComments(targetProjectId, "latest", { force: true })
       setComments(commentsData.items || [])
     } catch (error) {
       console.error("Comment failed:", error)
