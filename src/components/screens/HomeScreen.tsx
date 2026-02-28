@@ -4,6 +4,9 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { api, type Project } from "@/lib/api"
+import heroMasterImage from "../../../img/master.webp"
+import heroTabletImage from "../../../img/master_tablet.webp"
+import heroMobileImage from "../../../img/master_mobile.webp"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -152,20 +155,30 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
       </header>
 
       <section className="relative py-20 px-4 overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-[#161F42]/50 via-[#0B1020] to-[#111936]/30" />
+        <picture className="absolute inset-0">
+          <source media="(max-width: 767px)" srcSet={heroMobileImage} />
+          <source media="(max-width: 1279px)" srcSet={heroTabletImage} />
+          <img
+            src={heroMasterImage}
+            alt=""
+            aria-hidden="true"
+            className="h-full w-full object-cover opacity-70"
+          />
+        </picture>
+        <div className="absolute inset-0 bg-gradient-to-br from-[#0B1020]/56 via-[#0B1020]/50 to-[#111936]/40" />
         <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
-        <div className="max-w-4xl mx-auto text-center relative z-10">
-          <h2 className="font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6">
+        <div className="max-w-7xl mx-auto relative z-10 flex flex-col items-center">
+          <h2 className="w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left">
             완성도보다 바이브.<br />
             <span className="text-[#23D5AB]">실험도 작품이다.</span>
           </h2>
-          <p className="text-xl text-[#B8C3E6] mb-8 max-w-2xl mx-auto">
-            바이브코더들의 놀이터에서 당신의 작품을 공유하고,<br />
-            서로의 바이브를 피드백하세요.
-          </p>
           <Button size="lg" onClick={() => onNavigate?.('explore')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6">
             지금 시작하기
           </Button>
+          <p className="text-xl text-[#B8C3E6] mt-8 max-w-2xl text-center">
+            바이브코더들의 놀이터에서 당신의 작품을 공유하고,<br />
+            서로의 바이브를 피드백하세요.
+          </p>
         </div>
       </section>
 
