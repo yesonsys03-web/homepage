@@ -103,6 +103,14 @@ def init_db():
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS moderation_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    blocked_keywords TEXT[] DEFAULT '{}',
+                    auto_hide_report_threshold INTEGER DEFAULT 3,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
             # 기본 사용자 생성 (테스트용)
             cur.execute("""
@@ -120,6 +128,13 @@ def init_db():
             cur.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS limited_reason TEXT
             """)
+            cur.execute(
+                """
+                INSERT INTO moderation_settings (id, blocked_keywords, auto_hide_report_threshold)
+                VALUES (1, '{}', 3)
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
 
             # 컬럼 추가 (tags - 배열 타입)
             cur.execute("""
@@ -408,6 +423,22 @@ def get_admin_action_logs(limit: int = 50):
             return cur.fetchall()
 
 
+def get_latest_policy_update_action():
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT l.*, u.nickname as admin_nickname
+                FROM admin_action_logs l
+                LEFT JOIN users u ON l.admin_id = u.id
+                WHERE l.action_type = 'policy_updated'
+                ORDER BY l.created_at DESC
+                LIMIT 1
+                """
+            )
+            return cur.fetchone()
+
+
 def get_admin_users(limit: int = 200):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -452,6 +483,40 @@ def unlimit_user(user_id: str):
                 RETURNING id, email, nickname, role, created_at, limited_until, limited_reason
                 """,
                 (user_id,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_moderation_settings():
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, blocked_keywords, auto_hide_report_threshold, updated_at
+                FROM moderation_settings
+                WHERE id = 1
+                """
+            )
+            return cur.fetchone()
+
+
+def update_moderation_settings(
+    blocked_keywords: list[str],
+    auto_hide_report_threshold: int,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE moderation_settings
+                SET blocked_keywords = %s,
+                    auto_hide_report_threshold = %s,
+                    updated_at = NOW()
+                WHERE id = 1
+                RETURNING id, blocked_keywords, auto_hide_report_threshold, updated_at
+                """,
+                (blocked_keywords, auto_hide_report_threshold),
             )
             conn.commit()
             return cur.fetchone()

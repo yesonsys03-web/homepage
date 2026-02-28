@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional
+import re
+import unicodedata
 
 from db import (
     init_db,
@@ -22,9 +24,12 @@ from db import (
     get_user_projects,
     create_admin_action_log,
     get_admin_action_logs,
+    get_latest_policy_update_action,
     get_admin_users,
     limit_user,
     unlimit_user,
+    get_moderation_settings,
+    update_moderation_settings,
 )
 from auth import (
     verify_password,
@@ -34,6 +39,37 @@ from auth import (
 )
 
 app = FastAPI(title="VibeCoder Playground API")
+
+BASELINE_BLOCKED_KEYWORD_CATEGORIES: dict[str, list[str]] = {
+    "비하/혐오": [
+        "성별비하",
+        "지역비하",
+        "장애비하",
+        "인종비하",
+        "종교비하",
+        "정치비하",
+        "혐오",
+    ],
+    "욕설/변형욕설": [
+        "ㅅㅂ",
+        "ㄲㅈ",
+        "ㅆㄹㄱ",
+        "패드립",
+    ],
+    "범죄/유해정보": [
+        "불법토토",
+        "도박",
+        "환전",
+        "마약",
+        "필로폰",
+        "대마",
+        "성매매",
+        "계좌대여",
+        "작업대출",
+        "고수익보장",
+        "보이스피싱",
+    ],
+}
 
 # CORS 설정
 app.add_middleware(
@@ -97,6 +133,107 @@ class AdminUserLimitRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class AdminPolicyUpdateRequest(BaseModel):
+    blocked_keywords: list[str]
+    auto_hide_report_threshold: int
+
+
+def normalize_text_for_filter(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text).lower()
+    return re.sub(r"[\W_]+", "", normalized)
+
+
+def normalize_keyword_list(keywords: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for keyword in keywords:
+        token = normalize_text_for_filter(keyword)
+        if token and token not in cleaned:
+            cleaned.append(token)
+    return cleaned
+
+
+def get_effective_blocked_keywords(custom_keywords: list[str]) -> list[str]:
+    baseline = [
+        keyword
+        for keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.values()
+        for keyword in keywords
+    ]
+    combined = list(custom_keywords) + baseline
+    return normalize_keyword_list(combined)
+
+
+def text_contains_blocked_keyword(text: str, blocked_keywords: list[str]) -> bool:
+    normalized_text = normalize_text_for_filter(text)
+    if not normalized_text:
+        return False
+    return any(keyword in normalized_text for keyword in blocked_keywords)
+
+
+def get_effective_moderation_settings() -> dict:
+    settings = get_moderation_settings()
+    if not settings:
+        raise HTTPException(status_code=404, detail="정책 설정을 찾을 수 없습니다")
+
+    effective_keywords = get_effective_blocked_keywords(
+        settings.get("blocked_keywords") or []
+    )
+    raw_keywords = settings.get("blocked_keywords") or []
+    normalized_raw_keywords = normalize_keyword_list(raw_keywords)
+    baseline_keywords = normalize_keyword_list(
+        [
+            keyword
+            for keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.values()
+            for keyword in keywords
+        ]
+    )
+    custom_keywords = [
+        keyword
+        for keyword in normalized_raw_keywords
+        if keyword not in baseline_keywords
+    ]
+    baseline_categories = {
+        category: normalize_keyword_list(keywords)
+        for category, keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.items()
+    }
+    latest_policy_action = get_latest_policy_update_action()
+
+    last_updated_by = None
+    last_updated_by_id = None
+    last_updated_action_at = None
+    if latest_policy_action:
+        last_updated_by = latest_policy_action.get("admin_nickname")
+        if latest_policy_action.get("admin_id"):
+            last_updated_by_id = str(latest_policy_action["admin_id"])
+        last_updated_action_at = latest_policy_action.get("created_at")
+
+    return {
+        "id": settings["id"],
+        "blocked_keywords": effective_keywords,
+        "custom_blocked_keywords": custom_keywords,
+        "baseline_keyword_categories": baseline_categories,
+        "auto_hide_report_threshold": settings["auto_hide_report_threshold"],
+        "updated_at": settings["updated_at"],
+        "last_updated_by": last_updated_by,
+        "last_updated_by_id": last_updated_by_id,
+        "last_updated_action_at": last_updated_action_at,
+    }
+
+
+def ensure_baseline_moderation_settings() -> None:
+    settings = get_moderation_settings()
+    if not settings:
+        return
+
+    effective_keywords = get_effective_blocked_keywords(
+        settings.get("blocked_keywords") or []
+    )
+    if effective_keywords != (settings.get("blocked_keywords") or []):
+        update_moderation_settings(
+            blocked_keywords=effective_keywords,
+            auto_hide_report_threshold=settings["auto_hide_report_threshold"],
+        )
+
+
 # ============ Startup Event ============
 
 
@@ -105,6 +242,7 @@ async def startup_event():
     """앱 시작 시 DB 테이블 초기화"""
     try:
         init_db()
+        ensure_baseline_moderation_settings()
     except Exception as e:
         print(f"⚠️  DB initialization warning: {e}")
 
@@ -153,6 +291,19 @@ def get_project_detail(project_id: str):
 @app.post("/api/projects")
 def create_project_endpoint(project: ProjectCreate):
     """프로젝트 생성"""
+    settings = get_effective_moderation_settings()
+    content_for_check = " ".join(
+        [
+            project.title,
+            project.summary,
+            project.description or "",
+        ]
+    )
+    if text_contains_blocked_keyword(content_for_check, settings["blocked_keywords"]):
+        raise HTTPException(
+            status_code=400, detail="금칙어가 포함된 내용은 등록할 수 없습니다"
+        )
+
     new_project = create_project(project.model_dump())
     if not new_project:
         raise HTTPException(status_code=500, detail="프로젝트 생성에 실패했습니다")
@@ -200,6 +351,12 @@ def list_comments(project_id: str, sort: str = "latest"):
 @app.post("/api/projects/{project_id}/comments")
 def create_comment_endpoint(project_id: str, comment: CommentCreate):
     """댓글 작성"""
+    settings = get_effective_moderation_settings()
+    if text_contains_blocked_keyword(comment.content, settings["blocked_keywords"]):
+        raise HTTPException(
+            status_code=400, detail="금칙어가 포함된 댓글은 작성할 수 없습니다"
+        )
+
     new_comment = create_comment(project_id, comment.content)
     if not new_comment:
         raise HTTPException(status_code=500, detail="댓글 작성에 실패했습니다")
@@ -346,6 +503,41 @@ def unlimit_user_endpoint(
 
     released_user["id"] = str(released_user["id"])
     return released_user
+
+
+@app.get("/api/admin/policies")
+def get_admin_policies(current_user: dict = Depends(require_admin)):
+    _ = current_user
+    return get_effective_moderation_settings()
+
+
+@app.patch("/api/admin/policies")
+def update_admin_policies(
+    payload: AdminPolicyUpdateRequest,
+    current_user: dict = Depends(require_admin),
+):
+    if payload.auto_hide_report_threshold < 1:
+        raise HTTPException(status_code=400, detail="임계치는 1 이상이어야 합니다")
+
+    cleaned_keywords = normalize_keyword_list(payload.blocked_keywords)
+    effective_keywords = get_effective_blocked_keywords(cleaned_keywords)
+
+    updated = update_moderation_settings(
+        blocked_keywords=effective_keywords,
+        auto_hide_report_threshold=payload.auto_hide_report_threshold,
+    )
+    if not updated:
+        raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="policy_updated",
+        target_type="moderation_settings",
+        target_id="00000000-0000-0000-0000-000000000001",
+        reason=f"keywords={len(effective_keywords)}, threshold={payload.auto_hide_report_threshold}",
+    )
+
+    return updated
 
 
 @app.patch("/api/admin/reports/{report_id}")
