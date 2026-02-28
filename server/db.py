@@ -120,11 +120,13 @@ def init_db():
             """)
 
             # 기본 사용자 생성 (테스트용)
-            cur.execute("""
+            cur.execute(
+                """
                 INSERT INTO users (id, nickname, role)
                 VALUES ('11111111-1111-1111-1111-111111111111', 'devkim', 'admin')
-                ON CONFLICT (nickname) DO NOTHING
-            """)
+                ON CONFLICT DO NOTHING
+                """
+            )
             # 컬럼 추가 (password - 해시된 비밀번호)
             cur.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)
@@ -150,14 +152,18 @@ def init_db():
 
             conn.commit()
             print("✅ Database tables initialized successfully!")
-            cur.execute("""
-                ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'
-            """)
 
-            conn.commit()
-            print("✅ Database tables initialized successfully!")
-            conn.commit()
-            print("✅ Database tables initialized successfully!")
+
+def ensure_site_contents_table(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS site_contents (
+            content_key VARCHAR(100) PRIMARY KEY,
+            content_json JSONB NOT NULL,
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
 
 
 def get_projects(
@@ -605,6 +611,7 @@ def update_moderation_settings(
 def get_site_content(content_key: str):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_site_contents_table(cur)
             cur.execute(
                 """
                 SELECT content_key, content_json, updated_at
@@ -619,6 +626,7 @@ def get_site_content(content_key: str):
 def upsert_site_content(content_key: str, content_json: dict):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_site_contents_table(cur)
             cur.execute(
                 """
                 INSERT INTO site_contents (content_key, content_json, updated_at)
