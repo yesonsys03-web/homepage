@@ -10,6 +10,7 @@ import {
   type AdminManagedProject,
   type AdminManagedUser,
   type AboutContent,
+  type ModerationPolicy,
 } from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
 
@@ -28,6 +29,7 @@ type Screen =
 type ReportStatus = "open" | "reviewing" | "resolved" | "rejected" | "all"
 type ProjectStatus = "all" | "published" | "hidden" | "deleted"
 type ActionLogFilter = "all" | "project" | "report" | "user" | "moderation_settings"
+type AdminTabKey = "reports" | "users" | "content" | "pages" | "policies" | "actions"
 
 const ABOUT_CONTENT_FALLBACK: AboutContent = {
   hero_title: "완성도보다 바이브.",
@@ -184,6 +186,10 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [loadingPolicies, setLoadingPolicies] = useState(true)
   const [savingPolicies, setSavingPolicies] = useState(false)
   const [activeStatus, setActiveStatus] = useState<ReportStatus>("all")
+  const [reportPage, setReportPage] = useState(0)
+  const [reportTotal, setReportTotal] = useState(0)
+  const REPORT_PAGE_SIZE = 50
+  const [activeTab, setActiveTab] = useState<AdminTabKey>("reports")
   const [searchQuery, setSearchQuery] = useState("")
   const [blockedKeywordsInput, setBlockedKeywordsInput] = useState("")
   const [baselineKeywordCategories, setBaselineKeywordCategories] = useState<Record<string, string[]>>({})
@@ -212,32 +218,42 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [aboutValuesInput, setAboutValuesInput] = useState("")
   const [aboutTeamInput, setAboutTeamInput] = useState("")
   const [aboutFaqInput, setAboutFaqInput] = useState("")
+  const prefetchedTabsRef = useRef<Set<AdminTabKey>>(new Set())
 
-  const loadReports = async () => {
-    setLoadingReports(true)
-    try {
-      const data = await api.getReports()
+  const loadReports = async (page: number = 0, force: boolean = false) => {
+    const status = activeStatus === "all" ? undefined : activeStatus
+    const offset = page * REPORT_PAGE_SIZE
+    const hasCache = !force && api.hasAdminTabCache("reports", {
+      status: status ?? "all",
+      limit: REPORT_PAGE_SIZE,
+      offset,
+    })
+    if (!hasCache) {
+      setLoadingReports(true)
+    }
+
+    const applyReports = (data: { items: Array<{ id: string; target_type: string; target_id: string; reason: string; status: string; reporter_id?: string; created_at: string }>; total?: number }) => {
       const items = Array.isArray(data.items) ? data.items : []
-      const mapped: AdminReportRow[] = items.map(
-        (item: {
-          id: string
-          target_type: string
-          target_id: string
-          reason: string
-          status: string
-          reporter_id?: string
-          created_at: string
-        }) => ({
-          id: item.id,
-          targetType: item.target_type,
-          targetContent: item.target_id,
-          reason: item.reason,
-          status: item.status,
-          reporter: item.reporter_id || "unknown",
-          createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
-        })
-      )
+      const mapped: AdminReportRow[] = items.map((item) => ({
+        id: item.id,
+        targetType: item.target_type,
+        targetContent: item.target_id,
+        reason: item.reason,
+        status: item.status,
+        reporter: item.reporter_id || "unknown",
+        createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
+      }))
       setReports(mapped)
+      setReportTotal(data.total || 0)
+      setReportPage(page)
+    }
+
+    try {
+      const data = await api.getReports(status, REPORT_PAGE_SIZE, offset, {
+        force,
+        onRevalidate: applyReports,
+      })
+      applyReports(data)
     } catch (error) {
       console.error("Failed to fetch reports:", error)
       setReports([])
@@ -246,11 +262,19 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
-  const loadActionLogs = async () => {
-    setLoadingLogs(true)
-    try {
-      const data = await api.getAdminActionLogs(100)
+  const loadActionLogs = async (force: boolean = false) => {
+    const hasCache = !force && api.hasAdminTabCache("actions", { limit: 100 })
+    if (!hasCache) {
+      setLoadingLogs(true)
+    }
+
+    const applyLogs = (data: { items: AdminActionLog[] }) => {
       setActionLogs(Array.isArray(data.items) ? data.items : [])
+    }
+
+    try {
+      const data = await api.getAdminActionLogs(100, { force, onRevalidate: applyLogs })
+      applyLogs(data)
     } catch (error) {
       console.error("Failed to fetch action logs:", error)
       setActionLogs([])
@@ -259,11 +283,19 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
-  const loadUsers = async () => {
-    setLoadingUsers(true)
-    try {
-      const data = await api.getAdminUsers(200)
+  const loadUsers = async (force: boolean = false) => {
+    const hasCache = !force && api.hasAdminTabCache("users", { limit: 200 })
+    if (!hasCache) {
+      setLoadingUsers(true)
+    }
+
+    const applyUsers = (data: { items: AdminManagedUser[] }) => {
       setUsers(Array.isArray(data.items) ? data.items : [])
+    }
+
+    try {
+      const data = await api.getAdminUsers(200, { force, onRevalidate: applyUsers })
+      applyUsers(data)
     } catch (error) {
       console.error("Failed to fetch users:", error)
       setUsers([])
@@ -272,11 +304,19 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
-  const loadProjects = async () => {
-    setLoadingProjects(true)
-    try {
-      const data = await api.getAdminProjects(undefined, 300)
+  const loadProjects = async (force: boolean = false) => {
+    const hasCache = !force && api.hasAdminTabCache("content", { status: "all", limit: 300 })
+    if (!hasCache) {
+      setLoadingProjects(true)
+    }
+
+    const applyProjects = (data: { items: AdminManagedProject[] }) => {
       setProjects(Array.isArray(data.items) ? data.items : [])
+    }
+
+    try {
+      const data = await api.getAdminProjects(undefined, 300, { force, onRevalidate: applyProjects })
+      applyProjects(data)
     } catch (error) {
       console.error("Failed to fetch projects:", error)
       setProjects([])
@@ -285,10 +325,13 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
-  const loadPolicies = async () => {
-    setLoadingPolicies(true)
-    try {
-      const policy = await api.getAdminPolicies()
+  const loadPolicies = async (force: boolean = false) => {
+    const hasCache = !force && api.hasAdminTabCache("policies")
+    if (!hasCache) {
+      setLoadingPolicies(true)
+    }
+
+    const applyPolicies = (policy: ModerationPolicy) => {
       setBlockedKeywordsInput((policy.custom_blocked_keywords || []).join(", "))
       setBaselineKeywordCategories(policy.baseline_keyword_categories || {})
       setCollapsedPolicyCategories((prev) => {
@@ -301,6 +344,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       setAutoHideThreshold(policy.auto_hide_report_threshold || 3)
       setPolicyUpdatedBy(policy.last_updated_by || null)
       setPolicyUpdatedAt(policy.last_updated_action_at || null)
+    }
+
+    try {
+      const policy = await api.getAdminPolicies({ force, onRevalidate: applyPolicies })
+      applyPolicies(policy)
     } catch (error) {
       console.error("Failed to fetch policies:", error)
       setBlockedKeywordsInput("")
@@ -313,10 +361,13 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
-  const loadAboutContent = async () => {
-    setLoadingAboutContent(true)
-    try {
-      const about = await api.getAboutContent()
+  const loadAboutContent = async (force: boolean = false) => {
+    const hasCache = !force && api.hasAdminTabCache("pages")
+    if (!hasCache) {
+      setLoadingAboutContent(true)
+    }
+
+    const applyAbout = (about: AboutContent) => {
       setAboutHeroTitle(about.hero_title)
       setAboutHeroHighlight(about.hero_highlight)
       setAboutHeroDescription(about.hero_description)
@@ -336,6 +387,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           .map((item) => `${item.question}|${item.answer}`)
           .join("\n")
       )
+    }
+
+    try {
+      const about = await api.getAboutContent({ force, onRevalidate: applyAbout })
+      applyAbout(about)
     } catch (error) {
       console.error("Failed to load about content:", error)
       setAboutHeroTitle(ABOUT_CONTENT_FALLBACK.hero_title)
@@ -363,13 +419,50 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   }
 
   useEffect(() => {
-    loadReports()
-    loadActionLogs()
-    loadUsers()
-    loadProjects()
-    loadPolicies()
-    loadAboutContent()
-  }, [])
+    switch (activeTab) {
+      case "reports":
+        loadReports(0)
+        break
+      case "users":
+        loadUsers()
+        break
+      case "content":
+        loadProjects()
+        break
+      case "pages":
+        loadAboutContent()
+        break
+      case "policies":
+        loadPolicies()
+        break
+      case "actions":
+        loadActionLogs()
+        break
+    }
+  }, [activeTab])
+
+  useEffect(() => {
+    if (activeTab === "reports") {
+      loadReports(0)
+    }
+  }, [activeStatus])
+
+  useEffect(() => {
+    const nextTabs: AdminTabKey[] = ["users", "content", "actions", "policies", "pages"]
+    const prefetchTimer = window.setTimeout(() => {
+      nextTabs.forEach((tab) => {
+        if (tab === activeTab || prefetchedTabsRef.current.has(tab)) {
+          return
+        }
+        prefetchedTabsRef.current.add(tab)
+        void api.prefetchAdminTabData(tab)
+      })
+    }, 300)
+
+    return () => {
+      window.clearTimeout(prefetchTimer)
+    }
+  }, [activeTab])
 
   useEffect(() => {
     setSelectedProjectIds((prev) => prev.filter((id) => projects.some((project) => project.id === id)))
@@ -572,7 +665,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       setBlockedKeywordsInput(mergedKeywords.join(", "))
       setSavingPolicies(true)
       await api.updateAdminPolicies(mergedKeywords, autoHideThreshold)
-      await Promise.all([loadPolicies(), loadActionLogs()])
+      await Promise.all([loadPolicies(true), loadActionLogs(true)])
       window.alert(`CSV에서 custom 키워드 ${importedCustomKeywords.size}개를 반영했습니다`)
     } catch (error) {
       console.error("Failed to import policies CSV:", error)
@@ -590,7 +683,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     const reason = window.prompt("처리 사유를 입력하세요 (선택)", "")
     try {
       await api.updateReport(reportId, status, reason || undefined)
-      await Promise.all([loadReports(), loadActionLogs()])
+      await Promise.all([loadReports(reportPage, true), loadActionLogs(true)])
     } catch (error) {
       console.error("Failed to update report:", error)
     }
@@ -609,7 +702,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     const reason = window.prompt("제한 사유를 입력하세요", "운영 정책 위반")
     try {
       await api.limitUser(userId, hours, reason || undefined)
-      await Promise.all([loadUsers(), loadActionLogs()])
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
     } catch (error) {
       console.error("Failed to limit user:", error)
     }
@@ -618,7 +711,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const handleUnlimitUser = async (userId: string) => {
     try {
       await api.unlimitUser(userId)
-      await Promise.all([loadUsers(), loadActionLogs()])
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
     } catch (error) {
       console.error("Failed to unlimit user:", error)
     }
@@ -676,7 +769,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         summary: editingProjectSummary.trim(),
         reason,
       })
-      await Promise.all([loadProjects(), loadActionLogs()])
+      await Promise.all([loadProjects(true), loadActionLogs(true)])
       cancelEditingProject()
     } catch (error) {
       console.error("Failed to update project:", error)
@@ -706,7 +799,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       } else {
         await api.deleteAdminProject(projectId, reason)
       }
-      await Promise.all([loadProjects(), loadActionLogs()])
+      await Promise.all([loadProjects(true), loadActionLogs(true)])
       setSelectedProjectIds((prev) => prev.filter((id) => id !== projectId))
     } catch (error) {
       console.error(`Failed to ${action} project:`, error)
@@ -733,7 +826,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
             : api.restoreAdminProject(projectId, reason)
         )
       )
-      await Promise.all([loadProjects(), loadActionLogs()])
+      await Promise.all([loadProjects(true), loadActionLogs(true)])
       setSelectedProjectIds([])
     } catch (error) {
       console.error(`Failed to bulk-${action} projects:`, error)
@@ -754,7 +847,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     setSavingPolicies(true)
     try {
       await api.updateAdminPolicies(keywords, autoHideThreshold)
-      await Promise.all([loadPolicies(), loadActionLogs()])
+      await Promise.all([loadPolicies(true), loadActionLogs(true)])
       window.alert("정책이 저장되었습니다")
     } catch (error) {
       console.error("Failed to save policies:", error)
@@ -811,7 +904,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         faqs,
         reason,
       })
-      await Promise.all([loadAboutContent(), loadActionLogs()])
+      await Promise.all([loadAboutContent(true), loadActionLogs(true)])
       setAboutReason("")
       window.alert("About 페이지 내용이 저장되었습니다")
     } catch (error) {
@@ -823,14 +916,34 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   }
 
   const handleManualRefresh = async () => {
-    await Promise.all([
-      loadReports(),
-      loadActionLogs(),
-      loadUsers(),
-      loadProjects(),
-      loadPolicies(),
-      loadAboutContent(),
-    ])
+    switch (activeTab) {
+      case "reports":
+        await loadReports(reportPage, true)
+        break
+      case "users":
+        await loadUsers(true)
+        break
+      case "content":
+        await loadProjects(true)
+        break
+      case "pages":
+        await loadAboutContent(true)
+        break
+      case "policies":
+        await loadPolicies(true)
+        break
+      case "actions":
+        await loadActionLogs(true)
+        break
+    }
+  }
+
+  const handleTabHoverPrefetch = (tab: AdminTabKey) => {
+    if (prefetchedTabsRef.current.has(tab)) {
+      return
+    }
+    prefetchedTabsRef.current.add(tab)
+    void api.prefetchAdminTabData(tab)
   }
 
   return (
@@ -864,15 +977,15 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           ))}
         </div>
 
-        <Tabs defaultValue="reports">
+        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AdminTabKey)}>
           <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <TabsList className="bg-[#161F42] border-0">
-              <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
-              <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
-              <TabsTrigger value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
-              <TabsTrigger value="pages" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 페이지 관리</TabsTrigger>
-              <TabsTrigger value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
-              <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
+              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("reports")} value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
+              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("users")} value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
+              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("content")} value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
+              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("pages")} value="pages" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 페이지 관리</TabsTrigger>
+              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("policies")} value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
+              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("actions")} value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
             </TabsList>
             <Button
               type="button"
@@ -988,6 +1101,33 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                     </tbody>
                   </table>
                 )}
+                {!loadingReports && reportTotal > REPORT_PAGE_SIZE ? (
+                  <div className="flex items-center justify-between border-t border-[#111936] p-4">
+                    <p className="text-xs text-[#B8C3E6]">
+                      총 {reportTotal}건 | 페이지 {reportPage + 1} / {Math.max(1, Math.ceil(reportTotal / REPORT_PAGE_SIZE))}
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                        disabled={reportPage === 0}
+                        onClick={() => loadReports(reportPage - 1)}
+                      >
+                        이전
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                        disabled={(reportPage + 1) * REPORT_PAGE_SIZE >= reportTotal}
+                        onClick={() => loadReports(reportPage + 1)}
+                      >
+                        다음
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
               </CardContent>
             </Card>
           </TabsContent>

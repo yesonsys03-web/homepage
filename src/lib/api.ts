@@ -129,6 +129,11 @@ export interface AboutContent {
   updated_at?: string
 }
 
+type AdminReportsResponse = { items: Report[]; total: number }
+type AdminListResponse<T> = { items: T[] }
+type ProjectsResponse = { items: Project[] }
+type CommentsResponse = { items: Comment[] }
+
 async function authFetch(url: string, options: RequestInit = {}) {
   const token = getToken()
   const headers: HeadersInit = {
@@ -147,6 +152,258 @@ async function authFetch(url: string, options: RequestInit = {}) {
   }
   
   return res
+}
+
+type AdminTabCacheEntry<T> = {
+  data?: T
+  fetchedAt: number
+  inflight?: Promise<T>
+  controller?: AbortController
+}
+
+type SWRFetchOptions<T> = {
+  force?: boolean
+  onRevalidate?: (data: T) => void
+}
+
+const ADMIN_TAB_TTL_MS = {
+  reports: 15_000,
+  users: 120_000,
+  content: 120_000,
+  pages: 180_000,
+  policies: 180_000,
+  actions: 20_000,
+} as const
+
+const PUBLIC_TTL_MS = {
+  projects: 45_000,
+  projectDetail: 20_000,
+  comments: 8_000,
+} as const
+
+const adminTabCache = new Map<string, AdminTabCacheEntry<unknown>>()
+const publicDataCache = new Map<string, AdminTabCacheEntry<unknown>>()
+
+function getCacheEntry<T>(key: string): AdminTabCacheEntry<T> | undefined {
+  const entry = adminTabCache.get(key)
+  return entry as AdminTabCacheEntry<T> | undefined
+}
+
+function isCacheFresh(entry: AdminTabCacheEntry<unknown> | undefined, ttlMs: number): boolean {
+  if (!entry || entry.data === undefined) {
+    return false
+  }
+  return Date.now() - entry.fetchedAt <= ttlMs
+}
+
+function upsertCacheEntry<T>(key: string, updater: (prev?: AdminTabCacheEntry<T>) => AdminTabCacheEntry<T>) {
+  const prev = getCacheEntry<T>(key)
+  const next = updater(prev)
+  adminTabCache.set(key, next as AdminTabCacheEntry<unknown>)
+}
+
+async function fetchAndStoreAdminCache<T>(
+  key: string,
+  fetcher: (signal: AbortSignal) => Promise<T>,
+  force: boolean = false,
+): Promise<T> {
+  const previous = getCacheEntry<T>(key)
+  if (force && previous?.controller) {
+    previous.controller.abort()
+  }
+
+  const controller = new AbortController()
+  const inflight = fetcher(controller.signal)
+    .then((data) => {
+      upsertCacheEntry<T>(key, () => ({
+        data,
+        fetchedAt: Date.now(),
+      }))
+      return data
+    })
+    .finally(() => {
+      const latest = getCacheEntry<T>(key)
+      if (latest?.inflight) {
+        upsertCacheEntry<T>(key, (prev) => ({
+          data: prev?.data,
+          fetchedAt: prev?.fetchedAt ?? 0,
+        }))
+      }
+    })
+
+  upsertCacheEntry<T>(key, (prev) => ({
+    data: prev?.data,
+    fetchedAt: prev?.fetchedAt ?? 0,
+    inflight,
+    controller,
+  }))
+
+  return inflight
+}
+
+async function fetchWithAdminSWR<T>(
+  key: string,
+  ttlMs: number,
+  fetcher: (signal: AbortSignal) => Promise<T>,
+  options: SWRFetchOptions<T> = {},
+): Promise<T> {
+  const entry = getCacheEntry<T>(key)
+  const hasCachedData = entry?.data !== undefined
+  const fresh = isCacheFresh(entry, ttlMs)
+
+  if (!options.force && hasCachedData) {
+    if (!fresh) {
+      const latest = getCacheEntry<T>(key)
+      if (!latest?.inflight) {
+        void fetchAndStoreAdminCache(key, fetcher)
+          .then((data) => {
+            options.onRevalidate?.(data)
+          })
+          .catch((error) => {
+            if (error instanceof DOMException && error.name === "AbortError") {
+              return
+            }
+            console.error(`Admin cache revalidate failed: ${key}`, error)
+          })
+      }
+    }
+    return entry.data as T
+  }
+
+  if (!options.force && entry?.inflight) {
+    return entry.inflight
+  }
+
+  return fetchAndStoreAdminCache(key, fetcher, options.force)
+}
+
+function createAdminCacheKey(tab: keyof typeof ADMIN_TAB_TTL_MS, params?: Record<string, string | number | undefined>) {
+  const query = params
+    ? Object.entries(params)
+      .filter(([, value]) => value !== undefined)
+      .map(([k, value]) => `${k}=${String(value)}`)
+      .join("&")
+    : ""
+  return query ? `${tab}?${query}` : tab
+}
+
+function hasAdminCache(key: string): boolean {
+  const entry = getCacheEntry<unknown>(key)
+  return entry?.data !== undefined
+}
+
+function getPublicCacheEntry<T>(key: string): AdminTabCacheEntry<T> | undefined {
+  return publicDataCache.get(key) as AdminTabCacheEntry<T> | undefined
+}
+
+function upsertPublicCacheEntry<T>(key: string, updater: (prev?: AdminTabCacheEntry<T>) => AdminTabCacheEntry<T>) {
+  const prev = getPublicCacheEntry<T>(key)
+  const next = updater(prev)
+  publicDataCache.set(key, next as AdminTabCacheEntry<unknown>)
+}
+
+async function fetchAndStorePublicCache<T>(
+  key: string,
+  fetcher: (signal: AbortSignal) => Promise<T>,
+  force: boolean = false,
+): Promise<T> {
+  const previous = getPublicCacheEntry<T>(key)
+  if (force && previous?.controller) {
+    previous.controller.abort()
+  }
+
+  const controller = new AbortController()
+  const inflight = fetcher(controller.signal)
+    .then((data) => {
+      upsertPublicCacheEntry<T>(key, () => ({
+        data,
+        fetchedAt: Date.now(),
+      }))
+      return data
+    })
+    .finally(() => {
+      const latest = getPublicCacheEntry<T>(key)
+      if (latest?.inflight) {
+        upsertPublicCacheEntry<T>(key, (prev) => ({
+          data: prev?.data,
+          fetchedAt: prev?.fetchedAt ?? 0,
+        }))
+      }
+    })
+
+  upsertPublicCacheEntry<T>(key, (prev) => ({
+    data: prev?.data,
+    fetchedAt: prev?.fetchedAt ?? 0,
+    inflight,
+    controller,
+  }))
+
+  return inflight
+}
+
+async function fetchWithPublicSWR<T>(
+  key: string,
+  ttlMs: number,
+  fetcher: (signal: AbortSignal) => Promise<T>,
+  options: SWRFetchOptions<T> = {},
+): Promise<T> {
+  const entry = getPublicCacheEntry<T>(key)
+  const hasCachedData = entry?.data !== undefined
+  const fresh = isCacheFresh(entry, ttlMs)
+
+  if (!options.force && hasCachedData) {
+    if (!fresh) {
+      const latest = getPublicCacheEntry<T>(key)
+      if (!latest?.inflight) {
+        void fetchAndStorePublicCache(key, fetcher)
+          .then((data) => {
+            options.onRevalidate?.(data)
+          })
+          .catch((error) => {
+            if (error instanceof DOMException && error.name === "AbortError") {
+              return
+            }
+            console.error(`Public cache revalidate failed: ${key}`, error)
+          })
+      }
+    }
+    return entry.data as T
+  }
+
+  if (!options.force && entry?.inflight) {
+    return entry.inflight
+  }
+
+  return fetchAndStorePublicCache(key, fetcher, options.force)
+}
+
+function createPublicCacheKey(kind: keyof typeof PUBLIC_TTL_MS | "projectsList" | "project" | "comments", params?: Record<string, string | number | undefined>) {
+  const query = params
+    ? Object.entries(params)
+      .filter(([, value]) => value !== undefined)
+      .map(([k, value]) => `${k}=${String(value)}`)
+      .join("&")
+    : ""
+  return query ? `${kind}?${query}` : kind
+}
+
+function hasPublicCache(key: string): boolean {
+  const entry = getPublicCacheEntry<unknown>(key)
+  return entry?.data !== undefined
+}
+
+function invalidatePublicCacheByPrefix(prefix: string) {
+  Array.from(publicDataCache.keys()).forEach((key) => {
+    if (key.startsWith(prefix)) {
+      publicDataCache.delete(key)
+    }
+  })
+}
+
+function invalidateProjectRelatedCaches(projectId: string) {
+  invalidatePublicCacheByPrefix("projectsList")
+  invalidatePublicCacheByPrefix(`project?id=${projectId}`)
+  invalidatePublicCacheByPrefix(`comments?projectId=${projectId}`)
 }
 
 // API Functions
@@ -177,27 +434,58 @@ export const api = {
     return res.json() as Promise<User>
   },
 
-  getAboutContent: async () => {
-    const res = await fetch(`${API_BASE}/api/content/about`)
-    if (!res.ok) throw new Error("Failed to load about content")
-    return res.json() as Promise<AboutContent>
+  getAboutContent: async (options?: SWRFetchOptions<AboutContent>) => {
+    const key = createAdminCacheKey("pages")
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.pages,
+      async (signal) => {
+        const res = await fetch(`${API_BASE}/api/content/about`, { signal })
+        if (!res.ok) throw new Error("Failed to load about content")
+        return res.json() as Promise<AboutContent>
+      },
+      options,
+    )
   },
 
   // Projects
-  getProjects: async (params?: { sort?: string; platform?: string; tag?: string }) => {
-    const searchParams = new URLSearchParams()
-    if (params?.sort) searchParams.set("sort", params.sort)
-    if (params?.platform) searchParams.set("platform", params.platform)
-    if (params?.tag) searchParams.set("tag", params.tag)
-    
-    const res = await fetch(`${API_BASE}/api/projects?${searchParams}`)
-    return res.json()
+  getProjects: async (
+    params?: { sort?: string; platform?: string; tag?: string },
+    options?: SWRFetchOptions<ProjectsResponse>,
+  ) => {
+    const key = createPublicCacheKey("projectsList", {
+      sort: params?.sort ?? "latest",
+      platform: params?.platform ?? "all",
+      tag: params?.tag ?? "all",
+    })
+    return fetchWithPublicSWR(
+      key,
+      PUBLIC_TTL_MS.projects,
+      async (signal) => {
+        const searchParams = new URLSearchParams()
+        if (params?.sort) searchParams.set("sort", params.sort)
+        if (params?.platform) searchParams.set("platform", params.platform)
+        if (params?.tag) searchParams.set("tag", params.tag)
+        const res = await fetch(`${API_BASE}/api/projects?${searchParams}`, { signal })
+        if (!res.ok) throw new Error("Failed to fetch projects")
+        return res.json() as Promise<ProjectsResponse>
+      },
+      options,
+    )
   },
 
-  getProject: async (id: string) => {
-    const res = await fetch(`${API_BASE}/api/projects/${id}`)
-    if (!res.ok) throw new Error("Project not found")
-    return res.json() as Promise<Project>
+  getProject: async (id: string, options?: SWRFetchOptions<Project>) => {
+    const key = createPublicCacheKey("project", { id })
+    return fetchWithPublicSWR(
+      key,
+      PUBLIC_TTL_MS.projectDetail,
+      async (signal) => {
+        const res = await fetch(`${API_BASE}/api/projects/${id}`, { signal })
+        if (!res.ok) throw new Error("Project not found")
+        return res.json() as Promise<Project>
+      },
+      options,
+    )
   },
 
   createProject: async (data: Partial<Project>) => {
@@ -206,27 +494,46 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     })
-    return res.json() as Promise<Project>
+    const created = await res.json() as Project
+    invalidateProjectRelatedCaches(created.id)
+    return created
   },
 
   likeProject: async (id: string) => {
     const res = await authFetch(`${API_BASE}/api/projects/${id}/like`, {
       method: "POST",
     })
-    return res.json() as Promise<{ like_count: number }>
+    const result = await res.json() as { like_count: number }
+    invalidateProjectRelatedCaches(id)
+    return result
   },
 
   unlikeProject: async (id: string) => {
     const res = await authFetch(`${API_BASE}/api/projects/${id}/like`, {
       method: "DELETE",
     })
-    return res.json() as Promise<{ like_count: number }>
+    const result = await res.json() as { like_count: number }
+    invalidateProjectRelatedCaches(id)
+    return result
   },
 
   // Comments
-  getComments: async (projectId: string, sort: string = "latest") => {
-    const res = await fetch(`${API_BASE}/api/projects/${projectId}/comments?sort=${sort}`)
-    return res.json()
+  getComments: async (
+    projectId: string,
+    sort: string = "latest",
+    options?: SWRFetchOptions<CommentsResponse>,
+  ) => {
+    const key = createPublicCacheKey("comments", { projectId, sort })
+    return fetchWithPublicSWR(
+      key,
+      PUBLIC_TTL_MS.comments,
+      async (signal) => {
+        const res = await fetch(`${API_BASE}/api/projects/${projectId}/comments?sort=${sort}`, { signal })
+        if (!res.ok) throw new Error("Failed to fetch comments")
+        return res.json() as Promise<CommentsResponse>
+      },
+      options,
+    )
   },
 
   createComment: async (projectId: string, content: string) => {
@@ -235,7 +542,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ content }),
     })
-    return res.json() as Promise<Comment>
+    const created = await res.json() as Comment
+    invalidateProjectRelatedCaches(projectId)
+    return created
+  },
+
+  hasProjectsCache: (params?: { sort?: string; platform?: string; tag?: string }) => {
+    const key = createPublicCacheKey("projectsList", {
+      sort: params?.sort ?? "latest",
+      platform: params?.platform ?? "all",
+      tag: params?.tag ?? "all",
+    })
+    return hasPublicCache(key)
+  },
+
+  hasProjectDetailCache: (projectId: string) => {
+    const key = createPublicCacheKey("project", { id: projectId })
+    return hasPublicCache(key)
+  },
+
+  hasCommentsCache: (projectId: string, sort: string = "latest") => {
+    const key = createPublicCacheKey("comments", { projectId, sort })
+    return hasPublicCache(key)
   },
 
   // Reports
@@ -249,10 +577,26 @@ export const api = {
   },
 
   // Admin
-  getReports: async (status?: string) => {
-    const searchParams = status ? `?status=${status}` : ""
-    const res = await authFetch(`${API_BASE}/api/admin/reports${searchParams}`)
-    return res.json()
+  getReports: async (
+    status?: string,
+    limit: number = 50,
+    offset: number = 0,
+    options?: SWRFetchOptions<AdminReportsResponse>,
+  ) => {
+    const key = createAdminCacheKey("reports", { status: status ?? "all", limit, offset })
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.reports,
+      async (signal) => {
+        const params = new URLSearchParams()
+        if (status) params.set("status", status)
+        params.set("limit", String(limit))
+        params.set("offset", String(offset))
+        const res = await authFetch(`${API_BASE}/api/admin/reports?${params.toString()}`, { signal })
+        return res.json() as Promise<AdminReportsResponse>
+      },
+      options,
+    )
   },
 
   updateReport: async (reportId: string, status: string, reason?: string) => {
@@ -264,22 +608,50 @@ export const api = {
     return res.json() as Promise<Report>
   },
 
-  getAdminActionLogs: async (limit: number = 50) => {
-    const res = await authFetch(`${API_BASE}/api/admin/action-logs?limit=${limit}`)
-    return res.json() as Promise<{ items: AdminActionLog[] }>
+  getAdminActionLogs: async (limit: number = 50, options?: SWRFetchOptions<AdminListResponse<AdminActionLog>>) => {
+    const key = createAdminCacheKey("actions", { limit })
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.actions,
+      async (signal) => {
+        const res = await authFetch(`${API_BASE}/api/admin/action-logs?limit=${limit}`, { signal })
+        return res.json() as Promise<AdminListResponse<AdminActionLog>>
+      },
+      options,
+    )
   },
 
-  getAdminUsers: async (limit: number = 200) => {
-    const res = await authFetch(`${API_BASE}/api/admin/users?limit=${limit}`)
-    return res.json() as Promise<{ items: AdminManagedUser[] }>
+  getAdminUsers: async (limit: number = 200, options?: SWRFetchOptions<AdminListResponse<AdminManagedUser>>) => {
+    const key = createAdminCacheKey("users", { limit })
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.users,
+      async (signal) => {
+        const res = await authFetch(`${API_BASE}/api/admin/users?limit=${limit}`, { signal })
+        return res.json() as Promise<AdminListResponse<AdminManagedUser>>
+      },
+      options,
+    )
   },
 
-  getAdminProjects: async (status?: string, limit: number = 200) => {
-    const params = new URLSearchParams()
-    if (status) params.set("status", status)
-    params.set("limit", String(limit))
-    const res = await authFetch(`${API_BASE}/api/admin/projects?${params.toString()}`)
-    return res.json() as Promise<{ items: AdminManagedProject[] }>
+  getAdminProjects: async (
+    status?: string,
+    limit: number = 200,
+    options?: SWRFetchOptions<AdminListResponse<AdminManagedProject>>,
+  ) => {
+    const key = createAdminCacheKey("content", { status: status ?? "all", limit })
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.content,
+      async (signal) => {
+        const params = new URLSearchParams()
+        if (status) params.set("status", status)
+        params.set("limit", String(limit))
+        const res = await authFetch(`${API_BASE}/api/admin/projects?${params.toString()}`, { signal })
+        return res.json() as Promise<AdminListResponse<AdminManagedProject>>
+      },
+      options,
+    )
   },
 
   updateAdminProject: async (
@@ -337,9 +709,45 @@ export const api = {
     return res.json() as Promise<AdminManagedUser>
   },
 
-  getAdminPolicies: async () => {
-    const res = await authFetch(`${API_BASE}/api/admin/policies`)
-    return res.json() as Promise<ModerationPolicy>
+  getAdminPolicies: async (options?: SWRFetchOptions<ModerationPolicy>) => {
+    const key = createAdminCacheKey("policies")
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.policies,
+      async (signal) => {
+        const res = await authFetch(`${API_BASE}/api/admin/policies`, { signal })
+        return res.json() as Promise<ModerationPolicy>
+      },
+      options,
+    )
+  },
+
+  hasAdminTabCache: (tab: keyof typeof ADMIN_TAB_TTL_MS, params?: Record<string, string | number | undefined>) => {
+    const key = createAdminCacheKey(tab, params)
+    return hasAdminCache(key)
+  },
+
+  prefetchAdminTabData: async (tab: keyof typeof ADMIN_TAB_TTL_MS) => {
+    switch (tab) {
+      case "reports":
+        await api.getReports(undefined, 50, 0)
+        break
+      case "users":
+        await api.getAdminUsers(200)
+        break
+      case "content":
+        await api.getAdminProjects(undefined, 200)
+        break
+      case "pages":
+        await api.getAboutContent()
+        break
+      case "policies":
+        await api.getAdminPolicies()
+        break
+      case "actions":
+        await api.getAdminActionLogs(100)
+        break
+    }
   },
 
   updateAdminPolicies: async (blocked_keywords: string[], auto_hide_report_threshold: number) => {
