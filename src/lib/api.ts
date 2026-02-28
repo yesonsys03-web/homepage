@@ -101,6 +101,34 @@ export interface ModerationPolicy {
   last_updated_action_at?: string | null
 }
 
+export interface AboutValueItem {
+  emoji: string
+  title: string
+  description: string
+}
+
+export interface AboutTeamMember {
+  name: string
+  role: string
+  description: string
+}
+
+export interface AboutFaqItem {
+  question: string
+  answer: string
+}
+
+export interface AboutContent {
+  hero_title: string
+  hero_highlight: string
+  hero_description: string
+  contact_email: string
+  values: AboutValueItem[]
+  team_members: AboutTeamMember[]
+  faqs: AboutFaqItem[]
+  updated_at?: string
+}
+
 async function authFetch(url: string, options: RequestInit = {}) {
   const token = getToken()
   const headers: HeadersInit = {
@@ -147,6 +175,12 @@ export const api = {
   getMe: async () => {
     const res = await authFetch(`${API_BASE}/api/me`)
     return res.json() as Promise<User>
+  },
+
+  getAboutContent: async () => {
+    const res = await fetch(`${API_BASE}/api/content/about`)
+    if (!res.ok) throw new Error("Failed to load about content")
+    return res.json() as Promise<AboutContent>
   },
 
   // Projects
@@ -315,6 +349,15 @@ export const api = {
       body: JSON.stringify({ blocked_keywords, auto_hide_report_threshold }),
     })
     return res.json() as Promise<ModerationPolicy>
+  },
+
+  updateAboutContent: async (payload: AboutContent & { reason: string }) => {
+    const res = await authFetch(`${API_BASE}/api/admin/content/about`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    return res.json() as Promise<AboutContent>
   },
 
   // My Projects

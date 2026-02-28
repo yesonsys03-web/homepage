@@ -9,6 +9,7 @@ import {
   type AdminActionLog,
   type AdminManagedProject,
   type AdminManagedUser,
+  type AboutContent,
 } from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
 
@@ -29,6 +30,50 @@ type ProjectStatus = "all" | "published" | "hidden" | "deleted"
 type ActionLogFilter = "all" | "project" | "report" | "user" | "moderation_settings"
 
 const ADMIN_DASHBOARD_POLLING_MS = 30000
+
+const ABOUT_CONTENT_FALLBACK: AboutContent = {
+  hero_title: "완성도보다 바이브.",
+  hero_highlight: "실험도 작품이다.",
+  hero_description:
+    "VibeCoder는 개발자들이 자유롭게 실험하고, 공유하고, 피드백을 받는 공간입니다. 완벽한 코드보다 재미있는 시도가 더 가치 있다고 믿습니다.",
+  contact_email: "hello@vibecoder.dev",
+  values: [
+    { emoji: "🎨", title: "창작의 자유", description: "당신만의 독특한 바이브를 보여주세요." },
+    { emoji: "🤝", title: "피드백 문화", description: "건전한 피드백 문화로 함께 성장합니다." },
+    { emoji: "🚀", title: "실험정신", description: "실패를 두려워하지 않고 실험하세요." },
+  ],
+  team_members: [
+    { name: "devkim", role: "Founder & Lead Dev", description: "AI와 웹 개발을 좋아합니다" },
+    { name: "codemaster", role: "Backend Engineer", description: "Rust와 Python을 좋아합니다" },
+    { name: "designer_y", role: "UI/UX Designer", description: "사용자 경험을 중요시합니다" },
+  ],
+  faqs: [
+    {
+      question: "VibeCoder는 무엇인가요?",
+      answer: "개발자 커뮤니티 기반 프로젝트 공유 플랫폼입니다.",
+    },
+    {
+      question: "프로젝트는 어떻게 올리나요?",
+      answer: "로그인 후 작품 올리기 버튼에서 등록할 수 있습니다.",
+    },
+  ],
+}
+
+function linesToTriples(input: string): Array<{ a: string; b: string; c: string }> {
+  return input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [a = "", b = "", ...rest] = line.split("|")
+      return {
+        a: a.trim(),
+        b: b.trim(),
+        c: rest.join("|").trim(),
+      }
+    })
+    .filter((item) => item.a && item.b && item.c)
+}
 
 function parseCsvLine(line: string): string[] {
   const values: string[] = []
@@ -103,6 +148,7 @@ function actionToText(actionType: string): string {
   if (actionType === "project_restored") return "프로젝트 복구"
   if (actionType === "project_deleted") return "프로젝트 삭제"
   if (actionType === "policy_updated") return "정책 수정"
+  if (actionType === "about_content_updated") return "About 페이지 수정"
   return actionType
 }
 
@@ -158,6 +204,16 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [editingProjectSummary, setEditingProjectSummary] = useState("")
   const [editingProjectReason, setEditingProjectReason] = useState("")
   const [actionLogFilter, setActionLogFilter] = useState<ActionLogFilter>("all")
+  const [loadingAboutContent, setLoadingAboutContent] = useState(true)
+  const [savingAboutContent, setSavingAboutContent] = useState(false)
+  const [aboutReason, setAboutReason] = useState("")
+  const [aboutHeroTitle, setAboutHeroTitle] = useState(ABOUT_CONTENT_FALLBACK.hero_title)
+  const [aboutHeroHighlight, setAboutHeroHighlight] = useState(ABOUT_CONTENT_FALLBACK.hero_highlight)
+  const [aboutHeroDescription, setAboutHeroDescription] = useState(ABOUT_CONTENT_FALLBACK.hero_description)
+  const [aboutContactEmail, setAboutContactEmail] = useState(ABOUT_CONTENT_FALLBACK.contact_email)
+  const [aboutValuesInput, setAboutValuesInput] = useState("")
+  const [aboutTeamInput, setAboutTeamInput] = useState("")
+  const [aboutFaqInput, setAboutFaqInput] = useState("")
 
   const loadReports = async () => {
     setLoadingReports(true)
@@ -259,12 +315,62 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const loadAboutContent = async () => {
+    setLoadingAboutContent(true)
+    try {
+      const about = await api.getAboutContent()
+      setAboutHeroTitle(about.hero_title)
+      setAboutHeroHighlight(about.hero_highlight)
+      setAboutHeroDescription(about.hero_description)
+      setAboutContactEmail(about.contact_email)
+      setAboutValuesInput(
+        (about.values || [])
+          .map((item) => `${item.emoji}|${item.title}|${item.description}`)
+          .join("\n")
+      )
+      setAboutTeamInput(
+        (about.team_members || [])
+          .map((item) => `${item.name}|${item.role}|${item.description}`)
+          .join("\n")
+      )
+      setAboutFaqInput(
+        (about.faqs || [])
+          .map((item) => `${item.question}|${item.answer}`)
+          .join("\n")
+      )
+    } catch (error) {
+      console.error("Failed to load about content:", error)
+      setAboutHeroTitle(ABOUT_CONTENT_FALLBACK.hero_title)
+      setAboutHeroHighlight(ABOUT_CONTENT_FALLBACK.hero_highlight)
+      setAboutHeroDescription(ABOUT_CONTENT_FALLBACK.hero_description)
+      setAboutContactEmail(ABOUT_CONTENT_FALLBACK.contact_email)
+      setAboutValuesInput(
+        ABOUT_CONTENT_FALLBACK.values
+          .map((item) => `${item.emoji}|${item.title}|${item.description}`)
+          .join("\n")
+      )
+      setAboutTeamInput(
+        ABOUT_CONTENT_FALLBACK.team_members
+          .map((item) => `${item.name}|${item.role}|${item.description}`)
+          .join("\n")
+      )
+      setAboutFaqInput(
+        ABOUT_CONTENT_FALLBACK.faqs
+          .map((item) => `${item.question}|${item.answer}`)
+          .join("\n")
+      )
+    } finally {
+      setLoadingAboutContent(false)
+    }
+  }
+
   useEffect(() => {
     loadReports()
     loadActionLogs()
     loadUsers()
     loadProjects()
     loadPolicies()
+    loadAboutContent()
   }, [])
 
   useEffect(() => {
@@ -677,6 +783,64 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const handleSaveAboutContent = async () => {
+    const reason = aboutReason.trim()
+    if (!reason) {
+      window.alert("소개 페이지 수정 사유를 입력해주세요")
+      return
+    }
+
+    const values = linesToTriples(aboutValuesInput).map((item) => ({
+      emoji: item.a,
+      title: item.b,
+      description: item.c,
+    }))
+    const teamMembers = linesToTriples(aboutTeamInput).map((item) => ({
+      name: item.a,
+      role: item.b,
+      description: item.c,
+    }))
+    const faqs = aboutFaqInput
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [question = "", ...rest] = line.split("|")
+        return {
+          question: question.trim(),
+          answer: rest.join("|").trim(),
+        }
+      })
+      .filter((item) => item.question && item.answer)
+
+    if (values.length === 0 || teamMembers.length === 0 || faqs.length === 0) {
+      window.alert("Values/Team/FAQ는 각 줄을 `|` 구분자로 입력해야 합니다")
+      return
+    }
+
+    setSavingAboutContent(true)
+    try {
+      await api.updateAboutContent({
+        hero_title: aboutHeroTitle.trim(),
+        hero_highlight: aboutHeroHighlight.trim(),
+        hero_description: aboutHeroDescription.trim(),
+        contact_email: aboutContactEmail.trim(),
+        values,
+        team_members: teamMembers,
+        faqs,
+        reason,
+      })
+      await Promise.all([loadAboutContent(), loadActionLogs()])
+      setAboutReason("")
+      window.alert("About 페이지 내용이 저장되었습니다")
+    } catch (error) {
+      console.error("Failed to save about content:", error)
+      window.alert("About 페이지 저장에 실패했습니다")
+    } finally {
+      setSavingAboutContent(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
@@ -713,6 +877,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
             <TabsTrigger value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
             <TabsTrigger value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
             <TabsTrigger value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
+            <TabsTrigger value="pages" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 페이지 관리</TabsTrigger>
             <TabsTrigger value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
             <TabsTrigger value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
           </TabsList>
@@ -1073,6 +1238,98 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                       ))}
                     </tbody>
                   </table>
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="pages">
+            <Card className="bg-[#161F42] border-0">
+              <CardContent className="p-6 space-y-4">
+                {loadingAboutContent ? (
+                  <div className="text-[#B8C3E6]">About 콘텐츠 로딩 중...</div>
+                ) : (
+                  <>
+                    <div>
+                      <h3 className="text-[#F4F7FF] font-semibold mb-2">About Hero</h3>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <input
+                          value={aboutHeroTitle}
+                          onChange={(event) => setAboutHeroTitle(event.target.value)}
+                          placeholder="Hero title"
+                          className="bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                        />
+                        <input
+                          value={aboutHeroHighlight}
+                          onChange={(event) => setAboutHeroHighlight(event.target.value)}
+                          placeholder="Hero highlight"
+                          className="bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                        />
+                      </div>
+                      <textarea
+                        value={aboutHeroDescription}
+                        onChange={(event) => setAboutHeroDescription(event.target.value)}
+                        rows={3}
+                        placeholder="Hero description"
+                        className="mt-3 w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                      <input
+                        value={aboutContactEmail}
+                        onChange={(event) => setAboutContactEmail(event.target.value)}
+                        placeholder="Contact email"
+                        className="mt-3 w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                    </div>
+
+                    <div>
+                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Values (emoji|title|description)</h3>
+                      <textarea
+                        value={aboutValuesInput}
+                        onChange={(event) => setAboutValuesInput(event.target.value)}
+                        rows={4}
+                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                    </div>
+
+                    <div>
+                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Team (name|role|description)</h3>
+                      <textarea
+                        value={aboutTeamInput}
+                        onChange={(event) => setAboutTeamInput(event.target.value)}
+                        rows={4}
+                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                    </div>
+
+                    <div>
+                      <h3 className="text-[#F4F7FF] font-semibold mb-2">FAQ (question|answer)</h3>
+                      <textarea
+                        value={aboutFaqInput}
+                        onChange={(event) => setAboutFaqInput(event.target.value)}
+                        rows={5}
+                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                    </div>
+
+                    <div>
+                      <input
+                        value={aboutReason}
+                        onChange={(event) => setAboutReason(event.target.value)}
+                        placeholder="수정 사유 (필수)"
+                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                    </div>
+
+                    <div>
+                      <Button
+                        onClick={handleSaveAboutContent}
+                        disabled={savingAboutContent}
+                        className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white"
+                      >
+                        {savingAboutContent ? "저장 중..." : "About 페이지 저장"}
+                      </Button>
+                    </div>
+                  </>
                 )}
               </CardContent>
             </Card>
