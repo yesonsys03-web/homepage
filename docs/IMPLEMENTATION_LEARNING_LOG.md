@@ -1079,3 +1079,110 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. About 편집 폼을 블록 단위(Values/Team/FAQ) 카드 에디터로 고도화
 2. 저장 전 미리보기 패널 추가
 3. About 변경 이력 전용 로그 필터/롤백 기능 검토
+
+## Session 2026-02-28-09
+
+### 1) Goal
+- 관리자 페이지 초기 체감 속도를 개선하기 위해 신고 큐 페이지네이션(50개)과 탭 기반 Lazy Loading을 적용한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈: 관리자 페이지 진입 시 신고 큐가 늦게 표시됨
+- 제약 조건: 기존 관리자 기능(신고 처리/사용자 관리/콘텐츠 관리) 동작은 유지해야 함
+
+### 3) Design Decisions
+- 신고 API는 `status + limit + offset` 기반 페이지네이션을 지원하고, 별도 `total` 값을 함께 반환한다.
+- 관리자 화면은 활성 탭 데이터만 요청하는 Lazy Loading으로 변경해 초기 과호출을 제거한다.
+- 신고 탭은 50개 단위 페이지 이동 UI를 제공하고 현재 페이지를 유지한 채 재조회 가능하게 한다.
+
+### 4) Implementation Notes
+- 백엔드(FastAPI)
+  - `server/db.py`
+    - `get_reports(status, limit, offset)`로 확장
+    - `get_reports_count(status)` 추가
+  - `server/main.py`
+    - `GET /api/admin/reports`에 `limit`, `offset` 파라미터 추가
+    - 응답을 `{ items, total }` 형태로 확장
+- 프론트
+  - `src/lib/api.ts`
+    - `api.getReports(status?, limit=50, offset=0)`로 확장
+  - `src/components/screens/AdminScreen.tsx`
+    - 신고 탭 상태 추가: `reportPage`, `reportTotal`, `REPORT_PAGE_SIZE`
+    - 탭 상태 추가: `activeTab`
+    - 초기 전체 동시 로드 제거, 탭별 데이터 로드로 전환(Lazy Loading)
+    - 신고 탭 하단에 이전/다음 페이지네이션 UI 추가
+    - 수동 새로고침을 활성 탭 기준으로 동작하도록 조정
+
+### 5) Validation
+- `uv run python -m py_compile server/db.py server/main.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` (workdir=`server`) -> 통과
+- `pnpm build` (`tsc -b && vite build`) -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 관리자 첫 진입 시 불필요한 API 동시 호출을 줄여 초기 체감 속도가 개선됐다.
+- 신고 목록 렌더링 비용을 고정(페이지 50개)해 데이터 증가 시에도 UI 안정성이 좋아졌다.
+
+#### 아쉬운 점
+- 현재는 단순 이전/다음 방식이라 임의 페이지 점프 UX는 아직 없다.
+
+#### 다음 액션
+1. 신고 탭 페이지 번호 직접 이동/페이지 크기 선택 옵션 검토
+2. 탭별 캐시 TTL(예: 30초) 적용으로 재진입 체감 속도 추가 개선
+
+## Session 2026-02-28-10
+
+### 1) Goal
+- 커뮤니티 핵심 UX(탐색/상세/댓글/좋아요)의 반응성을 높이기 위해 공개 영역에도 캐시 정책(TTL + SWR + 무효화)을 도입한다.
+
+### 2) Inputs
+- 사용자 요청: "즐겁게 노는" 컨셉에 맞게 체감 즉시성을 높이고, 변경 후 일관성도 유지할 것
+- 기존 상태: 공개 영역은 `fetch` 직접 호출 구조로 매 요청마다 네트워크 대기 발생
+
+### 3) Design Decisions
+- 공개 영역 캐시 정책은 `cache-first + stale-while-revalidate`로 채택한다.
+- TTL은 데이터 성격별 차등 적용:
+  - 프로젝트 목록: 45초
+  - 프로젝트 상세: 20초
+  - 댓글: 8초
+- 상호작용(좋아요/좋아요 취소/댓글 작성/프로젝트 생성) 후에는 관련 캐시를 명시적으로 무효화한다.
+
+### 4) Implementation Notes
+- `src/lib/api.ts`
+  - 공개 영역 캐시 저장소와 SWR 헬퍼 추가:
+    - `publicDataCache`
+    - `fetchWithPublicSWR`
+    - `createPublicCacheKey`
+  - 공개 API에 SWR 옵션 적용:
+    - `getProjects(params, options?)`
+    - `getProject(id, options?)`
+    - `getComments(projectId, sort, options?)`
+  - 무효화 규칙 구현:
+    - `invalidateProjectRelatedCaches(projectId)`
+    - 트리거: `createProject`, `likeProject`, `unlikeProject`, `createComment`
+  - 화면 로딩 최적화를 위한 캐시 조회 유틸 추가:
+    - `hasProjectsCache`, `hasProjectDetailCache`, `hasCommentsCache`
+- `src/components/screens/HomeScreen.tsx`
+  - 목록 로드 시 캐시 존재 여부를 먼저 확인하고, 캐시가 없을 때만 블로킹 로딩 표시
+  - `onRevalidate`를 통해 백그라운드 최신화 결과를 UI에 반영
+- `src/components/screens/ExploreScreen.tsx`
+  - Home과 동일한 캐시 우선 + 비차단 재검증 패턴 적용
+- `src/components/screens/ProjectDetailScreen.tsx`
+  - 상세/댓글을 병렬로 로드하고 캐시가 있을 경우 즉시 렌더
+  - 댓글 작성 후에는 `getComments(..., { force: true })`로 최신 댓글 강제 동기화
+
+### 5) Validation
+- `pnpm build` (`tsc -b && vite build`) -> 통과
+- `uv run python -m py_compile server/db.py server/main.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` (workdir=`server`) -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 홈/탐색/상세에서 재방문 시 즉시 렌더되는 구간이 늘어 체감 반응성이 좋아졌다.
+- 사용자 상호작용 직후 캐시 무효화로 데이터 일관성을 유지할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재는 메모리 캐시 기반이라 탭/세션 경계 정책(예: 로그아웃 시 클리어)을 추가로 명확히 다듬을 여지가 있다.
+
+#### 다음 액션
+1. cache hit/miss 및 revalidate 성공률 로그를 추가해 TTL 튜닝 근거 확보
+2. 프로젝트 카드 좋아요 수에 낙관적 업데이트(optimistic update) 적용 검토
