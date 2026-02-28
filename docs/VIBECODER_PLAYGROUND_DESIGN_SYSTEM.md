@@ -158,6 +158,18 @@ UX 세부:
 - 카드와 댓글 리스트는 스켈레톤 로딩 상태를 기본 제공
 - 모바일 1열, 태블릿 2열, 데스크톱 3-4열 그리드
 
+### 6.1 No-Thumbnail 아트디렉션 규칙
+- 썸네일이 없을 때는 빈 박스 대신 `ProjectCoverPlaceholder`를 사용한다.
+- 스티커는 랜덤이 아니라 상태 기반으로 붙인다:
+  - `HOT`: 좋아요 30개 이상 또는 hot/trending 태그
+  - `NEW`: 최근 7일 이내 생성 또는 new/launch 태그
+  - `WIP`: wip/beta/prototype/hackathon/study 태그
+  - `AI LAB`/`PLAY`/`BUILD`: 플랫폼과 태그 분류로 결정
+- 문구는 국제화 기준을 따른다:
+  - 한국어 브라우저: `인기/신규/AI 실험실/플레이/빌드/제작중`
+  - 그 외: `HOT/NEW/AI LAB/PLAY/BUILD/WIP`
+- 동일 프로젝트는 동일 분위기를 유지하도록 규칙 기반 테마를 사용한다.
+
 ## 7) 상호작용/모션 규칙
 - 페이지 진입: 240-320ms, ease-out
 - 카드 스태거: 30-50ms 간격

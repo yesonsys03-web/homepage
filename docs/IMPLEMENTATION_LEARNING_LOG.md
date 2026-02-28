@@ -850,3 +850,116 @@ curl -X POST http://localhost:8000/api/auth/login \
 - **Repo**: https://github.com/yesonsys03-web/homepage.git
 - **커밋**: fd14f20b - `feat(auth): 프론트엔드 인증 화면 구현`
 - **Branch**: main
+
+## Session 2026-02-28-05
+
+### 1) Goal
+- `docs/remaining-features.md` 기준으로 남은 핵심 기능을 실제 코드에 반영하고, 검증까지 완료한다.
+- 초보자도 다시 따라할 수 있도록 작업 과정을 학습용 로그로 남긴다.
+
+### 2) Inputs
+- 참고 문서: `docs/remaining-features.md`, `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 사용자 피드백/이슈: "계획 말고 실제 진행", "완료 후 md로 정리"
+- 제약 조건:
+  - 기존 디자인/코드 스타일 유지
+  - 리팩터링은 동작을 바꾸지 않는 범위에서 최소 수정
+
+### 3) Design Decisions
+- 상세 페이지 프로젝트 ID를 하드코딩(`"1"`)에서 앱 상태 기반 전달 방식으로 변경했다.
+- Explore/Profile/Admin의 목데이터를 API 호출 기반으로 전환해 실제 데이터 흐름을 통일했다.
+- 관리자 API는 프론트/백엔드 계약을 동일한 형태(JSON body의 `status`)로 맞췄다.
+- `react-refresh/only-export-components` lint 규칙을 만족하기 위해 비컴포넌트 export를 분리했다.
+
+### 4) Implementation Notes
+- 백엔드 (`server/main.py`, `server/db.py`)
+  - `GET /api/me/projects`를 실제 DB 조회로 구현 (`get_user_projects` 추가)
+  - `PATCH /api/admin/reports/{report_id}`를 `{"status":"..."}` 요청 본문으로 처리
+  - 관리자 라우트에 권한 가드(`require_admin`) 적용
+  - 생성/수정 API에 `None` 방어 로직을 추가해 런타임 오류 가능성 축소
+- 프론트 (`src/App.tsx`, `HomeScreen.tsx`, `ProjectDetailScreen.tsx`)
+  - `selectedProjectId` 상태를 추가하고 카드 클릭 시 상세로 ID 전달
+  - 상세 화면의 프로젝트/좋아요/댓글 API 호출이 선택된 ID를 사용하도록 수정
+- 프론트 데이터 연동 (`ExploreScreen.tsx`, `ProfileScreen.tsx`, `AdminScreen.tsx`)
+  - Explore: 정렬/카테고리 기반 API 조회로 전환
+  - Profile: 내 프로젝트 API 연동 및 사용자 정보 표시를 인증 상태와 연결
+  - Admin: 신고 목록 조회/상태 변경 API 연동
+- 인증/구조 정리 (`src/lib/*`)
+  - 세션 복원 시 `api.getMe()`로 토큰 유효성 재검증
+  - lint 이슈 해결을 위해 auth 모듈을 분리:
+    - `auth-types.ts` (타입)
+    - `auth-store.ts` (context 저장소)
+    - `use-auth.ts` (커스텀 훅)
+  - UI 컴포넌트 파일의 비컴포넌트 export 제거:
+    - `button.tsx`, `badge.tsx`, `tabs.tsx`
+
+### 5) Validation
+- 프론트 lint:
+  - `pnpm lint` -> 통과
+- 프론트 build:
+  - `pnpm build` -> 통과 (`tsc -b && vite build` 성공)
+- 백엔드 문법/import:
+  - `uv run python -m py_compile main.py db.py auth.py` -> 통과
+  - `uv run python -c "import main; print('backend import ok')"` -> 통과
+- 참고:
+  - 이 세션 환경에서는 LSP 서버(`typescript-language-server`, `basedpyright-langserver`)가 미설치라 LSP 진단 대신 실제 빌드/컴파일 검증을 사용했다.
+
+### 6) Outcome
+#### 잘된 점
+- 남은 핵심 기능을 목데이터 중심 구조에서 실데이터 중심 구조로 전환했다.
+- 프론트-백엔드 API 계약 불일치 포인트를 정리해 연동 안정성을 높였다.
+- lint/build/backend import 검증까지 완료해 "실행 가능한 상태"를 확인했다.
+
+#### 아쉬운 점
+- 브라우저 E2E(클릭 흐름) 자동 테스트는 아직 없다.
+- LSP 기반 실시간 정적 분석 환경은 아직 미설치다.
+
+#### 다음 액션 (초보자용)
+1. 일반 유저/관리자 계정으로 실제 화면 흐름을 손으로 한번 점검한다.
+2. `remaining-features.md`에서 남은 항목을 P2 중심으로 재정렬한다.
+3. 필요하면 Playwright로 핵심 시나리오(홈->상세, 관리자 신고 처리) 자동화 테스트를 추가한다.
+
+## Session 2026-02-28-06
+
+### 1) Goal
+- no-thumbnail 카드의 스티커를 랜덤 스타일에서 "의미 기반 아트디렉션"으로 고도화한다.
+- 초보자도 이해하기 쉽게 규칙(임계값/태그/언어)을 문서화한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`, `src/components/ProjectCoverPlaceholder.tsx`
+- 사용자 피드백/이슈: "스티커를 랜덤이 아니라 상태 기반으로 더 고급화"
+- 제약 조건: 기존 시각 톤은 유지하고, 규칙만 명확히 개선
+
+### 3) Design Decisions
+- `HOT` 임계값을 대규모 서비스 기준(100+)에서 초기 커뮤니티 기준(30+)으로 낮췄다.
+- 태그 사전에 `prototype`, `hackathon`, `study`, `automation`, `featured` 등을 추가해 분류 품질을 높였다.
+- 스티커 문구를 브라우저 언어에 따라 KO/EN 자동 전환하도록 결정했다.
+
+### 4) Implementation Notes
+- `src/components/ProjectCoverPlaceholder.tsx`
+  - `HOT_STICKER_THRESHOLD = 30` 상수 추가
+  - `TAG_KEYWORDS` 확장(Hot/New/WIP/Tool/Game)
+  - 상태 결정 로직(`resolveMood`)을 임계값 + 태그 기반으로 튜닝
+  - 스티커 국제화 함수 추가(`detectLocale`, `localizeStickerLabel`)
+- `src/components/screens/HomeScreen.tsx`
+  - `HOT_PROJECT_THRESHOLD = 30`으로 `isHot` 계산 동기화
+- `src/components/screens/ExploreScreen.tsx`
+  - `isHot` 전달 기준을 30으로 동기화
+- `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`
+  - "No-Thumbnail 아트디렉션 규칙" 섹션 추가
+
+### 5) Validation
+- `pnpm lint` -> 통과
+- `pnpm build` -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 같은 카드 fallback이라도 프로젝트 상태를 더 정확하게 보여주게 됐다.
+- 작은 커뮤니티 규모에서도 `HOT`가 실제로 드러나는 균형점을 만들었다.
+- 규칙을 문서화해서 이후 작업자가 같은 방향으로 유지보수할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재 분류는 키워드 기반이라 프로젝트 맥락을 100% 이해하진 못한다.
+
+#### 다음 액션
+1. 실사용 데이터 1~2주 관찰 후 `HOT` 임계값(30) 재조정
+2. 태그 입력 UI에서 추천 태그를 제공해 분류 품질 향상
