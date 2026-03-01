@@ -55,6 +55,7 @@ def init_db():
                     bio TEXT,
                     avatar_url VARCHAR(500),
                     role VARCHAR(20) DEFAULT 'user',
+                    status VARCHAR(20) DEFAULT 'active',
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
@@ -154,6 +155,12 @@ def init_db():
             """)
             cur.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS limited_reason TEXT
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'
+            """)
+            cur.execute("""
+                UPDATE users SET status = 'active' WHERE status IS NULL
             """)
             cur.execute(
                 """
@@ -455,7 +462,7 @@ def get_comments(project_id: str, sort: str = "latest"):
 def create_comment(
     project_id: str,
     content: str,
-    author_id: str = "11111111-1111-1111-1111-111111111111",
+    author_id: str,
 ):
     """댓글 생성"""
     with get_db_connection() as conn:
@@ -619,7 +626,7 @@ def get_admin_users(limit: int = 200):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, created_at, limited_until, limited_reason
+                SELECT id, email, nickname, role, status, created_at, limited_until, limited_reason
                 FROM users
                 ORDER BY created_at DESC
                 LIMIT %s
@@ -638,7 +645,7 @@ def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
                 SET limited_until = NOW() + (%s || ' hours')::INTERVAL,
                     limited_reason = %s
                 WHERE id = %s AND role != 'admin'
-                RETURNING id, email, nickname, role, created_at, limited_until, limited_reason
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
                 """,
                 (hours, reason, user_id),
             )
@@ -655,7 +662,39 @@ def unlimit_user(user_id: str):
                 SET limited_until = NULL,
                     limited_reason = NULL
                 WHERE id = %s AND role != 'admin'
-                RETURNING id, email, nickname, role, created_at, limited_until, limited_reason
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
+                """,
+                (user_id,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def approve_user(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'active', updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
+                """,
+                (user_id,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def reject_user(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'rejected', updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
                 """,
                 (user_id,),
             )
@@ -730,17 +769,17 @@ def upsert_site_content(content_key: str, content_json: dict):
             return cur.fetchone()
 
 
-def create_user(email: str, nickname: str, password_hash: str):
+def create_user(email: str, nickname: str, password_hash: str, status: str = "pending"):
     """사용자 생성 (회원가입)"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                INSERT INTO users (email, nickname, password_hash)
-                VALUES (%s, %s, %s)
-                RETURNING id, email, nickname, role, avatar_url, bio, created_at
+                INSERT INTO users (email, nickname, password_hash, status)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id, email, nickname, role, status, avatar_url, bio, created_at
             """,
-                (email, nickname, password_hash),
+                (email, nickname, password_hash, status),
             )
             conn.commit()
             return cur.fetchone()
@@ -752,7 +791,7 @@ def get_user_by_email(email: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, password_hash, role, avatar_url, bio, created_at
+                SELECT id, email, nickname, password_hash, role, status, avatar_url, bio, created_at
                 FROM users WHERE email = %s
             """,
                 (email,),
@@ -766,7 +805,7 @@ def get_user_by_nickname(nickname: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, avatar_url, bio, created_at
                 FROM users WHERE nickname = %s
             """,
                 (nickname,),
@@ -780,7 +819,7 @@ def get_user_by_id(user_id: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, avatar_url, bio, created_at
                 FROM users WHERE id = %s
             """,
                 (user_id,),
@@ -807,7 +846,7 @@ def update_user_profile(user_id: str, updates: dict):
                 UPDATE users
                 SET {", ".join(fields_to_update)}, updated_at = NOW()
                 WHERE id = %s
-                RETURNING id, email, nickname, role, avatar_url, bio, created_at
+                RETURNING id, email, nickname, role, status, avatar_url, bio, created_at
             """
             params.append(user_id)
             cur.execute(query, params)

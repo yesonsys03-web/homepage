@@ -40,6 +40,8 @@ from db import (
     get_admin_users,
     limit_user,
     unlimit_user,
+    approve_user,
+    reject_user,
     get_moderation_settings,
     update_moderation_settings,
     get_site_content,
@@ -648,24 +650,6 @@ def list_comments(project_id: str, sort: str = "latest"):
     return {"items": comments}
 
 
-@app.post("/api/projects/{project_id}/comments")
-def create_comment_endpoint(project_id: str, comment: CommentCreate):
-    """댓글 작성"""
-    settings = get_effective_moderation_settings()
-    if text_contains_blocked_keyword(comment.content, settings["blocked_keywords"]):
-        raise HTTPException(
-            status_code=400, detail="금칙어가 포함된 댓글은 작성할 수 없습니다"
-        )
-
-    new_comment = create_comment(project_id, comment.content)
-    if not new_comment:
-        raise HTTPException(status_code=500, detail="댓글 작성에 실패했습니다")
-    new_comment["id"] = str(new_comment["id"])
-    new_comment["project_id"] = str(new_comment["project_id"])
-    new_comment["author_id"] = str(new_comment["author_id"])
-    return new_comment
-
-
 # ============ Reports API ============
 
 
@@ -699,11 +683,16 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
+    user_status = user.get("status") or "active"
+    if user_status != "active":
+        raise HTTPException(status_code=403, detail="활성화되지 않은 계정입니다")
+
     return {
         "id": str(user["id"]),
         "email": user["email"],
         "nickname": user["nickname"],
         "role": user["role"],
+        "status": user_status,
         "avatar_url": user.get("avatar_url"),
         "bio": user.get("bio"),
     }
@@ -977,6 +966,50 @@ def unlimit_user_endpoint(
     return released_user
 
 
+@app.post("/api/admin/users/{user_id}/approve")
+def approve_user_endpoint(
+    user_id: str,
+    current_user: dict = Depends(require_admin),
+):
+    approved_user = approve_user(user_id=user_id)
+    if not approved_user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_approved",
+        target_type="user",
+        target_id=user_id,
+        reason="가입 승인",
+    )
+
+    approved_user["id"] = str(approved_user["id"])
+    return approved_user
+
+
+@app.post("/api/admin/users/{user_id}/reject")
+def reject_user_endpoint(
+    user_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: dict = Depends(require_admin),
+):
+    reason = require_action_reason(payload.reason)
+    rejected_user = reject_user(user_id=user_id)
+    if not rejected_user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_rejected",
+        target_type="user",
+        target_id=user_id,
+        reason=reason,
+    )
+
+    rejected_user["id"] = str(rejected_user["id"])
+    return rejected_user
+
+
 @app.get("/api/admin/policies")
 def get_admin_policies(current_user: dict = Depends(require_admin)):
     _ = current_user
@@ -1075,7 +1108,7 @@ def register(request: RegisterRequest):
 
     # 사용자 생성
     password_hash = get_password_hash(request.password)
-    user = create_user(request.email, request.nickname, password_hash)
+    user = create_user(request.email, request.nickname, password_hash, status="pending")
     if not user:
         raise HTTPException(status_code=500, detail="회원가입 처리에 실패했습니다")
 
@@ -1091,6 +1124,7 @@ def register(request: RegisterRequest):
             "email": user["email"],
             "nickname": user["nickname"],
             "role": user["role"],
+            "status": user.get("status", "pending"),
             "avatar_url": user.get("avatar_url"),
             "bio": user.get("bio"),
         },
@@ -1112,6 +1146,18 @@ def login(request: LoginRequest):
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
         )
 
+    user_status = user.get("status") or "active"
+    if user_status == "pending":
+        raise HTTPException(
+            status_code=403,
+            detail="가입 승인이 대기 중입니다. 관리자 승인 후 로그인할 수 있습니다",
+        )
+    if user_status == "rejected":
+        raise HTTPException(
+            status_code=403,
+            detail="가입이 반려된 계정입니다. 관리자에게 문의해 주세요",
+        )
+
     access_token = create_access_token(
         data={"sub": str(user["id"]), "email": user["email"]}
     )
@@ -1123,6 +1169,7 @@ def login(request: LoginRequest):
             "email": user["email"],
             "nickname": user["nickname"],
             "role": user["role"],
+            "status": user_status,
             "avatar_url": user.get("avatar_url"),
             "bio": user.get("bio"),
         },
@@ -1196,9 +1243,35 @@ async def update_me(
         "email": updated_user["email"],
         "nickname": updated_user["nickname"],
         "role": updated_user["role"],
+        "status": updated_user.get("status", "active"),
         "avatar_url": updated_user.get("avatar_url"),
         "bio": updated_user.get("bio"),
     }
+
+
+@app.post("/api/projects/{project_id}/comments")
+def create_comment_endpoint(
+    project_id: str,
+    comment: CommentCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    settings = get_effective_moderation_settings()
+    if text_contains_blocked_keyword(comment.content, settings["blocked_keywords"]):
+        raise HTTPException(
+            status_code=400, detail="금칙어가 포함된 댓글은 작성할 수 없습니다"
+        )
+
+    new_comment = create_comment(
+        project_id=project_id,
+        content=comment.content,
+        author_id=current_user["id"],
+    )
+    if not new_comment:
+        raise HTTPException(status_code=500, detail="댓글 작성에 실패했습니다")
+    new_comment["id"] = str(new_comment["id"])
+    new_comment["project_id"] = str(new_comment["project_id"])
+    new_comment["author_id"] = str(new_comment["author_id"])
+    return new_comment
 
 
 @app.get("/api/me/projects")
