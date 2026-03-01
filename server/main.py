@@ -1410,6 +1410,12 @@ def login(request: LoginRequest):
         )
 
     password_hash = user.get("password_hash")
+    if not password_hash and (user.get("provider") == "google"):
+        raise HTTPException(
+            status_code=400,
+            detail="Google로 가입한 계정입니다. 비밀번호 대신 Google 로그인 버튼을 사용해 주세요",
+        )
+
     if not password_hash or not verify_password(request.password, password_hash):
         raise HTTPException(
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
