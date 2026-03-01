@@ -29,6 +29,7 @@ from db import (
     get_user_projects,
     get_admin_projects,
     update_project_admin,
+    update_project_owner_fields,
     set_project_status,
     create_admin_action_log,
     get_admin_action_logs,
@@ -260,6 +261,17 @@ class ProjectCreate(BaseModel):
     repo_url: Optional[str] = None
     platform: str = "web"
     tags: list[str] = []
+
+
+class ProjectUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    demo_url: Optional[str] = None
+    repo_url: Optional[str] = None
+    platform: Optional[str] = None
+    tags: Optional[list[str]] = None
 
 
 class CommentCreate(BaseModel):
@@ -685,6 +697,48 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
     return current_user
+
+
+@app.patch("/api/projects/{project_id}")
+def update_project_endpoint(
+    project_id: str,
+    payload: ProjectUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    existing = get_project(project_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+
+    is_admin = current_user.get("role") == "admin"
+    is_owner = str(existing.get("author_id")) == current_user.get("id")
+    if not is_admin and not is_owner:
+        raise HTTPException(status_code=403, detail="수정 권한이 없습니다")
+
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="변경할 프로젝트 필드가 없습니다")
+
+    content_for_check = " ".join(
+        [
+            updates.get("title", existing.get("title", "")) or "",
+            updates.get("summary", existing.get("summary", "")) or "",
+            updates.get("description", existing.get("description", "")) or "",
+        ]
+    )
+    settings = get_effective_moderation_settings()
+    if text_contains_blocked_keyword(content_for_check, settings["blocked_keywords"]):
+        raise HTTPException(
+            status_code=400, detail="금칙어가 포함된 내용은 수정할 수 없습니다"
+        )
+
+    updated = update_project_owner_fields(project_id, updates)
+    if not updated:
+        raise HTTPException(status_code=500, detail="프로젝트 수정에 실패했습니다")
+
+    _invalidate_projects_cache()
+    updated["id"] = str(updated["id"])
+    updated["author_id"] = str(updated["author_id"])
+    return updated
 
 
 # ============ Admin API ============

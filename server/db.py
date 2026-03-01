@@ -321,6 +321,42 @@ def update_project_admin(project_id: str, updates: dict):
             return cur.fetchone()
 
 
+def update_project_owner_fields(project_id: str, updates: dict):
+    allowed_fields = [
+        "title",
+        "summary",
+        "description",
+        "thumbnail_url",
+        "demo_url",
+        "repo_url",
+        "platform",
+        "tags",
+    ]
+    fields_to_update = []
+    params = []
+
+    for field in allowed_fields:
+        if field in updates and updates[field] is not None:
+            fields_to_update.append(f"{field} = %s")
+            params.append(updates[field])
+
+    if not fields_to_update:
+        return None
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+                UPDATE projects
+                SET {", ".join(fields_to_update)}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+            """
+            params.append(project_id)
+            cur.execute(query, params)
+            conn.commit()
+            return cur.fetchone()
+
+
 def set_project_status(project_id: str, status: str):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
