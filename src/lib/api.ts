@@ -499,6 +499,17 @@ export const api = {
     return created
   },
 
+  updateProject: async (id: string, data: Partial<Project>) => {
+    const res = await authFetch(`${API_BASE}/api/projects/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    })
+    const updated = await res.json() as Project
+    invalidateProjectRelatedCaches(id)
+    return updated
+  },
+
   likeProject: async (id: string) => {
     const res = await authFetch(`${API_BASE}/api/projects/${id}/like`, {
       method: "POST",

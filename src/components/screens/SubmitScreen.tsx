@@ -1,21 +1,24 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
-import { api } from "@/lib/api"
+import { api, type Project } from "@/lib/api"
+import { useAuth } from "@/lib/use-auth"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
+  editingProjectId?: string
 }
 
 const platforms = ["Web", "App", "AI", "Tool", "Game", "기타"]
 const tagOptions = ["React", "Python", "AI", "Web", "Mobile", "Game", "Tool", "API", "Database", "DevOps"]
 
-export function SubmitScreen({ onNavigate }: ScreenProps) {
+export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
+  const { user } = useAuth()
   const [formData, setFormData] = useState({
     title: "",
     summary: "",
@@ -27,7 +30,63 @@ export function SubmitScreen({ onNavigate }: ScreenProps) {
     tags: [] as string[],
   })
   const [submitting, setSubmitting] = useState(false)
+  const [loadingProject, setLoadingProject] = useState(false)
   const [thumbnailPreview, setThumbnailPreview] = useState("")
+
+  const applyProjectToForm = (project: Project) => {
+    const normalizedPlatform = project.platform ? `${project.platform}` : "web"
+    const upperPlatform = normalizedPlatform.toUpperCase()
+    const displayPlatform = platforms.includes(upperPlatform)
+      ? upperPlatform
+      : normalizedPlatform.charAt(0).toUpperCase() + normalizedPlatform.slice(1)
+    setFormData({
+      title: project.title || "",
+      summary: project.summary || "",
+      description: project.description || "",
+      platform: displayPlatform,
+      thumbnail_url: project.thumbnail_url || "",
+      demo_url: project.demo_url || "",
+      repo_url: project.repo_url || "",
+      tags: project.tags || [],
+    })
+    setThumbnailPreview(project.thumbnail_url || "")
+  }
+
+  useEffect(() => {
+    if (!editingProjectId) {
+      return
+    }
+
+    let cancelled = false
+    const loadProjectForEdit = async () => {
+      setLoadingProject(true)
+      try {
+        const project = await api.getProject(editingProjectId, { force: true })
+        if (cancelled) return
+        if (!user || (user.role !== "admin" && user.id !== project.author_id)) {
+          alert("수정 권한이 없습니다.")
+          onNavigate?.("detail")
+          return
+        }
+        applyProjectToForm(project)
+      } catch (error) {
+        console.error("Failed to load project for edit:", error)
+        if (!cancelled) {
+          alert("수정할 작품을 불러오지 못했습니다.")
+          onNavigate?.("detail")
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingProject(false)
+        }
+      }
+    }
+
+    void loadProjectForEdit()
+    return () => {
+      cancelled = true
+    }
+  }, [editingProjectId, onNavigate, user])
 
   const handleSubmit = async () => {
     if (!formData.title || !formData.summary) {
@@ -37,7 +96,7 @@ export function SubmitScreen({ onNavigate }: ScreenProps) {
 
     setSubmitting(true)
     try {
-      await api.createProject({
+      const payload = {
         title: formData.title,
         summary: formData.summary,
         description: formData.description || undefined,
@@ -46,22 +105,30 @@ export function SubmitScreen({ onNavigate }: ScreenProps) {
         demo_url: formData.demo_url || undefined,
         repo_url: formData.repo_url || undefined,
         tags: formData.tags,
-      })
-      alert("작품이 등록되었습니다!")
-      setFormData({
-        title: "",
-        summary: "",
-        description: "",
-        platform: "Web",
-        thumbnail_url: "",
-        demo_url: "",
-        repo_url: "",
-        tags: [],
-      })
-      setThumbnailPreview("")
+      }
+
+      if (editingProjectId) {
+        await api.updateProject(editingProjectId, payload)
+        alert("작품이 수정되었습니다!")
+        onNavigate?.("detail")
+      } else {
+        await api.createProject(payload)
+        alert("작품이 등록되었습니다!")
+        setFormData({
+          title: "",
+          summary: "",
+          description: "",
+          platform: "Web",
+          thumbnail_url: "",
+          demo_url: "",
+          repo_url: "",
+          tags: [],
+        })
+        setThumbnailPreview("")
+      }
     } catch (error) {
-      console.error("Failed to create project:", error)
-      alert("작품 등록에 실패했습니다.")
+      console.error("Failed to submit project:", error)
+      alert(editingProjectId ? "작품 수정에 실패했습니다." : "작품 등록에 실패했습니다.")
     } finally {
       setSubmitting(false)
     }
@@ -102,8 +169,12 @@ export function SubmitScreen({ onNavigate }: ScreenProps) {
       </header>
 
       <main className="max-w-4xl mx-auto px-4 py-8">
-        <h1 className="font-display text-3xl font-bold text-[#F4F7FF] mb-2">작품 등록</h1>
-        <p className="text-[#B8C3E6] mb-8">당신의 작품을 바이브코더 커뮤니티와 공유하세요!</p>
+        <h1 className="font-display text-3xl font-bold text-[#F4F7FF] mb-2">{editingProjectId ? "작품 수정" : "작품 등록"}</h1>
+        <p className="text-[#B8C3E6] mb-8">{editingProjectId ? "기존 작품 정보를 수정합니다." : "당신의 작품을 바이브코더 커뮤니티와 공유하세요!"}</p>
+
+        {loadingProject ? (
+          <div className="text-[#B8C3E6] mb-6">수정할 작품 정보를 불러오는 중...</div>
+        ) : null}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div className="space-y-6">
@@ -231,10 +302,10 @@ export function SubmitScreen({ onNavigate }: ScreenProps) {
             <div className="flex gap-4 pt-4">
               <Button 
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={submitting || loadingProject}
                 className="flex-1 bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg py-6"
               >
-                {submitting ? "등록 중..." : "등록하기"}
+                {submitting ? (editingProjectId ? "수정 중..." : "등록 중...") : (editingProjectId ? "수정하기" : "등록하기")}
               </Button>
               <Button variant="outline" className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF] text-lg py-6">
                 취소

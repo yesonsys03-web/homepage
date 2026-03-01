@@ -8,9 +8,21 @@ import { useAuth } from './lib/use-auth'
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 function AppContent() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>('home')
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null)
+  const initialProjectId = new URL(window.location.href).searchParams.get('project')
+  const [currentScreen, setCurrentScreen] = useState<Screen>(initialProjectId ? 'detail' : 'home')
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId)
+  const [submitEditingProjectId, setSubmitEditingProjectId] = useState<string | null>(null)
   const { user, logout, isLoading } = useAuth()
+
+  const syncProjectQuery = (projectId: string | null) => {
+    const url = new URL(window.location.href)
+    if (projectId) {
+      url.searchParams.set('project', projectId)
+    } else {
+      url.searchParams.delete('project')
+    }
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+  }
 
   const handleLoginSwitch = () => setCurrentScreen('login')
   const handleRegisterSwitch = () => setCurrentScreen('register')
@@ -27,12 +39,31 @@ function AppContent() {
       return
     }
 
+    if (screen === 'submit') {
+      setSubmitEditingProjectId(null)
+    }
+
+    if (screen !== 'detail') {
+      syncProjectQuery(null)
+    }
+
     setCurrentScreen(screen)
   }
 
   const openProjectDetail = (projectId: string) => {
     setSelectedProjectId(projectId)
+    syncProjectQuery(projectId)
     setCurrentScreen('detail')
+  }
+
+  const openProjectEdit = (projectId: string) => {
+    if (!user) {
+      setCurrentScreen('login')
+      return
+    }
+    setSubmitEditingProjectId(projectId)
+    syncProjectQuery(projectId)
+    setCurrentScreen('submit')
   }
 
   if (isLoading) {
@@ -53,8 +84,8 @@ function AppContent() {
 
   const screens = {
     home: <HomeScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />,
-    detail: <ProjectDetailScreen onNavigate={handleNavigate} projectId={selectedProjectId ?? undefined} />,
-    submit: <SubmitScreen onNavigate={handleNavigate} />,
+    detail: <ProjectDetailScreen onNavigate={handleNavigate} projectId={selectedProjectId ?? undefined} onEditProject={openProjectEdit} />,
+    submit: <SubmitScreen onNavigate={handleNavigate} editingProjectId={submitEditingProjectId ?? undefined} />,
     profile: <ProfileScreen onNavigate={handleNavigate} />,
     admin: <AdminScreen onNavigate={handleNavigate} />,
     explore: <ExploreScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />,

@@ -5,11 +5,13 @@ import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { api, type Project, type Comment } from "@/lib/api"
+import { useAuth } from "@/lib/use-auth"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
   projectId?: string
+  onEditProject?: (projectId: string) => void
 }
 
 
@@ -44,7 +46,7 @@ const sampleProject: Project = {
   updated_at: "2026-02-25T10:00:00Z",
 }
 
-export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
+export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: ScreenProps) {
   const [project, setProject] = useState<Project | null>(null)
   const [comments, setComments] = useState<Comment[]>([])
   const [loading, setLoading] = useState(true)
@@ -52,7 +54,10 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
   const [likeCount, setLikeCount] = useState(0)
   const [commentText, setCommentText] = useState("")
   const [isSubmittingComment, setIsSubmittingComment] = useState(false)
+  const [shareMenuOpen, setShareMenuOpen] = useState(false)
+  const [shareCopied, setShareCopied] = useState(false)
   const targetProjectId = projectId ?? "1"
+  const { user } = useAuth()
 
   useEffect(() => {
     const fetchData = async () => {
@@ -143,6 +148,14 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
     }
   }
 
+  useEffect(() => {
+    if (!shareCopied) return
+    const timer = window.setTimeout(() => {
+      setShareCopied(false)
+    }, 1500)
+    return () => window.clearTimeout(timer)
+  }, [shareCopied])
+
   if (loading || !project) {
     return (
       <div className="min-h-screen bg-[#0B1020] flex items-center justify-center">
@@ -157,6 +170,83 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
       month: "long",
       day: "numeric"
     })
+  }
+
+  const canEditProject = !!user && (user.role === "admin" || user.id === project.author_id)
+
+  const shareUrl = `${window.location.origin}${window.location.pathname}?project=${targetProjectId}`
+
+  const copyShareUrl = async () => {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(shareUrl)
+      return
+    }
+    const textarea = document.createElement("textarea")
+    textarea.value = shareUrl
+    textarea.style.position = "fixed"
+    textarea.style.opacity = "0"
+    document.body.appendChild(textarea)
+    textarea.focus()
+    textarea.select()
+    document.execCommand("copy")
+    document.body.removeChild(textarea)
+  }
+
+  const handleShare = async (
+    channel: "native" | "copy" | "x" | "facebook" | "linkedin" | "threads" | "instagram" | "kakao"
+  ) => {
+    const encodedUrl = encodeURIComponent(shareUrl)
+    const encodedTitle = encodeURIComponent(project.title)
+    const encodedSummary = encodeURIComponent(project.summary)
+
+    try {
+      if (channel === "native") {
+        if (navigator.share) {
+          await navigator.share({ title: project.title, text: project.summary, url: shareUrl })
+          setShareMenuOpen(false)
+          return
+        }
+        await copyShareUrl()
+        setShareCopied(true)
+        return
+      }
+
+      if (channel === "copy") {
+        await copyShareUrl()
+        setShareCopied(true)
+        return
+      }
+
+      if (channel === "instagram") {
+        await copyShareUrl()
+        setShareCopied(true)
+        window.open("https://www.instagram.com/", "_blank", "noopener,noreferrer")
+        return
+      }
+
+      if (channel === "kakao") {
+        if (navigator.share) {
+          await navigator.share({ title: project.title, text: `${project.title}\n${shareUrl}`, url: shareUrl })
+          setShareMenuOpen(false)
+          return
+        }
+        await copyShareUrl()
+        setShareCopied(true)
+        window.open("https://story.kakao.com/share", "_blank", "noopener,noreferrer")
+        return
+      }
+
+      const shareMap = {
+        x: `https://x.com/intent/tweet?text=${encodedTitle}%20-%20${encodedSummary}&url=${encodedUrl}`,
+        facebook: `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`,
+        linkedin: `https://www.linkedin.com/sharing/share-offsite/?url=${encodedUrl}`,
+        threads: `https://www.threads.net/intent/post?text=${encodedTitle}%20-%20${encodedSummary}%20${encodedUrl}`,
+      }
+      window.open(shareMap[channel], "_blank", "noopener,noreferrer,width=620,height=700")
+    } catch (error) {
+      console.error("Share failed:", error)
+      alert("공유에 실패했습니다.")
+    }
   }
 
   return (
@@ -194,6 +284,15 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
               </div>
             </div>
             <div className="flex gap-2">
+              {canEditProject ? (
+                <Button
+                  variant="outline"
+                  className="border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10"
+                  onClick={() => onEditProject?.(targetProjectId)}
+                >
+                  수정
+                </Button>
+              ) : null}
               <Button 
                 variant="outline" 
                 onClick={handleLike}
@@ -204,9 +303,67 @@ export function ProjectDetailScreen({ onNavigate, projectId }: ScreenProps) {
               <Button variant="outline" className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]">
                 💬 {comments.length}
               </Button>
-              <Button variant="outline" className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]">
-                공유
-              </Button>
+              <div className="relative">
+                <Button
+                  variant="outline"
+                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]"
+                  onClick={() => setShareMenuOpen((prev) => !prev)}
+                >
+                  공유
+                </Button>
+                {shareMenuOpen ? (
+                  <div className="absolute right-0 mt-2 w-48 rounded-lg border border-[#111936] bg-[#111936] p-2 shadow-lg z-20">
+                    <button
+                      onClick={() => void handleShare("native")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      기기 공유
+                    </button>
+                    <button
+                      onClick={() => void handleShare("copy")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      {shareCopied ? "링크 복사됨" : "링크 복사"}
+                    </button>
+                    <button
+                      onClick={() => void handleShare("x")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      X 공유
+                    </button>
+                    <button
+                      onClick={() => void handleShare("threads")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      Threads 공유
+                    </button>
+                    <button
+                      onClick={() => void handleShare("facebook")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      Facebook 공유
+                    </button>
+                    <button
+                      onClick={() => void handleShare("linkedin")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      LinkedIn 공유
+                    </button>
+                    <button
+                      onClick={() => void handleShare("instagram")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      Instagram 공유
+                    </button>
+                    <button
+                      onClick={() => void handleShare("kakao")}
+                      className="w-full text-left px-3 py-2 rounded text-[#F4F7FF] hover:bg-[#161F42]"
+                    >
+                      KakaoTalk 공유
+                    </button>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
