@@ -122,6 +122,18 @@ body {
   will-change: transform, opacity;
 }
 
+.logo-title-fallback {
+  opacity: 0;
+  transform: translate3d(0, 18px, 0);
+  transition: opacity 620ms cubic-bezier(0.22, 1, 0.36, 1), transform 620ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+
+.logo-title-fallback[data-in-view="true"] {
+  opacity: 1;
+  transform: translate3d(0, 0, 0);
+}
+
 .hero-orb {
   animation: orb-drift 8s ease-in-out infinite;
   will-change: transform;
@@ -129,8 +141,10 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .reveal-up,
+  .logo-title-fallback,
   .hero-orb {
     animation: none !important;
+    transition: none !important;
     opacity: 1 !important;
     transform: none !important;
   }
@@ -506,6 +520,35 @@ body {
 .cover-copy-stack-three .cover-copy-description {
   align-self: center;
   animation-name: cover-copy-description-cycle;
+}
+
+.cover-title-char {
+  will-change: transform, opacity;
+}
+
+.cover-card-title-split {
+  animation: none !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+
+.cover-card-title-variant-0 {
+  text-shadow: 0 0 18px rgba(35, 213, 171, 0.34);
+}
+
+.cover-card-title-variant-1 {
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 22px rgba(255, 93, 143, 0.38);
+}
+
+.cover-card-title-variant-2 {
+  text-shadow: 0 0 16px rgba(255, 181, 71, 0.35);
+  filter: saturate(1.14);
+}
+
+.cover-card-title-variant-3 {
+  letter-spacing: 0.015em;
+  text-shadow: 0 0 12px rgba(184, 195, 230, 0.45), 0 0 26px rgba(35, 213, 171, 0.28);
 }
 
 .cover-title-glitch-layer {

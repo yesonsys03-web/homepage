@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
+import { LogoSplitHeading } from "@/components/LogoSplitHeading"
 import { api, type Project } from "@/lib/api"
 import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
@@ -172,10 +173,13 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
         <div className="hero-orb absolute -right-20 bottom-4 h-56 w-56 rounded-full bg-[#FF5D8F]/20 blur-3xl" style={{ animationDelay: "-2s" }} />
         <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
         <div className="max-w-7xl mx-auto relative z-10 flex flex-col items-center">
-          <h2 className="reveal-up w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left" style={{ "--reveal-delay": "80ms" } as CSSProperties}>
-            완성도보다 바이브.<br />
-            <span className="text-[#23D5AB]">실험도 작품이다.</span>
-          </h2>
+          <LogoSplitHeading
+            as="h2"
+            className="w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left"
+            line1="완성도보다 바이브."
+            line2="실험도 작품이다."
+            line2ClassName="text-[#23D5AB]"
+          />
           <Button size="lg" onClick={() => onNavigate?.('explore')} className="reveal-up bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6" style={{ "--reveal-delay": "220ms" } as CSSProperties}>
             지금 시작하기
           </Button>

@@ -1,5 +1,6 @@
 import type { CSSProperties } from "react"
 import { cn } from "@/lib/utils"
+import { CoverSplitTitle } from "@/components/CoverSplitTitle"
 
 interface ProjectCoverPlaceholderProps {
   title: string
@@ -307,7 +308,12 @@ export function ProjectCoverPlaceholder({
         <div>
           {hasSummary || hasDescription ? (
             <div className={cn("cover-copy-stack mt-1", hasDescription ? "cover-copy-stack-three" : "cover-copy-stack-two")}>
-              <p className={cn("cover-copy-panel cover-copy-title font-display leading-[1.05] text-[#F4F7FF] font-bold", titleSizeClass)}>{title}</p>
+              <CoverSplitTitle
+                text={title}
+                seed={seed}
+                mood={mood}
+                className={cn("cover-copy-panel cover-card-title-split font-display leading-[1.05] text-[#F4F7FF] font-bold", titleSizeClass)}
+              />
               {hasSummary ? (
                 <p className={cn("cover-copy-panel cover-copy-summary text-[#B8C3E6]/95", summarySizeClass)}>{trimmedSummary}</p>
               ) : null}
@@ -316,7 +322,12 @@ export function ProjectCoverPlaceholder({
               ) : null}
             </div>
           ) : (
-            <p className={cn("cover-title-motion font-display leading-[1.05] text-[#F4F7FF] font-bold", titleSizeClass)}>{title}</p>
+            <CoverSplitTitle
+              text={title}
+              seed={seed}
+              mood={mood}
+              className={cn("cover-card-title-split font-display leading-[1.05] text-[#F4F7FF] font-bold", titleSizeClass)}
+            />
           )}
         </div>
       </div>
