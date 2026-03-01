@@ -1389,3 +1389,56 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. 승인/반려 메일 템플릿 + 발송 채널(Resend/Postmark) 연결
 2. Admin OAuth 카드에 URI 유효성 프리검증(https/http, path) 추가
 3. Google OAuth 오류 코드별 사용자 메시지 세분화
+
+## Session 2026-03-01-04
+
+### 1) Goal
+- Google OAuth 로그인 안정성을 보강하고, 프로젝트 Submit 작성자 표기(`by ...`)가 실제 로그인 사용자로 저장되도록 수정한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - Google 로그인 후 다시 로그인 화면으로 돌아가는 현상
+  - 사용자 계정으로 작품 등록해도 카드 하단 작성자가 `jongjatdon`으로 표시되는 현상
+- 제약 조건:
+  - `SECRET` 값은 Git에 절대 포함하지 않음 (`server/.env` 제외)
+
+### 3) Design Decisions
+- OAuth 콜백 처리에서는 쿼리 토큰을 즉시 삭제하지 않고 세션 복원 성공/실패 시점에 정리하도록 변경했다.
+- 프로젝트 생성은 인증 사용자 컨텍스트를 강제하고, DB 레벨 기본 작성자 fallback을 제거했다.
+
+### 4) Implementation Notes
+- OAuth 로그인 안정화
+  - `src/App.tsx`
+    - `oauth_token/oauth_status` 쿼리 제거 타이밍을 세션 복원 후로 조정
+  - `src/lib/auth-context.tsx`
+    - 초기 세션 복원 race condition 방어(토큰 변경 시 이전 비동기 결과 무시)
+  - `server/main.py`
+    - Google 계정의 비밀번호 로그인 시 provider 안내 메시지 반환
+- 프로젝트 작성자 매핑 수정
+  - `server/main.py`
+    - `POST /api/projects`에 `Depends(get_current_user)` 적용
+    - 생성 payload에 `author_id=current_user.id` 주입
+  - `server/db.py`
+    - `create_project`의 하드코딩 기본 `author_id` 제거
+    - `author_id` 필수 검증 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- Google 로그인 후 세션이 끊기던 재로그인 루프가 안정적으로 해소됐다.
+- 신규 Submit 카드 작성자가 실제 로그인 사용자로 저장/표시되도록 바로잡았다.
+
+#### 아쉬운 점
+- AdminScreen의 기존 hooks 의존성 경고 2건은 이번 작업 범위 밖으로 유지했다.
+
+#### 다음 액션
+1. 승인/반려 메일 발송 파이프라인 구현
+2. OAuth 설정 저장 시 URI 형식 검증 강화
+3. Admin users 탭 캐시 TTL 최적화
