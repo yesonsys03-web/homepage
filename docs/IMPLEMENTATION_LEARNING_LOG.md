@@ -1186,3 +1186,67 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. cache hit/miss 및 revalidate 성공률 로그를 추가해 TTL 튜닝 근거 확보
 2. 프로젝트 카드 좋아요 수에 낙관적 업데이트(optimistic update) 적용 검토
+
+## Session 2026-03-01-01
+
+### 1) Goal
+- 카드 상세를 실사용 흐름에 맞게 고도화한다: 작성자/관리자 수정 권한, 공유 기능, 딥링크 진입을 한 사이클로 완성한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - 업로드 후 본인 카드 수정 불가
+  - 관리자 전면 수정 권한 필요
+  - 상세 공유 버튼 실사용 기능 필요(대표 소셜 채널)
+- 제약 조건:
+  - 기존 Submit 화면을 재사용해 편집 모드로 전환
+  - 권한 검사는 백엔드에서 최종 보장
+
+### 3) Design Decisions
+- 편집 UX는 별도 화면 신설 대신 Submit 화면의 `editingProjectId` 모드로 통일했다.
+- 권한 모델은 `owner or admin`으로 고정해, 작성자와 관리자가 동일 PATCH 엔드포인트를 사용하도록 단순화했다.
+- 공유 URL은 `?project=<id>` 쿼리 딥링크를 채택해, 링크 클릭 시 앱이 바로 해당 상세를 열도록 했다.
+- 웹 intent가 제한된 채널(Instagram/Kakao)은 링크 복사 fallback을 기본으로 제공한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `PATCH /api/projects/{project_id}` 추가
+    - 권한 검사: 작성자 본인 또는 admin만 수정 허용
+    - 수정 본문 금칙어 검증 + 목록 캐시 무효화 유지
+  - `server/db.py`
+    - `update_project_owner_fields` 추가 (owner/admin 공용 수정 필드 처리)
+- 프론트
+  - `src/App.tsx`
+    - `submitEditingProjectId` 상태 추가
+    - 상세 -> Submit 편집 진입 핸들러(`openProjectEdit`) 연결
+    - `?project=` 딥링크 초기 진입/동기화 처리
+  - `src/components/screens/ProjectDetailScreen.tsx`
+    - 권한 충족 시 `수정` 버튼 노출
+    - 공유 메뉴 구현: 기기 공유, 링크 복사, X, Threads, Facebook, LinkedIn, Instagram, KakaoTalk
+  - `src/components/screens/SubmitScreen.tsx`
+    - `editingProjectId`가 있으면 기존 프로젝트 로드 후 프리필
+    - 제출 시 생성/수정 API 분기 처리
+  - `src/lib/api.ts`
+    - `api.updateProject` 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` (workdir=`server`) 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- 작성자/관리자 수정 플로우가 상세 -> Submit 편집으로 자연스럽게 연결됐다.
+- 공유 기능이 단순 버튼에서 실제 소셜 전파 가능한 구조로 확장됐다.
+- 딥링크(`?project`)로 외부 공유 후 상세 재진입이 가능해졌다.
+
+#### 아쉬운 점
+- Instagram/Kakao는 웹 표준 intent 제약으로 SDK 없는 완전 자동 공유 한계가 있다.
+
+#### 다음 액션
+1. 카카오 JavaScript SDK 적용으로 친구 공유 UX 고도화
+2. 공유 메뉴 outside-click 닫힘/키보드 접근성 강화
+3. `/api/admin/perf/projects` 기반으로 TTL/DB pool 수치 튜닝
