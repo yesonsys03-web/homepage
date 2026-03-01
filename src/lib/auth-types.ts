@@ -3,4 +3,6 @@ export interface User {
   email: string
   nickname: string
   role: string
+  avatar_url?: string | null
+  bio?: string | null
 }

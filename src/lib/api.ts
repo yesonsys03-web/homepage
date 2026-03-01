@@ -434,6 +434,15 @@ export const api = {
     return res.json() as Promise<User>
   },
 
+  updateMe: async (payload: Partial<Pick<User, "nickname" | "bio" | "avatar_url">>) => {
+    const res = await authFetch(`${API_BASE}/api/me`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    return res.json() as Promise<User>
+  },
+
   getAboutContent: async (options?: SWRFetchOptions<AboutContent>) => {
     const key = createAdminCacheKey("pages")
     return fetchWithAdminSWR(
