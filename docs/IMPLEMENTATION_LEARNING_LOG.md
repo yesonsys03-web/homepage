@@ -1250,3 +1250,72 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. 카카오 JavaScript SDK 적용으로 친구 공유 UX 고도화
 2. 공유 메뉴 outside-click 닫힘/키보드 접근성 강화
 3. `/api/admin/perf/projects` 기반으로 TTL/DB pool 수치 튜닝
+
+## Session 2026-03-01-02
+
+### 1) Goal
+- 가입 실패를 성공처럼 처리하던 인증 버그를 우선 수정하고, 승인형 가입(`pending`) + 관리자 승인/반려 흐름의 첫 실행 버전을 구축한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - 가입 후 계정이 정상 동작하지 않음
+  - Admin에서 신규 가입자 확인/승인 필요
+- 제약 조건:
+  - 기존 FastAPI + React 구조를 유지
+  - 당일 검증 가능한 최소 기능으로 단계별 적용
+
+### 3) Design Decisions
+- 인증 실패 처리 표준을 `authFetch` 패턴에 맞춰 `register/login`에도 동일 적용했다.
+- 사용자 계정 상태를 `pending/active/rejected`로 분리해 승인 정책을 명시화했다.
+- 승인 액션은 기존 관리자 액션 로그 체계를 재사용해 감사 추적을 유지했다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `users.status` 컬럼 도입(기본 `active` + NULL 보정)
+    - 신규 가입 `create_user(..., status="pending")` 지원
+    - `approve_user`, `reject_user` 함수 추가
+  - `server/main.py`
+    - 로그인 시 `pending/rejected` 계정 차단(403)
+    - `get_current_user`에서 `active` 상태만 통과
+    - 관리자 승인/반려 엔드포인트 추가
+      - `POST /api/admin/users/{user_id}/approve`
+      - `POST /api/admin/users/{user_id}/reject`
+- 프론트
+  - `src/lib/api.ts`
+    - `register/login`에 `res.ok` 실패 처리 추가
+    - `VITE_API_BASE` 환경변수 기반 API 베이스 전환
+    - `approveUser`, `rejectUser` 관리자 API 메서드 추가
+  - `src/components/screens/RegisterScreen.tsx`
+    - 응답 유효성 가드 추가
+    - `pending` 가입 시 자동 로그인 중단 + 안내 메시지
+  - `src/components/screens/LoginScreen.tsx`
+    - 응답 유효성 가드 추가
+  - `src/components/screens/AdminScreen.tsx`
+    - 사용자 상태 배지(`승인 대기/활성/반려`) 추가
+    - 승인/반려 버튼과 후속 refresh/action-log 연동
+  - `src/lib/auth-types.ts`
+    - `User.status` 타입 반영
+  - `.env.example`
+    - `VITE_API_BASE` 샘플 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- 가입 실패/성공 상태가 UI에서 명확히 분리되어 가짜 성공 케이스가 제거됐다.
+- 승인형 가입 정책의 핵심 흐름(가입 대기 -> 관리자 승인/반려 -> 로그인 제어)이 동작 가능한 상태가 됐다.
+
+#### 아쉬운 점
+- 반려 사유 사용자 통지(메일/알림)와 OAuth 연동은 아직 미구현이다.
+
+#### 다음 액션
+1. Google OAuth 가입 경로를 `pending` 상태와 연결
+2. 승인/반려 이벤트 메일 발송 파이프라인 추가
+3. Admin users 탭 캐시 TTL/강제 갱신 정책 세분화
