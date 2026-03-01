@@ -1,14 +1,21 @@
 import os
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
+from psycopg2.pool import SimpleConnectionPool
 from contextlib import contextmanager
 from typing import Optional
 from dotenv import load_dotenv
+from threading import Lock
 
 # .env 파일 로드
 load_dotenv(".env")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
+DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "12"))
+
+_db_pool: Optional[SimpleConnectionPool] = None
+_db_pool_lock = Lock()
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set. Please check server/.env file")
@@ -17,11 +24,22 @@ if not DATABASE_URL:
 @contextmanager
 def get_db_connection():
     """데이터베이스 연결 컨텍스트 매니저"""
-    conn = psycopg2.connect(DATABASE_URL)
+    global _db_pool
+
+    if _db_pool is None:
+        with _db_pool_lock:
+            if _db_pool is None:
+                _db_pool = SimpleConnectionPool(
+                    minconn=DB_POOL_MIN_CONN,
+                    maxconn=DB_POOL_MAX_CONN,
+                    dsn=DATABASE_URL,
+                )
+
+    conn = _db_pool.getconn()
     try:
         yield conn
     finally:
-        conn.close()
+        _db_pool.putconn(conn)
 
 
 def init_db():
@@ -148,6 +166,23 @@ def init_db():
             # 컬럼 추가 (tags - 배열 타입)
             cur.execute("""
                 ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'
+            """)
+
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_projects_status_created_at
+                ON projects (status, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_projects_status_like_count
+                ON projects (status, like_count DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_projects_status_platform_created_at
+                ON projects (status, platform, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_projects_tags_gin
+                ON projects USING GIN (tags)
             """)
 
             conn.commit()

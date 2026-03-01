@@ -1,10 +1,14 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, Mapping, Sequence, Any
 import re
 import unicodedata
+import time
+from threading import Lock
+from collections import deque
 
 from db import (
     init_db,
@@ -45,6 +49,101 @@ from auth import (
 )
 
 app = FastAPI(title="VibeCoder Playground API")
+
+PROJECT_LIST_CACHE_TTL_SECONDS = 12.0
+PROJECT_PERF_WINDOW_SIZE = 300
+_project_list_cache: dict[
+    tuple[str, Optional[str], Optional[str]], tuple[float, list[dict[str, Any]]]
+] = {}
+_project_list_cache_lock = Lock()
+_project_perf_samples: deque[tuple[float, float, int]] = deque(
+    maxlen=PROJECT_PERF_WINDOW_SIZE
+)
+_project_perf_lock = Lock()
+
+
+def _project_cache_key(
+    sort: str, platform: Optional[str], tag: Optional[str]
+) -> tuple[str, Optional[str], Optional[str]]:
+    return (sort, platform, tag)
+
+
+def _get_cached_projects(
+    sort: str, platform: Optional[str], tag: Optional[str]
+) -> Optional[list[dict[str, Any]]]:
+    now = time.perf_counter()
+    key = _project_cache_key(sort, platform, tag)
+    with _project_list_cache_lock:
+        cached = _project_list_cache.get(key)
+        if not cached:
+            return None
+        expires_at, items = cached
+        if expires_at <= now:
+            _project_list_cache.pop(key, None)
+            return None
+        return [dict(item) for item in items]
+
+
+def _set_cached_projects(
+    sort: str,
+    platform: Optional[str],
+    tag: Optional[str],
+    items: Sequence[Mapping[str, Any]],
+) -> None:
+    key = _project_cache_key(sort, platform, tag)
+    expires_at = time.perf_counter() + PROJECT_LIST_CACHE_TTL_SECONDS
+    with _project_list_cache_lock:
+        _project_list_cache[key] = (expires_at, [dict(item) for item in items])
+
+
+def _invalidate_projects_cache() -> None:
+    with _project_list_cache_lock:
+        _project_list_cache.clear()
+
+
+def _percentile(values: list[float], ratio: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = round((len(ordered) - 1) * ratio)
+    index = min(max(index, 0), len(ordered) - 1)
+    return ordered[index]
+
+
+def _record_project_perf(elapsed_ms: float, db_ms: float, cache_hit: bool) -> None:
+    with _project_perf_lock:
+        _project_perf_samples.append((elapsed_ms, db_ms, 1 if cache_hit else 0))
+
+
+def _project_perf_snapshot() -> dict[str, Any]:
+    with _project_perf_lock:
+        samples = list(_project_perf_samples)
+
+    if not samples:
+        return {
+            "window_size": PROJECT_PERF_WINDOW_SIZE,
+            "sample_count": 0,
+            "cache_hit_rate": 0.0,
+            "elapsed_ms_p50": 0.0,
+            "elapsed_ms_p95": 0.0,
+            "db_ms_p50": 0.0,
+            "db_ms_p95": 0.0,
+        }
+
+    elapsed_values = [row[0] for row in samples]
+    db_values = [row[1] for row in samples if row[2] == 0]
+    cache_hit_rate = sum(row[2] for row in samples) / len(samples)
+
+    return {
+        "window_size": PROJECT_PERF_WINDOW_SIZE,
+        "sample_count": len(samples),
+        "cache_hit_rate": round(cache_hit_rate, 4),
+        "elapsed_ms_p50": round(_percentile(elapsed_values, 0.5), 2),
+        "elapsed_ms_p95": round(_percentile(elapsed_values, 0.95), 2),
+        "db_ms_p50": round(_percentile(db_values, 0.5), 2),
+        "db_ms_p95": round(_percentile(db_values, 0.95), 2),
+    }
+
 
 BASELINE_BLOCKED_KEYWORD_CATEGORIES: dict[str, list[str]] = {
     "비하/혐오": [
@@ -146,6 +245,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 
 # ============ Models ============
@@ -378,6 +478,9 @@ async def startup_event():
         init_db()
         ensure_baseline_moderation_settings()
         get_about_content_payload()
+        _set_cached_projects(
+            sort="latest", platform=None, tag=None, items=get_projects(sort="latest")
+        )
     except Exception as e:
         print(f"⚠️  DB initialization warning: {e}")
 
@@ -405,12 +508,38 @@ def list_projects(
     tag: Optional[str] = None,
 ):
     """프로젝트 목록 조회"""
+    request_started = time.perf_counter()
+    normalized_sort = "popular" if sort == "popular" else "latest"
     try:
-        projects = get_projects(sort=sort, platform=platform, tag=tag)
+        cached_items = _get_cached_projects(
+            sort=normalized_sort, platform=platform, tag=tag
+        )
+        if cached_items is not None:
+            for p in cached_items:
+                p["id"] = str(p["id"])
+                p["author_id"] = str(p["author_id"])
+            elapsed_ms = (time.perf_counter() - request_started) * 1000
+            _record_project_perf(elapsed_ms=elapsed_ms, db_ms=0.0, cache_hit=True)
+            print(
+                f"[perf] /api/projects cache_hit=1 sort={normalized_sort} platform={platform} tag={tag} elapsed_ms={elapsed_ms:.2f}"
+            )
+            return {"items": cached_items, "next_cursor": None}
+
+        db_started = time.perf_counter()
+        projects = get_projects(sort=normalized_sort, platform=platform, tag=tag)
+        db_ms = (time.perf_counter() - db_started) * 1000
+        _set_cached_projects(
+            sort=normalized_sort, platform=platform, tag=tag, items=projects
+        )
         # UUID를 문자열로 변환
         for p in projects:
             p["id"] = str(p["id"])
             p["author_id"] = str(p["author_id"])
+        elapsed_ms = (time.perf_counter() - request_started) * 1000
+        _record_project_perf(elapsed_ms=elapsed_ms, db_ms=db_ms, cache_hit=False)
+        print(
+            f"[perf] /api/projects cache_hit=0 sort={normalized_sort} platform={platform} tag={tag} db_ms={db_ms:.2f} elapsed_ms={elapsed_ms:.2f}"
+        )
         return {"items": projects, "next_cursor": None}
     except Exception as e:
         print(f"Error fetching projects: {e}")
@@ -449,6 +578,7 @@ def create_project_endpoint(project: ProjectCreate):
     new_project = create_project(project.model_dump())
     if not new_project:
         raise HTTPException(status_code=500, detail="프로젝트 생성에 실패했습니다")
+    _invalidate_projects_cache()
     new_project["id"] = str(new_project["id"])
     new_project["author_id"] = str(new_project["author_id"])
     return new_project
@@ -459,6 +589,7 @@ def like_project_endpoint(project_id: str):
     """프로젝트 좋아요"""
     try:
         like_count = like_project(project_id)
+        _invalidate_projects_cache()
         return {"like_count": like_count}
     except Exception as e:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -469,6 +600,7 @@ def unlike_project_endpoint(project_id: str):
     """프로젝트 좋아요 취소"""
     try:
         like_count = unlike_project(project_id)
+        _invalidate_projects_cache()
         return {"like_count": like_count}
     except Exception as e:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -576,6 +708,12 @@ def list_reports(
     return {"items": reports, "total": total}
 
 
+@app.get("/api/admin/perf/projects")
+def get_projects_perf(current_user: dict = Depends(require_admin)):
+    _ = current_user
+    return _project_perf_snapshot()
+
+
 @app.get("/api/admin/action-logs")
 def list_admin_action_logs(
     limit: int = 50, current_user: dict = Depends(require_admin)
@@ -627,6 +765,7 @@ def update_admin_project(
     updated = update_project_admin(project_id, updates)
     if not updated:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    _invalidate_projects_cache()
 
     create_admin_action_log(
         admin_id=current_user["id"],
@@ -651,6 +790,7 @@ def hide_admin_project(
     updated = set_project_status(project_id=project_id, status="hidden")
     if not updated:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    _invalidate_projects_cache()
 
     create_admin_action_log(
         admin_id=current_user["id"],
@@ -675,6 +815,7 @@ def restore_admin_project(
     updated = set_project_status(project_id=project_id, status="published")
     if not updated:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    _invalidate_projects_cache()
 
     create_admin_action_log(
         admin_id=current_user["id"],
@@ -699,6 +840,7 @@ def delete_admin_project(
     updated = set_project_status(project_id=project_id, status="deleted")
     if not updated:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
+    _invalidate_projects_cache()
 
     create_admin_action_log(
         admin_id=current_user["id"],
