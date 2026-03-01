@@ -679,31 +679,6 @@ def get_project_detail(project_id: str):
     return project
 
 
-@app.post("/api/projects")
-def create_project_endpoint(project: ProjectCreate):
-    """프로젝트 생성"""
-    settings = get_effective_moderation_settings()
-    content_for_check = " ".join(
-        [
-            project.title,
-            project.summary,
-            project.description or "",
-        ]
-    )
-    if text_contains_blocked_keyword(content_for_check, settings["blocked_keywords"]):
-        raise HTTPException(
-            status_code=400, detail="금칙어가 포함된 내용은 등록할 수 없습니다"
-        )
-
-    new_project = create_project(project.model_dump())
-    if not new_project:
-        raise HTTPException(status_code=500, detail="프로젝트 생성에 실패했습니다")
-    _invalidate_projects_cache()
-    new_project["id"] = str(new_project["id"])
-    new_project["author_id"] = str(new_project["author_id"])
-    return new_project
-
-
 @app.post("/api/projects/{project_id}/like")
 def like_project_endpoint(project_id: str):
     """프로젝트 좋아요"""
@@ -1455,6 +1430,35 @@ def login(request: LoginRequest):
 async def get_me(current_user: dict = Depends(get_current_user)):
     """현재 사용자 정보"""
     return current_user
+
+
+@app.post("/api/projects")
+def create_project_endpoint(
+    project: ProjectCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    settings = get_effective_moderation_settings()
+    content_for_check = " ".join(
+        [
+            project.title,
+            project.summary,
+            project.description or "",
+        ]
+    )
+    if text_contains_blocked_keyword(content_for_check, settings["blocked_keywords"]):
+        raise HTTPException(
+            status_code=400, detail="금칙어가 포함된 내용은 등록할 수 없습니다"
+        )
+
+    payload = project.model_dump()
+    payload["author_id"] = current_user["id"]
+    new_project = create_project(payload)
+    if not new_project:
+        raise HTTPException(status_code=500, detail="프로젝트 생성에 실패했습니다")
+    _invalidate_projects_cache()
+    new_project["id"] = str(new_project["id"])
+    new_project["author_id"] = str(new_project["author_id"])
+    return new_project
 
 
 @app.patch("/api/me")

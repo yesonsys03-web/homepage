@@ -418,6 +418,10 @@ def set_project_status(project_id: str, status: str):
 
 def create_project(data: dict):
     """프로젝트 생성"""
+    author_id = data.get("author_id")
+    if not author_id:
+        raise ValueError("author_id is required to create project")
+
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -427,7 +431,7 @@ def create_project(data: dict):
                 RETURNING *
             """,
                 (
-                    data.get("author_id", "11111111-1111-1111-1111-111111111111"),
+                    author_id,
                     data["title"],
                     data["summary"],
                     data.get("description"),
