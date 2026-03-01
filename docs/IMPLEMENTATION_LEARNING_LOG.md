@@ -1319,3 +1319,73 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. Google OAuth 가입 경로를 `pending` 상태와 연결
 2. 승인/반려 이벤트 메일 발송 파이프라인 추가
 3. Admin users 탭 캐시 TTL/강제 갱신 정책 세분화
+
+## Session 2026-03-01-03
+
+### 1) Goal
+- Google OAuth를 실제 운영 가능한 흐름으로 연결하고, 시크릿은 서버 환경변수에만 두면서 Admin에서 런타임 제어(활성화/URI) 가능한 구조를 구축한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - Google OAuth 클라이언트 생성 후 실제 연결 가이드 필요
+  - 시크릿을 UI/코드에 직접 저장하지 않는 운영 방식 요구
+- 제약 조건:
+  - 비밀값(`GOOGLE_CLIENT_SECRET`)은 절대 Git/프론트에 노출 금지
+  - 기존 Admin 정책 화면 흐름을 크게 깨지 않고 통합
+
+### 3) Design Decisions
+- OAuth 시크릿은 환경변수(`GOOGLE_CLIENT_ID/SECRET`)로만 유지하고, Admin 화면에는 비민감 런타임 설정만 노출했다.
+- Google OAuth 실행 전 조건을 `enabled + redirect URI 존재 + client id/secret 존재`로 통합 검증했다.
+- OAuth 준비 상태는 별도 health endpoint로 시각화해 운영자가 즉시 상태를 확인할 수 있게 했다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `users`에 OAuth 필드 추가: `provider`, `provider_user_id`, `email_verified`
+    - `oauth_runtime_settings` 테이블 추가
+    - Google 계정 upsert 함수 추가: `create_or_update_google_user`, `get_user_by_provider`
+  - `server/main.py`
+    - Google OAuth 엔드포인트
+      - `GET /api/auth/google/start`
+      - `GET /api/auth/google/callback`
+    - Admin OAuth 설정/상태 엔드포인트
+      - `GET /api/admin/integrations/oauth`
+      - `PATCH /api/admin/integrations/oauth`
+      - `GET /api/admin/integrations/oauth/health`
+    - 런타임 설정 + 시크릿 존재 여부를 합친 가용성 검증 로직 추가
+- 프론트
+  - `src/lib/api.ts`
+    - `getGoogleAuthUrl`, `getMeWithToken` 추가
+    - Admin OAuth 설정 API 메서드 3종 추가
+  - `src/App.tsx`
+    - `oauth_token`/`oauth_status` 쿼리 복원 처리
+  - `src/components/screens/LoginScreen.tsx`
+    - Google 로그인 버튼 추가
+  - `src/components/screens/RegisterScreen.tsx`
+    - Google 가입 버튼 추가
+  - `src/components/screens/AdminScreen.tsx`
+    - 정책 탭에 OAuth 운영 카드 추가
+    - 활성화 토글, Redirect URI 입력/저장, health 배지 및 client id/secret 존재 여부 표시
+  - `server/.env.example`
+    - OAuth 환경변수 샘플 항목 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- OAuth 시크릿 비노출 원칙(서버 env only)을 지키면서 운영 제어 UI를 분리했다.
+- 로컬 환경에서 Google OAuth 시작/콜백/토큰 복원까지 E2E 흐름을 점검 가능한 상태가 됐다.
+
+#### 아쉬운 점
+- 아직 메일 발송 파이프라인(승인/반려 통지)은 미구현이다.
+
+#### 다음 액션
+1. 승인/반려 메일 템플릿 + 발송 채널(Resend/Postmark) 연결
+2. Admin OAuth 카드에 URI 유효성 프리검증(https/http, path) 추가
+3. Google OAuth 오류 코드별 사용자 메시지 세분화
