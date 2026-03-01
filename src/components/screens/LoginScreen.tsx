@@ -100,6 +100,9 @@ export function LoginScreen({ onSwitchToRegister, onClose }: LoginScreenProps) {
           >
             Google로 로그인
           </Button>
+          <p className="text-xs text-[#B8C3E6] text-center">
+            Google 계정으로 가입한 경우 비밀번호 로그인 대신 Google 로그인을 사용하세요.
+          </p>
         </form>
 
         <p className="text-center text-[#B8C3E6] mt-6">

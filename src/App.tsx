@@ -9,8 +9,13 @@ import { api } from './lib/api'
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
 function AppContent() {
-  const initialProjectId = new URL(window.location.href).searchParams.get('project')
-  const [currentScreen, setCurrentScreen] = useState<Screen>(initialProjectId ? 'detail' : 'home')
+  const initialUrl = new URL(window.location.href)
+  const initialProjectId = initialUrl.searchParams.get('project')
+  const initialOauthToken = initialUrl.searchParams.get('oauth_token')
+  const initialOauthStatus = initialUrl.searchParams.get('oauth_status')
+  const [currentScreen, setCurrentScreen] = useState<Screen>(
+    initialOauthToken || initialOauthStatus ? 'login' : initialProjectId ? 'detail' : 'home'
+  )
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId)
   const [submitEditingProjectId, setSubmitEditingProjectId] = useState<string | null>(null)
   const { user, login, logout, isLoading } = useAuth()
@@ -33,15 +38,20 @@ function AppContent() {
       return
     }
 
-    url.searchParams.delete('oauth_token')
-    url.searchParams.delete('oauth_status')
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+    const clearOAuthQuery = () => {
+      const currentUrl = new URL(window.location.href)
+      currentUrl.searchParams.delete('oauth_token')
+      currentUrl.searchParams.delete('oauth_status')
+      window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
+    }
 
     if (oauthStatus === 'pending') {
+      clearOAuthQuery()
       window.alert('Google 가입이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.')
       return
     }
     if (oauthStatus === 'rejected') {
+      clearOAuthQuery()
       window.alert('가입이 반려된 계정입니다. 관리자에게 문의해 주세요.')
       return
     }
@@ -56,10 +66,12 @@ function AppContent() {
         const me = await api.getMeWithToken(oauthToken)
         if (cancelled) return
         login(oauthToken, me)
+        clearOAuthQuery()
         setCurrentScreen('home')
       } catch (error) {
         console.error('Google OAuth session restore failed:', error)
         if (!cancelled) {
+          clearOAuthQuery()
           setCurrentScreen('login')
           window.alert(error instanceof Error ? error.message : 'Google 로그인에 실패했습니다.')
         }

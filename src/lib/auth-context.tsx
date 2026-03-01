@@ -25,9 +25,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       try {
         const me = await api.getMe()
+        const latestToken = localStorage.getItem(TOKEN_KEY)
+        if (latestToken !== storedToken) {
+          return
+        }
         setUser(me)
         localStorage.setItem(USER_KEY, JSON.stringify(me))
       } catch {
+        const latestToken = localStorage.getItem(TOKEN_KEY)
+        if (latestToken !== storedToken) {
+          return
+        }
         localStorage.removeItem(TOKEN_KEY)
         localStorage.removeItem(USER_KEY)
         setToken(null)
