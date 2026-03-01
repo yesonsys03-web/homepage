@@ -16,6 +16,18 @@ export function LoginScreen({ onSwitchToRegister, onClose }: LoginScreenProps) {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
+  const handleGoogleLogin = async () => {
+    setError("")
+    setLoading(true)
+    try {
+      const authUrl = await api.getGoogleAuthUrl()
+      window.location.href = authUrl
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Google 로그인에 실패했습니다")
+      setLoading(false)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
@@ -78,6 +90,15 @@ export function LoginScreen({ onSwitchToRegister, onClose }: LoginScreenProps) {
             className="w-full bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg py-6"
           >
             {loading ? "로그인 중..." : "로그인"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={loading}
+            className="w-full border-[#111936] text-[#F4F7FF] hover:bg-[#111936]"
+            onClick={() => void handleGoogleLogin()}
+          >
+            Google로 로그인
           </Button>
         </form>
 

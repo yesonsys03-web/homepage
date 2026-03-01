@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { HomeScreen, ProjectDetailScreen, SubmitScreen, ProfileScreen, AdminScreen, ExploreScreen, ChallengesScreen, AboutScreen } from './components/screens'
 import { LoginScreen } from './components/screens/LoginScreen'
 import { RegisterScreen } from './components/screens/RegisterScreen'
 import { AuthProvider } from './lib/auth-context'
 import { useAuth } from './lib/use-auth'
+import { api } from './lib/api'
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -12,7 +13,7 @@ function AppContent() {
   const [currentScreen, setCurrentScreen] = useState<Screen>(initialProjectId ? 'detail' : 'home')
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId)
   const [submitEditingProjectId, setSubmitEditingProjectId] = useState<string | null>(null)
-  const { user, logout, isLoading } = useAuth()
+  const { user, login, logout, isLoading } = useAuth()
 
   const syncProjectQuery = (projectId: string | null) => {
     const url = new URL(window.location.href)
@@ -23,6 +24,53 @@ function AppContent() {
     }
     window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }
+
+  useEffect(() => {
+    const url = new URL(window.location.href)
+    const oauthToken = url.searchParams.get('oauth_token')
+    const oauthStatus = url.searchParams.get('oauth_status')
+    if (!oauthToken && !oauthStatus) {
+      return
+    }
+
+    url.searchParams.delete('oauth_token')
+    url.searchParams.delete('oauth_status')
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
+
+    if (oauthStatus === 'pending') {
+      window.alert('Google 가입이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.')
+      return
+    }
+    if (oauthStatus === 'rejected') {
+      window.alert('가입이 반려된 계정입니다. 관리자에게 문의해 주세요.')
+      return
+    }
+
+    if (!oauthToken) {
+      return
+    }
+
+    let cancelled = false
+    const restoreOAuthSession = async () => {
+      try {
+        const me = await api.getMeWithToken(oauthToken)
+        if (cancelled) return
+        login(oauthToken, me)
+        setCurrentScreen('home')
+      } catch (error) {
+        console.error('Google OAuth session restore failed:', error)
+        if (!cancelled) {
+          setCurrentScreen('login')
+          window.alert(error instanceof Error ? error.message : 'Google 로그인에 실패했습니다.')
+        }
+      }
+    }
+
+    void restoreOAuthSession()
+    return () => {
+      cancelled = true
+    }
+  }, [login])
 
   const handleLoginSwitch = () => setCurrentScreen('login')
   const handleRegisterSwitch = () => setCurrentScreen('register')

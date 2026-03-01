@@ -9,6 +9,8 @@ import {
   type AdminActionLog,
   type AdminManagedProject,
   type AdminManagedUser,
+  type AdminOAuthHealth,
+  type AdminOAuthSettings,
   type AboutContent,
   type ModerationPolicy,
 } from "@/lib/api"
@@ -150,6 +152,7 @@ function actionToText(actionType: string): string {
   if (actionType === "project_restored") return "프로젝트 복구"
   if (actionType === "project_deleted") return "프로젝트 삭제"
   if (actionType === "policy_updated") return "정책 수정"
+  if (actionType === "oauth_settings_updated") return "OAuth 설정 수정"
   if (actionType === "about_content_updated") return "About 페이지 수정"
   return actionType
 }
@@ -201,6 +204,8 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [loadingProjects, setLoadingProjects] = useState(true)
   const [loadingPolicies, setLoadingPolicies] = useState(true)
   const [savingPolicies, setSavingPolicies] = useState(false)
+  const [loadingOAuthSettings, setLoadingOAuthSettings] = useState(true)
+  const [savingOAuthSettings, setSavingOAuthSettings] = useState(false)
   const [activeStatus, setActiveStatus] = useState<ReportStatus>("all")
   const [reportPage, setReportPage] = useState(0)
   const [reportTotal, setReportTotal] = useState(0)
@@ -214,6 +219,10 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [autoHideThreshold, setAutoHideThreshold] = useState(3)
   const [policyUpdatedBy, setPolicyUpdatedBy] = useState<string | null>(null)
   const [policyUpdatedAt, setPolicyUpdatedAt] = useState<string | null>(null)
+  const [oauthEnabled, setOauthEnabled] = useState(false)
+  const [oauthGoogleRedirectUri, setOauthGoogleRedirectUri] = useState("")
+  const [oauthFrontendRedirectUri, setOauthFrontendRedirectUri] = useState("")
+  const [oauthHealth, setOauthHealth] = useState<AdminOAuthHealth | null>(null)
   const csvImportInputRef = useRef<HTMLInputElement | null>(null)
   const [projectStatusFilter, setProjectStatusFilter] = useState<ProjectStatus>("all")
   const [projectSearchQuery, setProjectSearchQuery] = useState("")
@@ -377,6 +386,30 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const loadOAuthSettings = async () => {
+    setLoadingOAuthSettings(true)
+    try {
+      const [settings, health] = await Promise.all([
+        api.getAdminOAuthSettings(),
+        api.getAdminOAuthHealth(),
+      ])
+      const normalized: AdminOAuthSettings = {
+        google_oauth_enabled: settings.google_oauth_enabled,
+        google_redirect_uri: settings.google_redirect_uri || "",
+        google_frontend_redirect_uri: settings.google_frontend_redirect_uri || "",
+      }
+      setOauthEnabled(normalized.google_oauth_enabled)
+      setOauthGoogleRedirectUri(normalized.google_redirect_uri)
+      setOauthFrontendRedirectUri(normalized.google_frontend_redirect_uri)
+      setOauthHealth(health)
+    } catch (error) {
+      console.error("Failed to fetch oauth settings:", error)
+      setOauthHealth(null)
+    } finally {
+      setLoadingOAuthSettings(false)
+    }
+  }
+
   const loadAboutContent = async (force: boolean = false) => {
     const hasCache = !force && api.hasAdminTabCache("pages")
     if (!hasCache) {
@@ -450,6 +483,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         break
       case "policies":
         loadPolicies()
+        loadOAuthSettings()
         break
       case "actions":
         loadActionLogs()
@@ -896,6 +930,31 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const handleSaveOAuthSettings = async () => {
+    if (!oauthGoogleRedirectUri.trim() || !oauthFrontendRedirectUri.trim()) {
+      window.alert("Google Redirect URI와 Frontend Redirect URI를 입력해주세요")
+      return
+    }
+
+    setSavingOAuthSettings(true)
+    try {
+      await api.updateAdminOAuthSettings({
+        google_oauth_enabled: oauthEnabled,
+        google_redirect_uri: oauthGoogleRedirectUri.trim(),
+        google_frontend_redirect_uri: oauthFrontendRedirectUri.trim(),
+      })
+      const health = await api.getAdminOAuthHealth()
+      setOauthHealth(health)
+      await loadActionLogs(true)
+      window.alert("OAuth 설정이 저장되었습니다")
+    } catch (error) {
+      console.error("Failed to save oauth settings:", error)
+      window.alert(error instanceof Error ? error.message : "OAuth 설정 저장에 실패했습니다")
+    } finally {
+      setSavingOAuthSettings(false)
+    }
+  }
+
   const handleSaveAboutContent = async () => {
     const reason = aboutReason.trim()
     if (!reason) {
@@ -969,7 +1028,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         await loadAboutContent(true)
         break
       case "policies":
-        await loadPolicies(true)
+        await Promise.all([loadPolicies(true), loadOAuthSettings()])
         break
       case "actions":
         await loadActionLogs(true)
@@ -1542,6 +1601,65 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                   <div className="text-[#B8C3E6]">정책 로딩 중...</div>
                 ) : (
                   <>
+                    <div className="rounded-lg border border-[#111936] bg-[#0B1020] p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-[#F4F7FF] font-semibold">Google OAuth 운영 설정</h3>
+                          <p className="text-xs text-[#B8C3E6] mt-1">비밀키는 서버 환경변수로 관리하고, 이 화면에서는 런타임 토글/리다이렉트만 관리합니다.</p>
+                        </div>
+                        <Badge variant={oauthHealth?.is_ready ? "secondary" : "destructive"}>
+                          {oauthHealth?.is_ready ? "준비됨" : "미완료"}
+                        </Badge>
+                      </div>
+                      {loadingOAuthSettings ? (
+                        <p className="text-xs text-[#B8C3E6]">OAuth 설정을 불러오는 중...</p>
+                      ) : (
+                        <>
+                          <label className="flex items-center gap-2 text-sm text-[#F4F7FF]">
+                            <input
+                              type="checkbox"
+                              checked={oauthEnabled}
+                              onChange={(event) => setOauthEnabled(event.target.checked)}
+                            />
+                            Google OAuth 활성화
+                          </label>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div>
+                              <p className="text-xs text-[#B8C3E6] mb-1">Google Redirect URI</p>
+                              <input
+                                value={oauthGoogleRedirectUri}
+                                onChange={(event) => setOauthGoogleRedirectUri(event.target.value)}
+                                placeholder="https://api.your-domain.com/api/auth/google/callback"
+                                className="w-full bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                              />
+                            </div>
+                            <div>
+                              <p className="text-xs text-[#B8C3E6] mb-1">Frontend Redirect URI</p>
+                              <input
+                                value={oauthFrontendRedirectUri}
+                                onChange={(event) => setOauthFrontendRedirectUri(event.target.value)}
+                                placeholder="https://app.your-domain.com"
+                                className="w-full bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                              />
+                            </div>
+                          </div>
+                          <div className="text-xs text-[#B8C3E6] space-y-1">
+                            <p>Client ID: {oauthHealth?.has_client_id ? "설정됨" : "누락"}</p>
+                            <p>Client Secret: {oauthHealth?.has_client_secret ? "설정됨" : "누락"}</p>
+                          </div>
+                          <div>
+                            <Button
+                              onClick={handleSaveOAuthSettings}
+                              disabled={savingOAuthSettings}
+                              className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020]"
+                            >
+                              {savingOAuthSettings ? "저장 중..." : "OAuth 설정 저장"}
+                            </Button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
                     <div>
                       <h3 className="text-[#F4F7FF] font-semibold mb-2">기본 금칙 카테고리 (자동 적용)</h3>
                       <p className="text-xs text-[#B8C3E6] mb-3">아래 목록은 시스템 기본 규칙으로 항상 적용됩니다.</p>

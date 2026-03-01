@@ -130,6 +130,18 @@ export interface AboutContent {
   updated_at?: string
 }
 
+export interface AdminOAuthSettings {
+  google_oauth_enabled: boolean
+  google_redirect_uri: string
+  google_frontend_redirect_uri: string
+}
+
+export interface AdminOAuthHealth extends AdminOAuthSettings {
+  has_client_id: boolean
+  has_client_secret: boolean
+  is_ready: boolean
+}
+
 type AdminReportsResponse = { items: Report[]; total: number }
 type AdminListResponse<T> = { items: T[] }
 type ProjectsResponse = { items: Project[] }
@@ -426,6 +438,16 @@ export const api = {
     return { ...data, user: data.user } as { access_token: string; user: User }
   },
 
+  getGoogleAuthUrl: async () => {
+    const res = await fetch(`${API_BASE}/api/auth/google/start`)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "Google OAuth 시작에 실패했습니다" }))
+      throw new Error(error.detail || "Google OAuth 시작에 실패했습니다")
+    }
+    const data = await res.json() as { auth_url: string }
+    return data.auth_url
+  },
+
   login: async (email: string, password: string) => {
     const res = await fetch(`${API_BASE}/api/auth/login`, {
       method: "POST",
@@ -444,6 +466,19 @@ export const api = {
 
   getMe: async () => {
     const res = await authFetch(`${API_BASE}/api/me`)
+    return res.json() as Promise<User>
+  },
+
+  getMeWithToken: async (token: string) => {
+    const res = await fetch(`${API_BASE}/api/me`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "세션 확인에 실패했습니다" }))
+      throw new Error(error.detail || "세션 확인에 실패했습니다")
+    }
     return res.json() as Promise<User>
   },
 
@@ -806,6 +841,25 @@ export const api = {
       body: JSON.stringify({ blocked_keywords, auto_hide_report_threshold }),
     })
     return res.json() as Promise<ModerationPolicy>
+  },
+
+  getAdminOAuthSettings: async () => {
+    const res = await authFetch(`${API_BASE}/api/admin/integrations/oauth`)
+    return res.json() as Promise<AdminOAuthSettings>
+  },
+
+  getAdminOAuthHealth: async () => {
+    const res = await authFetch(`${API_BASE}/api/admin/integrations/oauth/health`)
+    return res.json() as Promise<AdminOAuthHealth>
+  },
+
+  updateAdminOAuthSettings: async (payload: AdminOAuthSettings) => {
+    const res = await authFetch(`${API_BASE}/api/admin/integrations/oauth`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+    return res.json() as Promise<AdminOAuthSettings>
   },
 
   updateAboutContent: async (payload: AboutContent & { reason: string }) => {
