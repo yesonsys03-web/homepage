@@ -1,13 +1,18 @@
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional, Mapping, Sequence, Any
 import re
 import unicodedata
 import time
-from urllib.parse import urlparse
+import os
+import json
+import secrets
+from urllib.parse import urlparse, urlencode, quote
+from urllib.request import Request, urlopen
 from threading import Lock
 from collections import deque
 
@@ -25,7 +30,9 @@ from db import (
     get_reports_count,
     update_report,
     create_user,
+    create_or_update_google_user,
     get_user_by_email,
+    get_user_by_provider,
     get_user_by_nickname,
     get_user_by_id,
     update_user_profile,
@@ -44,6 +51,8 @@ from db import (
     reject_user,
     get_moderation_settings,
     update_moderation_settings,
+    get_oauth_runtime_settings,
+    update_oauth_runtime_settings,
     get_site_content,
     upsert_site_content,
 )
@@ -311,6 +320,15 @@ PROFILE_NICKNAME_MIN_LEN = 2
 PROFILE_NICKNAME_MAX_LEN = 24
 PROFILE_BIO_MAX_LEN = 300
 
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.getenv(
+    "GOOGLE_REDIRECT_URI", "http://localhost:8000/api/auth/google/callback"
+)
+GOOGLE_FRONTEND_REDIRECT_URI = os.getenv(
+    "GOOGLE_FRONTEND_REDIRECT_URI", "http://localhost:5173"
+)
+
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -331,6 +349,12 @@ class AdminUserLimitRequest(BaseModel):
 class AdminPolicyUpdateRequest(BaseModel):
     blocked_keywords: list[str]
     auto_hide_report_threshold: int
+
+
+class AdminOAuthSettingsUpdateRequest(BaseModel):
+    google_oauth_enabled: bool
+    google_redirect_uri: Optional[str] = None
+    google_frontend_redirect_uri: Optional[str] = None
 
 
 class AdminProjectUpdateRequest(BaseModel):
@@ -383,6 +407,74 @@ def require_action_reason(reason: Optional[str]) -> str:
     if not normalized_reason:
         raise HTTPException(status_code=400, detail="처리 사유(reason)는 필수입니다")
     return normalized_reason
+
+
+def get_effective_oauth_settings() -> dict[str, Any]:
+    runtime = get_oauth_runtime_settings() or {}
+    enabled = bool(runtime.get("google_oauth_enabled", False))
+    google_redirect_uri = (
+        runtime.get("google_redirect_uri") or GOOGLE_REDIRECT_URI or ""
+    ).strip()
+    google_frontend_redirect_uri = (
+        runtime.get("google_frontend_redirect_uri")
+        or GOOGLE_FRONTEND_REDIRECT_URI
+        or ""
+    ).strip()
+    return {
+        "google_oauth_enabled": enabled,
+        "google_redirect_uri": google_redirect_uri,
+        "google_frontend_redirect_uri": google_frontend_redirect_uri,
+    }
+
+
+def ensure_google_oauth_available() -> dict[str, Any]:
+    settings = get_effective_oauth_settings()
+    if not settings["google_oauth_enabled"]:
+        raise HTTPException(
+            status_code=403, detail="Google OAuth가 비활성화되어 있습니다"
+        )
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth 설정이 누락되었습니다. GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET를 확인해 주세요",
+        )
+    if (
+        not settings["google_redirect_uri"]
+        or not settings["google_frontend_redirect_uri"]
+    ):
+        raise HTTPException(
+            status_code=503,
+            detail="Google OAuth 리다이렉트 URI 설정이 누락되었습니다",
+        )
+    return settings
+
+
+def build_google_nickname(profile: dict[str, Any]) -> str:
+    preferred_name = (profile.get("name") or "").strip()
+    if preferred_name:
+        normalized = re.sub(r"\s+", " ", preferred_name)
+        return normalized[:PROFILE_NICKNAME_MAX_LEN]
+
+    email = (profile.get("email") or "").strip()
+    local_part = email.split("@")[0] if "@" in email else "user"
+    local_part = re.sub(r"[^a-zA-Z0-9_.-]", "", local_part)
+    return (local_part or "user")[:PROFILE_NICKNAME_MAX_LEN]
+
+
+def ensure_unique_nickname(base_nickname: str) -> str:
+    trimmed_base = (base_nickname or "user").strip()[:PROFILE_NICKNAME_MAX_LEN]
+    if not get_user_by_nickname(trimmed_base):
+        return trimmed_base
+
+    for _ in range(10):
+        suffix = secrets.token_hex(2)
+        max_base = PROFILE_NICKNAME_MAX_LEN - len(suffix) - 1
+        candidate = f"{trimmed_base[:max_base]}-{suffix}"
+        if not get_user_by_nickname(candidate):
+            return candidate
+
+    fallback = f"user-{secrets.token_hex(4)}"
+    return fallback[:PROFILE_NICKNAME_MAX_LEN]
 
 
 def get_about_content_payload() -> dict:
@@ -773,6 +865,71 @@ def get_projects_perf(current_user: dict = Depends(require_admin)):
     return _project_perf_snapshot()
 
 
+@app.get("/api/admin/integrations/oauth")
+def get_admin_oauth_settings(current_user: dict = Depends(require_admin)):
+    _ = current_user
+    settings = get_effective_oauth_settings()
+    return {
+        "google_oauth_enabled": settings["google_oauth_enabled"],
+        "google_redirect_uri": settings["google_redirect_uri"],
+        "google_frontend_redirect_uri": settings["google_frontend_redirect_uri"],
+    }
+
+
+@app.patch("/api/admin/integrations/oauth")
+def update_admin_oauth_settings(
+    payload: AdminOAuthSettingsUpdateRequest,
+    current_user: dict = Depends(require_admin),
+):
+    google_redirect_uri = (payload.google_redirect_uri or "").strip() or None
+    google_frontend_redirect_uri = (
+        payload.google_frontend_redirect_uri or ""
+    ).strip() or None
+
+    updated = update_oauth_runtime_settings(
+        google_oauth_enabled=payload.google_oauth_enabled,
+        google_redirect_uri=google_redirect_uri,
+        google_frontend_redirect_uri=google_frontend_redirect_uri,
+    )
+    if not updated:
+        raise HTTPException(status_code=500, detail="OAuth 설정 저장에 실패했습니다")
+
+    create_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="oauth_settings_updated",
+        target_type="moderation_settings",
+        target_id="11111111-1111-1111-1111-111111111111",
+        reason="OAuth 런타임 설정 변경",
+    )
+
+    settings = get_effective_oauth_settings()
+    return {
+        "google_oauth_enabled": settings["google_oauth_enabled"],
+        "google_redirect_uri": settings["google_redirect_uri"],
+        "google_frontend_redirect_uri": settings["google_frontend_redirect_uri"],
+    }
+
+
+@app.get("/api/admin/integrations/oauth/health")
+def get_admin_oauth_health(current_user: dict = Depends(require_admin)):
+    _ = current_user
+    settings = get_effective_oauth_settings()
+    has_client_id = bool(GOOGLE_CLIENT_ID)
+    has_client_secret = bool(GOOGLE_CLIENT_SECRET)
+    return {
+        "google_oauth_enabled": settings["google_oauth_enabled"],
+        "has_client_id": has_client_id,
+        "has_client_secret": has_client_secret,
+        "google_redirect_uri": settings["google_redirect_uri"],
+        "google_frontend_redirect_uri": settings["google_frontend_redirect_uri"],
+        "is_ready": settings["google_oauth_enabled"]
+        and has_client_id
+        and has_client_secret
+        and bool(settings["google_redirect_uri"])
+        and bool(settings["google_frontend_redirect_uri"]),
+    }
+
+
 @app.get("/api/admin/action-logs")
 def list_admin_action_logs(
     limit: int = 50, current_user: dict = Depends(require_admin)
@@ -1096,6 +1253,118 @@ def update_report_endpoint(
 
 
 # ============ Auth API ============
+
+
+@app.get("/api/auth/google/start")
+def google_auth_start():
+    oauth_settings = ensure_google_oauth_available()
+
+    state = create_access_token(
+        data={"type": "google_oauth_state", "nonce": secrets.token_hex(12)}
+    )
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": oauth_settings["google_redirect_uri"],
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "prompt": "select_account",
+        "access_type": "offline",
+    }
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)
+    return {"auth_url": auth_url}
+
+
+@app.get("/api/auth/google/callback")
+def google_auth_callback(code: str, state: str):
+    oauth_settings = ensure_google_oauth_available()
+
+    decoded_state = decode_token(state)
+    if not decoded_state or decoded_state.get("type") != "google_oauth_state":
+        raise HTTPException(status_code=400, detail="유효하지 않은 OAuth state입니다")
+
+    token_request_body = urlencode(
+        {
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": oauth_settings["google_redirect_uri"],
+            "grant_type": "authorization_code",
+        }
+    ).encode("utf-8")
+
+    try:
+        token_request = Request(
+            "https://oauth2.googleapis.com/token",
+            data=token_request_body,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            method="POST",
+        )
+        with urlopen(token_request, timeout=10) as response:
+            token_payload = json.loads(response.read().decode("utf-8"))
+    except Exception as error:
+        raise HTTPException(
+            status_code=502, detail="Google 토큰 교환에 실패했습니다"
+        ) from error
+
+    id_token = token_payload.get("id_token")
+    if not id_token:
+        raise HTTPException(status_code=400, detail="Google id_token이 누락되었습니다")
+
+    try:
+        profile_request = Request(
+            f"https://oauth2.googleapis.com/tokeninfo?id_token={quote(id_token)}",
+            method="GET",
+        )
+        with urlopen(profile_request, timeout=10) as response:
+            profile_payload = json.loads(response.read().decode("utf-8"))
+    except Exception as error:
+        raise HTTPException(
+            status_code=502, detail="Google 프로필 검증에 실패했습니다"
+        ) from error
+
+    email = (profile_payload.get("email") or "").strip().lower()
+    provider_user_id = (profile_payload.get("sub") or "").strip()
+    email_verified = profile_payload.get("email_verified") in ("true", True)
+    if not email or not provider_user_id:
+        raise HTTPException(
+            status_code=400, detail="Google 계정 정보가 올바르지 않습니다"
+        )
+
+    existing_google_user = get_user_by_provider("google", provider_user_id)
+    if existing_google_user:
+        nickname_for_upsert = existing_google_user["nickname"]
+    else:
+        nickname_for_upsert = ensure_unique_nickname(
+            build_google_nickname(profile_payload)
+        )
+
+    user = create_or_update_google_user(
+        email=email,
+        nickname=nickname_for_upsert,
+        provider_user_id=provider_user_id,
+        email_verified=email_verified,
+    )
+    if not user:
+        raise HTTPException(
+            status_code=500, detail="Google 로그인 계정 생성에 실패했습니다"
+        )
+
+    frontend_base = oauth_settings["google_frontend_redirect_uri"].rstrip("/")
+    user_status = user.get("status") or "active"
+    if user_status != "active":
+        return RedirectResponse(
+            url=f"{frontend_base}/?oauth_status={user_status}",
+            status_code=302,
+        )
+
+    access_token = create_access_token(
+        data={"sub": str(user["id"]), "email": user["email"]}
+    )
+    return RedirectResponse(
+        url=f"{frontend_base}/?oauth_token={quote(access_token)}",
+        status_code=302,
+    )
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)

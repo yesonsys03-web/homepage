@@ -56,6 +56,9 @@ def init_db():
                     avatar_url VARCHAR(500),
                     role VARCHAR(20) DEFAULT 'user',
                     status VARCHAR(20) DEFAULT 'active',
+                    provider VARCHAR(20) DEFAULT 'local',
+                    provider_user_id VARCHAR(255),
+                    email_verified BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
@@ -137,6 +140,15 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS oauth_runtime_settings (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    google_oauth_enabled BOOLEAN DEFAULT FALSE,
+                    google_redirect_uri TEXT,
+                    google_frontend_redirect_uri TEXT,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
             # 기본 사용자 생성 (테스트용)
             cur.execute(
@@ -160,12 +172,31 @@ def init_db():
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'active'
             """)
             cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS provider VARCHAR(20) DEFAULT 'local'
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_user_id VARCHAR(255)
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE
+            """)
+            cur.execute("""
                 UPDATE users SET status = 'active' WHERE status IS NULL
+            """)
+            cur.execute("""
+                UPDATE users SET provider = 'local' WHERE provider IS NULL
             """)
             cur.execute(
                 """
                 INSERT INTO moderation_settings (id, blocked_keywords, auto_hide_report_threshold)
                 VALUES (1, '{}', 3)
+                ON CONFLICT (id) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO oauth_runtime_settings (id, google_oauth_enabled)
+                VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
                 """
             )
@@ -190,6 +221,11 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_projects_tags_gin
                 ON projects USING GIN (tags)
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_provider_user_id
+                ON users (provider, provider_user_id)
+                WHERE provider_user_id IS NOT NULL
             """)
 
             conn.commit()
@@ -736,6 +772,46 @@ def update_moderation_settings(
             return cur.fetchone()
 
 
+def get_oauth_runtime_settings():
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, google_oauth_enabled, google_redirect_uri, google_frontend_redirect_uri, updated_at
+                FROM oauth_runtime_settings
+                WHERE id = 1
+                """
+            )
+            return cur.fetchone()
+
+
+def update_oauth_runtime_settings(
+    google_oauth_enabled: bool,
+    google_redirect_uri: Optional[str],
+    google_frontend_redirect_uri: Optional[str],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE oauth_runtime_settings
+                SET google_oauth_enabled = %s,
+                    google_redirect_uri = %s,
+                    google_frontend_redirect_uri = %s,
+                    updated_at = NOW()
+                WHERE id = 1
+                RETURNING id, google_oauth_enabled, google_redirect_uri, google_frontend_redirect_uri, updated_at
+                """,
+                (
+                    google_oauth_enabled,
+                    google_redirect_uri,
+                    google_frontend_redirect_uri,
+                ),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
 def get_site_content(content_key: str):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -777,7 +853,7 @@ def create_user(email: str, nickname: str, password_hash: str, status: str = "pe
                 """
                 INSERT INTO users (email, nickname, password_hash, status)
                 VALUES (%s, %s, %s, %s)
-                RETURNING id, email, nickname, role, status, avatar_url, bio, created_at
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
             """,
                 (email, nickname, password_hash, status),
             )
@@ -791,11 +867,102 @@ def get_user_by_email(email: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, password_hash, role, status, avatar_url, bio, created_at
+                SELECT id, email, nickname, password_hash, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
                 FROM users WHERE email = %s
             """,
                 (email,),
             )
+            return cur.fetchone()
+
+
+def get_user_by_provider(provider: str, provider_user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, email, nickname, password_hash, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                FROM users
+                WHERE provider = %s AND provider_user_id = %s
+                """,
+                (provider, provider_user_id),
+            )
+            return cur.fetchone()
+
+
+def create_or_update_google_user(
+    email: str,
+    nickname: str,
+    provider_user_id: str,
+    email_verified: bool,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                FROM users
+                WHERE provider = 'google' AND provider_user_id = %s
+                """,
+                (provider_user_id,),
+            )
+            provider_user = cur.fetchone()
+            if provider_user:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET email = %s,
+                        email_verified = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                    """,
+                    (email, email_verified, provider_user["id"]),
+                )
+                conn.commit()
+                return cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            email_user = cur.fetchone()
+            if email_user:
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET provider = 'google',
+                        provider_user_id = %s,
+                        email_verified = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                    """,
+                    (provider_user_id, email_verified, email_user["id"]),
+                )
+                conn.commit()
+                return cur.fetchone()
+
+            cur.execute(
+                """
+                INSERT INTO users (
+                    email,
+                    nickname,
+                    role,
+                    status,
+                    provider,
+                    provider_user_id,
+                    email_verified
+                )
+                VALUES (%s, %s, 'user', 'pending', 'google', %s, %s)
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                """,
+                (email, nickname, provider_user_id, email_verified),
+            )
+            conn.commit()
             return cur.fetchone()
 
 
@@ -805,7 +972,7 @@ def get_user_by_nickname(nickname: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
                 FROM users WHERE nickname = %s
             """,
                 (nickname,),
@@ -819,7 +986,7 @@ def get_user_by_id(user_id: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
                 FROM users WHERE id = %s
             """,
                 (user_id,),
@@ -846,7 +1013,7 @@ def update_user_profile(user_id: str, updates: dict):
                 UPDATE users
                 SET {", ".join(fields_to_update)}, updated_at = NOW()
                 WHERE id = %s
-                RETURNING id, email, nickname, role, status, avatar_url, bio, created_at
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
             """
             params.append(user_id)
             cur.execute(query, params)
