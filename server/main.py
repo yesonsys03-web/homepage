@@ -7,6 +7,7 @@ from typing import Optional, Mapping, Sequence, Any
 import re
 import unicodedata
 import time
+from urllib.parse import urlparse
 from threading import Lock
 from collections import deque
 
@@ -25,7 +26,9 @@ from db import (
     update_report,
     create_user,
     get_user_by_email,
+    get_user_by_nickname,
     get_user_by_id,
+    update_user_profile,
     get_user_projects,
     get_admin_projects,
     update_project_admin,
@@ -294,6 +297,17 @@ class RegisterRequest(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+
+
+class ProfileUpdateRequest(BaseModel):
+    nickname: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+
+PROFILE_NICKNAME_MIN_LEN = 2
+PROFILE_NICKNAME_MAX_LEN = 24
+PROFILE_BIO_MAX_LEN = 300
 
 
 class TokenResponse(BaseModel):
@@ -690,6 +704,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         "email": user["email"],
         "nickname": user["nickname"],
         "role": user["role"],
+        "avatar_url": user.get("avatar_url"),
+        "bio": user.get("bio"),
     }
 
 
@@ -1075,6 +1091,8 @@ def register(request: RegisterRequest):
             "email": user["email"],
             "nickname": user["nickname"],
             "role": user["role"],
+            "avatar_url": user.get("avatar_url"),
+            "bio": user.get("bio"),
         },
     )
 
@@ -1105,6 +1123,8 @@ def login(request: LoginRequest):
             "email": user["email"],
             "nickname": user["nickname"],
             "role": user["role"],
+            "avatar_url": user.get("avatar_url"),
+            "bio": user.get("bio"),
         },
     )
 
@@ -1113,6 +1133,72 @@ def login(request: LoginRequest):
 async def get_me(current_user: dict = Depends(get_current_user)):
     """현재 사용자 정보"""
     return current_user
+
+
+@app.patch("/api/me")
+async def update_me(
+    payload: ProfileUpdateRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="변경할 프로필 필드가 없습니다")
+
+    if "nickname" in updates:
+        nickname = (updates.get("nickname") or "").strip()
+        if not nickname:
+            raise HTTPException(
+                status_code=400, detail="닉네임은 비어 있을 수 없습니다"
+            )
+        if len(nickname) < PROFILE_NICKNAME_MIN_LEN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"닉네임은 {PROFILE_NICKNAME_MIN_LEN}자 이상이어야 합니다",
+            )
+        if len(nickname) > PROFILE_NICKNAME_MAX_LEN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"닉네임은 {PROFILE_NICKNAME_MAX_LEN}자를 초과할 수 없습니다",
+            )
+        existing = get_user_by_nickname(nickname)
+        if existing and str(existing["id"]) != current_user["id"]:
+            raise HTTPException(status_code=400, detail="이미 사용 중인 닉네임입니다")
+        updates["nickname"] = nickname
+
+    if "bio" in updates:
+        bio = (updates.get("bio") or "").strip()
+        if len(bio) > PROFILE_BIO_MAX_LEN:
+            raise HTTPException(
+                status_code=400,
+                detail=f"소개는 {PROFILE_BIO_MAX_LEN}자를 초과할 수 없습니다",
+            )
+        updates["bio"] = bio or None
+
+    if "avatar_url" in updates:
+        avatar_url = (updates.get("avatar_url") or "").strip()
+        if avatar_url:
+            parsed = urlparse(avatar_url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="아바타 URL은 http/https 형식이어야 합니다",
+                )
+            updates["avatar_url"] = avatar_url
+        else:
+            updates["avatar_url"] = None
+
+    updated_user = update_user_profile(current_user["id"], updates)
+    if not updated_user:
+        raise HTTPException(status_code=500, detail="프로필 수정에 실패했습니다")
+
+    return {
+        "id": str(updated_user["id"]),
+        "email": updated_user["email"],
+        "nickname": updated_user["nickname"],
+        "role": updated_user["role"],
+        "avatar_url": updated_user.get("avatar_url"),
+        "bio": updated_user.get("bio"),
+    }
 
 
 @app.get("/api/me/projects")

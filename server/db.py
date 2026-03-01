@@ -738,7 +738,7 @@ def create_user(email: str, nickname: str, password_hash: str):
                 """
                 INSERT INTO users (email, nickname, password_hash)
                 VALUES (%s, %s, %s)
-                RETURNING id, email, nickname, role, created_at
+                RETURNING id, email, nickname, role, avatar_url, bio, created_at
             """,
                 (email, nickname, password_hash),
             )
@@ -785,4 +785,31 @@ def get_user_by_id(user_id: str):
             """,
                 (user_id,),
             )
+            return cur.fetchone()
+
+
+def update_user_profile(user_id: str, updates: dict):
+    allowed_fields = ["nickname", "bio", "avatar_url"]
+    fields_to_update = []
+    params = []
+
+    for field in allowed_fields:
+        if field in updates:
+            fields_to_update.append(f"{field} = %s")
+            params.append(updates[field])
+
+    if not fields_to_update:
+        return None
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+                UPDATE users
+                SET {", ".join(fields_to_update)}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, email, nickname, role, avatar_url, bio, created_at
+            """
+            params.append(user_id)
+            cur.execute(query, params)
+            conn.commit()
             return cur.fetchone()
