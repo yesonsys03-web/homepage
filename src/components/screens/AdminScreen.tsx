@@ -143,6 +143,8 @@ function actionToText(actionType: string): string {
   if (actionType === "report_reviewing") return "검토 시작"
   if (actionType === "user_limited") return "사용자 제한"
   if (actionType === "user_unlimited") return "사용자 제한 해제"
+  if (actionType === "user_approved") return "가입 승인"
+  if (actionType === "user_rejected") return "가입 반려"
   if (actionType === "project_updated") return "프로젝트 수정"
   if (actionType === "project_hidden") return "프로젝트 숨김"
   if (actionType === "project_restored") return "프로젝트 복구"
@@ -170,6 +172,20 @@ function getUserLimitState(user: AdminManagedUser): {
   }
 
   return { isLimited: false, label: "만료" }
+}
+
+function getUserApprovalState(user: AdminManagedUser): {
+  tone: "destructive" | "secondary"
+  label: string
+} {
+  const status = user.status || "active"
+  if (status === "pending") {
+    return { tone: "destructive", label: "승인 대기" }
+  }
+  if (status === "rejected") {
+    return { tone: "destructive", label: "반려" }
+  }
+  return { tone: "secondary", label: "활성" }
 }
 
 export function AdminScreen({ onNavigate }: ScreenProps) {
@@ -717,6 +733,29 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const handleApproveUser = async (userId: string) => {
+    try {
+      await api.approveUser(userId)
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to approve user:", error)
+    }
+  }
+
+  const handleRejectUser = async (userId: string) => {
+    const reason = window.prompt("반려 사유를 입력하세요", "가입 정보 확인 필요")
+    if (!reason || !reason.trim()) {
+      return
+    }
+
+    try {
+      await api.rejectUser(userId, reason.trim())
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to reject user:", error)
+    }
+  }
+
   const toggleProjectSelection = (projectId: string) => {
     setSelectedProjectIds((prev) =>
       prev.includes(projectId)
@@ -1152,15 +1191,17 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                     <tbody>
                       {users.map((user) => {
                         const limitState = getUserLimitState(user)
+                        const approvalState = getUserApprovalState(user)
                         return (
                           <tr key={user.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
                             <td className="p-4 text-[#F4F7FF]">{user.nickname}</td>
                             <td className="p-4 text-[#B8C3E6]">{user.email || "-"}</td>
                             <td className="p-4 text-[#B8C3E6]">{user.role}</td>
                             <td className="p-4">
-                              <Badge variant={limitState.isLimited ? "destructive" : "secondary"}>
-                                {limitState.label}
+                              <Badge variant={approvalState.tone}>
+                                {approvalState.label}
                               </Badge>
+                              <p className="text-xs text-[#B8C3E6] mt-2">제재: {limitState.label}</p>
                             </td>
                             <td className="p-4 text-[#B8C3E6]">
                               {user.limited_until ? new Date(user.limited_until).toLocaleString("ko-KR") : "-"}
@@ -1169,8 +1210,25 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                               <div className="flex gap-1">
                                 <Button
                                   size="sm"
+                                  className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-xs"
+                                  disabled={user.role === "admin" || user.status !== "pending"}
+                                  onClick={() => handleApproveUser(user.id)}
+                                >
+                                  승인
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs"
+                                  disabled={user.role === "admin" || user.status !== "pending"}
+                                  onClick={() => handleRejectUser(user.id)}
+                                >
+                                  반려
+                                </Button>
+                                <Button
+                                  size="sm"
                                   className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
-                                  disabled={user.role === "admin" || limitState.isLimited}
+                                  disabled={user.role === "admin" || limitState.isLimited || user.status !== "active"}
                                   onClick={() => handleLimitUser(user.id)}
                                 >
                                   24h 제한

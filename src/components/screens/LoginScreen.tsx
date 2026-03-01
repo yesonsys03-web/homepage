@@ -23,6 +23,9 @@ export function LoginScreen({ onSwitchToRegister, onClose }: LoginScreenProps) {
 
     try {
       const result = await api.login(email, password)
+      if (!result?.access_token || !result?.user) {
+        throw new Error("로그인 응답이 올바르지 않습니다")
+      }
       login(result.access_token, result.user)
       if (onClose) onClose()
     } catch (err) {

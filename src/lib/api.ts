@@ -1,6 +1,6 @@
 import type { User } from "./auth-types"
 
-const API_BASE = "http://localhost:8000"
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000"
 
 function getToken(): string | null {
   if (typeof window !== "undefined") {
@@ -65,6 +65,7 @@ export interface AdminManagedUser {
   email: string
   nickname: string
   role: string
+  status?: "pending" | "active" | "rejected" | string
   created_at: string
   limited_until?: string | null
   limited_reason?: string | null
@@ -415,6 +416,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, nickname, password }),
     })
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "회원가입에 실패했습니다" }))
+      throw new Error(error.detail || "회원가입에 실패했습니다")
+    }
+
     const data = await res.json()
     return { ...data, user: data.user } as { access_token: string; user: User }
   },
@@ -425,6 +432,12 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email, password }),
     })
+
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "로그인에 실패했습니다" }))
+      throw new Error(error.detail || "로그인에 실패했습니다")
+    }
+
     const data = await res.json()
     return { ...data, user: data.user } as { access_token: string; user: User }
   },
@@ -725,6 +738,22 @@ export const api = {
   unlimitUser: async (userId: string) => {
     const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/limit`, {
       method: "DELETE",
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  approveUser: async (userId: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/approve`, {
+      method: "POST",
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  rejectUser: async (userId: string, reason: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/reject`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
     })
     return res.json() as Promise<AdminManagedUser>
   },

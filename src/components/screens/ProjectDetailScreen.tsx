@@ -120,11 +120,17 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     const content = commentText.trim()
     if (!content || isSubmittingComment) return
 
+    if (!user) {
+      alert("댓글 작성은 로그인 후 이용할 수 있습니다.")
+      onNavigate?.("login")
+      return
+    }
+
     const optimisticComment: Comment = {
       id: `temp-${Date.now()}`,
       project_id: targetProjectId,
-      author_id: "me",
-      author_nickname: "나",
+      author_id: user.id,
+      author_nickname: user.nickname,
       content,
       like_count: 0,
       status: "visible",
@@ -459,16 +465,20 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
             <textarea 
               className="w-full bg-[#161F42] border border-[#111936] rounded-lg p-4 text-[#F4F7FF] placeholder-[#B8C3E6]/50 focus:outline-none focus:ring-2 focus:ring-[#23D5AB]"
               rows={4}
-              placeholder="댓글을 입력하세요..."
+              placeholder={user ? "댓글을 입력하세요..." : "로그인 후 댓글을 작성할 수 있습니다."}
               value={commentText}
               onChange={(e) => setCommentText(e.target.value)}
+              disabled={!user}
             />
+            {!user ? (
+              <p className="text-xs text-[#FFB547] mt-2">댓글 작성은 로그인 후 가능합니다.</p>
+            ) : null}
             <Button 
               className="mt-2 bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020]"
               onClick={handleCommentSubmit}
-              disabled={isSubmittingComment}
+              disabled={isSubmittingComment || !user}
             >
-              {isSubmittingComment ? "작성 중..." : "댓글 작성"}
+              {isSubmittingComment ? "작성 중..." : user ? "댓글 작성" : "로그인 필요"}
             </Button>
           </div>
 

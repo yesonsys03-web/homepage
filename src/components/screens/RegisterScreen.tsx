@@ -36,6 +36,17 @@ export function RegisterScreen({ onSwitchToLogin, onClose }: RegisterScreenProps
 
     try {
       const result = await api.register(email, nickname, password)
+      if (!result?.access_token || !result?.user) {
+        throw new Error("회원가입 응답이 올바르지 않습니다")
+      }
+
+      if (result.user.status === "pending") {
+        setError("회원가입이 접수되었습니다. 관리자 승인 후 로그인할 수 있습니다.")
+        setPassword("")
+        setConfirmPassword("")
+        return
+      }
+
       login(result.access_token, result.user)
       if (onClose) onClose()
     } catch (err) {
