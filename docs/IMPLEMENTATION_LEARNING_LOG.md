@@ -1564,3 +1564,55 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. `main.py`의 OAuth/profile payload를 별도 Pydantic 모델로 분리해 캐스팅 의존도를 줄인다.
 2. `AdminScreen`의 React hook dependency 경고 2건을 정리해 프론트 lint 경고를 0으로 맞춘다.
+
+## Session 2026-03-02-03
+
+### 1) Goal
+- FastAPI 라이프사이클 처리를 `on_event`에서 `lifespan` 방식으로 전환해 deprecated 경고를 제거하고 운영 안정성을 높인다.
+
+### 2) Inputs
+- 변경 파일
+  - `server/main.py`
+- 관찰된 문제
+  - 테스트 실행 시 `@app.on_event("startup")`, `@app.on_event("shutdown")` deprecation 경고 반복 출력
+- 제약 조건
+  - 기존 startup/shutdown 동작(초기화, 로그 정리 루프 시작/종료)은 그대로 유지
+
+### 3) Design Decisions
+- FastAPI 앱 생성 시 `lifespan` 컨텍스트를 명시해 시작/종료 처리를 한 경로로 통합했다.
+- 기존 `startup_event()`/`shutdown_event()` 로직은 재사용하고, 데코레이터만 제거해 리스크를 최소화했다.
+
+### 4) Implementation Notes
+- `server/main.py`
+  - `asynccontextmanager`를 사용한 `lifespan(app)` 함수 추가
+  - `app = FastAPI(..., lifespan=lifespan)`으로 전환
+  - `@app.on_event("startup")`, `@app.on_event("shutdown")` 제거
+  - 종료 시 백그라운드 cleanup task를 안전하게 cancel/await 처리 유지
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- 왜 필요한가
+  - `on_event`는 이미 deprecated 경고가 나오는 구간이라, 시간이 지날수록 유지보수 부담이 커진다.
+  - `lifespan`은 최신 FastAPI 표준이라 시작/종료 자원 관리를 일관되게 유지하기 쉽다.
+  - 특히 백그라운드 작업(관리자 로그 정리 루프) 같은 리소스는 종료 정리가 누락되면 장애 원인이 되기 쉬워 통합 관리가 중요하다.
+- 안 하면 어떤 문제가 생기나
+  - 경고가 계속 누적되어 실제 오류 신호를 묻어버릴 수 있다.
+  - 프레임워크 업그레이드 시 호환성 이슈가 커져 한 번에 큰 수정이 필요해질 수 있다.
+  - 시작/종료 처리 코드가 분산되면 future 변경 시 정리 누락(메모리/태스크 누수) 가능성이 올라간다.
+
+### 6) Validation
+- `uv run basedpyright`: 통과 (0 errors, 0 warnings)
+- `uv run ruff check .`: 통과
+- `uv run pytest`: 통과 (5 passed)
+- 결과: 기존 startup/shutdown 동작은 유지되면서 deprecation 경고 제거 확인
+
+### 7) Outcome
+#### 잘된 점
+- 라이프사이클 처리 경로가 최신 표준(`lifespan`)으로 정리되어 향후 유지보수성이 좋아졌다.
+- 운영 핵심 루틴(초기화/cleanup loop)의 실행-종료 흐름이 더 명확해졌다.
+
+#### 아쉬운 점
+- 현재는 `startup_event`/`shutdown_event` 함수를 래핑해 전환했기 때문에, 후속 단계에서 라이프사이클 로직을 모듈 단위로 더 분리할 여지가 있다.
+
+#### 다음 액션
+1. lifespan 내부 초기화 항목을 함수별로 분리해 테스트 가능성을 높인다.
+2. 운영 로그(cleanup 실행 횟수/삭제 건수) 메트릭을 별도 관찰 포인트로 노출한다.
