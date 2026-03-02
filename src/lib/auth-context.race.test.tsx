@@ -1,5 +1,5 @@
 import type { ContextType } from "react"
-import { useContext } from "react"
+import { useContext, useEffect } from "react"
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -44,7 +44,11 @@ function Probe() {
   if (!ctx) {
     throw new Error("AuthContext is unavailable")
   }
-  latestAuthContext = ctx
+
+  useEffect(() => {
+    latestAuthContext = ctx
+  }, [ctx])
+
   return <div data-testid="nickname">{ctx.user?.nickname ?? "none"}</div>
 }
 

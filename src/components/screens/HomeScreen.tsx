@@ -1,9 +1,12 @@
 import { useEffect, useState, type CSSProperties } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { LogoSplitHeading } from "@/components/LogoSplitHeading"
+import { TopNav } from "@/components/TopNav"
+import { HeroBanner } from "@/components/HeroBanner"
+import { FilterChips } from "@/components/FilterChips"
+import { ProjectMeta } from "@/components/ProjectMeta"
 import { api, type Project } from "@/lib/api"
 import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
@@ -77,28 +80,28 @@ function ProjectCard({
         )}
       </div>
       <CardContent className="p-4">
-        <h3 className="font-display text-lg font-semibold text-[#F4F7FF] mb-1 truncate">{project.title}</h3>
-        <p className="text-sm text-[#B8C3E6] mb-3 line-clamp-2">{project.summary}</p>
-        <div className="flex flex-wrap gap-1 mb-3">
-          {project.tags.map(tag => (
-            <Badge key={tag} variant="secondary" className="bg-[#111936] text-[#B8C3E6] text-xs">
-              {tag}
-            </Badge>
-          ))}
-        </div>
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-[#B8C3E6]">by {project.author_nickname}</span>
-          <div className="flex gap-3 text-[#B8C3E6]">
-            <span>❤️ {project.like_count}</span>
-            <span>💬 {project.comment_count}</span>
-          </div>
-        </div>
+        <ProjectMeta
+          title={project.title}
+          summary={project.summary}
+          tags={project.tags}
+          author={project.author_nickname}
+          likes={project.like_count}
+          comments={project.comment_count}
+        />
       </CardContent>
     </Card>
   )
 }
 
-const filterChips = ["전체", "Web", "App", "AI", "Tool", "Game", "和学习"]
+const filterChipItems = [
+  { id: "전체", label: "전체" },
+  { id: "Web", label: "Web" },
+  { id: "App", label: "App" },
+  { id: "AI", label: "AI" },
+  { id: "Tool", label: "Tool" },
+  { id: "Game", label: "Game" },
+  { id: "和学习", label: "和学习" },
+]
 
 export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   const [projects, setProjects] = useState<ProjectWithMeta[]>([])
@@ -142,37 +145,10 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
-          <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.('home')} className="text-[#23D5AB] font-medium">Home</button>
-            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
-            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
-            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
-          </nav>
-          <Button onClick={() => onNavigate?.('submit')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
-            작품 올리기
-          </Button>
-        </div>
-      </header>
+      <TopNav active="home" onNavigate={onNavigate} />
 
-      <section className="relative py-20 px-4 overflow-hidden">
-        <picture className="absolute inset-0">
-          <source media="(max-width: 767px)" srcSet={heroMobileImage} />
-          <source media="(max-width: 1279px)" srcSet={heroTabletImage} />
-          <img
-            src={heroMasterImage}
-            alt=""
-            aria-hidden="true"
-            className="h-full w-full object-cover opacity-70"
-          />
-        </picture>
-        <div className="absolute inset-0 bg-gradient-to-br from-[#0B1020]/39 via-[#0B1020]/35 to-[#111936]/28" />
-        <div className="hero-orb absolute -left-24 top-6 h-64 w-64 rounded-full bg-[#23D5AB]/20 blur-3xl" />
-        <div className="hero-orb absolute -right-20 bottom-4 h-56 w-56 rounded-full bg-[#FF5D8F]/20 blur-3xl" style={{ animationDelay: "-2s" }} />
-        <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
-        <div className="max-w-7xl mx-auto relative z-10 flex flex-col items-center">
+      <HeroBanner
+        title={
           <LogoSplitHeading
             as="h2"
             className="w-full font-display text-5xl md:text-6xl font-bold text-[#F4F7FF] mb-6 text-left"
@@ -180,15 +156,37 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
             line2="실험도 작품이다."
             line2ClassName="text-[#23D5AB]"
           />
-          <Button size="lg" onClick={() => onNavigate?.('explore')} className="reveal-up bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6" style={{ "--reveal-delay": "220ms" } as CSSProperties}>
-            지금 시작하기
-          </Button>
-          <p className="reveal-up text-xl text-[#B8C3E6] mt-8 max-w-2xl text-center" style={{ "--reveal-delay": "320ms" } as CSSProperties}>
+        }
+        description={
+          <>
             바이브코더들의 놀이터에서 당신의 작품을 공유하고,<br />
             서로의 바이브를 피드백하세요.
-          </p>
-        </div>
-      </section>
+          </>
+        }
+        cta={
+          <Button
+            size="lg"
+            onClick={() => onNavigate?.("explore")}
+            className="reveal-up bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-lg px-8 py-6 duration-100"
+            style={{ "--reveal-delay": "220ms" } as CSSProperties}
+          >
+            지금 시작하기
+          </Button>
+        }
+        background={
+          <>
+            <picture className="absolute inset-0">
+              <source media="(max-width: 767px)" srcSet={heroMobileImage} />
+              <source media="(max-width: 1279px)" srcSet={heroTabletImage} />
+              <img src={heroMasterImage} alt="" aria-hidden="true" className="h-full w-full object-cover opacity-70" />
+            </picture>
+            <div className="absolute inset-0 bg-gradient-to-br from-[#0B1020]/39 via-[#0B1020]/35 to-[#111936]/28" />
+            <div className="hero-orb absolute -left-24 top-6 h-64 w-64 rounded-full bg-[#23D5AB]/20 blur-3xl" />
+            <div className="hero-orb absolute -right-20 bottom-4 h-56 w-56 rounded-full bg-[#FF5D8F]/20 blur-3xl" style={{ animationDelay: "-2s" }} />
+            <div className="absolute inset-0 opacity-5" style={{ backgroundImage: 'url("data:image/svg+xml,%3Csvg viewBox=\'0 0 400 400\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cfilter id=\'noiseFilter\'%3E%3CfeTurbulence type=\'fractalNoise\' baseFrequency=\'0.9\' numOctaves=\'3\' stitchTiles=\'stitch\'/%3E%3C/filter%3E%3Crect width=\'100%25\' height=\'100%25\' filter=\'url(%23noiseFilter)\'/%3E%3C/svg%3E")' }} />
+          </>
+        }
+      />
 
       <section className="py-8 px-4 border-y border-[#111936]">
         <div className="max-w-7xl mx-auto">
@@ -210,19 +208,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
       <section className="py-8 px-4">
         <div className="max-w-7xl mx-auto">
           <div className="flex gap-2 mb-6 flex-wrap">
-            {filterChips.map(chip => (
-              <button
-                key={chip}
-                onClick={() => setFilter(chip)}
-                className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-                  filter === chip
-                    ? "bg-[#23D5AB] text-[#0B1020]" 
-                    : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#111936] hover:text-[#F4F7FF]"
-                }`}
-              >
-                {chip}
-              </button>
-            ))}
+            <FilterChips items={filterChipItems} value={filter} onChange={setFilter} />
             <select 
               value={sort}
               onChange={(e) => setSort(e.target.value as "latest" | "popular")}
@@ -234,7 +220,18 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
           </div>
 
           {loading ? (
-            <div className="text-center py-20 text-[#B8C3E6]">로딩 중...</div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {Array.from({ length: 6 }).map((_, idx) => (
+                <div key={`home-skeleton-${idx}`} className="rounded-xl bg-[#161F42] border border-[#111936] overflow-hidden animate-pulse">
+                  <div className="aspect-video bg-[#111936]" />
+                  <div className="p-4 space-y-2">
+                    <div className="h-4 bg-[#111936] rounded w-2/3" />
+                    <div className="h-3 bg-[#111936] rounded w-full" />
+                    <div className="h-3 bg-[#111936] rounded w-5/6" />
+                  </div>
+                </div>
+              ))}
+            </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {projects.map((project, index) => (

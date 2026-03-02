@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { TopNav } from "@/components/TopNav"
 import {
   api,
   type AdminActionLog,
@@ -245,7 +246,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [aboutFaqInput, setAboutFaqInput] = useState("")
   const prefetchedTabsRef = useRef<Set<AdminTabKey>>(new Set())
 
-  const loadReports = async (page: number = 0, force: boolean = false) => {
+  const loadReports = useCallback(async (page: number = 0, force: boolean = false) => {
     const status = activeStatus === "all" ? undefined : activeStatus
     const offset = page * REPORT_PAGE_SIZE
     const hasCache = !force && api.hasAdminTabCache("reports", {
@@ -285,7 +286,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     } finally {
       setLoadingReports(false)
     }
-  }
+  }, [activeStatus])
 
   const loadActionLogs = async (force: boolean = false) => {
     const hasCache = !force && api.hasAdminTabCache("actions", { limit: 100 })
@@ -489,13 +490,13 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         loadActionLogs()
         break
     }
-  }, [activeTab])
+  }, [activeTab, loadReports])
 
   useEffect(() => {
     if (activeTab === "reports") {
       loadReports(0)
     }
-  }, [activeStatus])
+  }, [activeStatus, activeTab, loadReports])
 
   useEffect(() => {
     const nextTabs: AdminTabKey[] = ["users", "content", "actions", "policies", "pages"]
@@ -1046,22 +1047,16 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">
-            VibeCoder <span className="text-[#FF5D8F]">Admin</span>
-          </h1>
-          <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.("home")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
-            <button onClick={() => onNavigate?.("explore")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
-            <button onClick={() => onNavigate?.("challenges")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
-            <button onClick={() => onNavigate?.("about")} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
-          </nav>
+      <TopNav
+        active="home"
+        onNavigate={onNavigate}
+        titleSuffix={<span className="text-[#FF5D8F]">Admin</span>}
+        rightSlot={
           <Button onClick={logout} className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
             로그아웃
           </Button>
-        </div>
-      </header>
+        }
+      />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">

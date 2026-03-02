@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react"
 
 import { Button } from "@/components/ui/button"
+import { TopNav } from "@/components/TopNav"
+import { HeroBanner } from "@/components/HeroBanner"
 import { api, type AboutContent } from "@/lib/api"
 import aboutMasterImage from "../../../img/About_master.webp"
 import aboutTabletImage from "../../../img/About_tablet.webp"
@@ -78,50 +80,43 @@ export function AboutScreen({ onNavigate }: ScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
-          <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
-            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
-            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
-            <button onClick={() => onNavigate?.('about')} className="text-[#23D5AB] font-medium">About</button>
-          </nav>
-          <Button onClick={() => onNavigate?.('submit')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
-            작품 올리기
-          </Button>
-        </div>
-      </header>
+      <TopNav active="about" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <section className="relative text-center py-16 overflow-hidden rounded-2xl border border-[#111936]">
-          <picture className="absolute inset-0">
-            <source media="(max-width: 767px)" srcSet={aboutMobileImage} />
-            <source media="(max-width: 1279px)" srcSet={aboutTabletImage} />
-            <img
-              src={aboutMasterImage}
-              alt=""
-              aria-hidden="true"
-              className="h-full w-full object-cover opacity-65"
-              style={{ filter: "brightness(1.6)" }}
-            />
-          </picture>
-          <div className="absolute inset-0 bg-gradient-to-b from-[#0B1020]/39 via-[#0B1020]/46 to-[#0B1020]/55" />
-          <div className="relative z-10 px-4">
-            <h2 className="font-display text-4xl md:text-5xl font-bold text-[#F4F7FF] mb-6">
-              {content.hero_title}<br />
+        <HeroBanner
+          className="text-center py-16 rounded-2xl border border-[#111936]"
+          title={
+            <>
+              {content.hero_title}
+              <br />
               <span className="text-[#23D5AB]">{content.hero_highlight}</span>
-            </h2>
-            <p className="text-[#B8C3E6] text-lg max-w-2xl mx-auto mb-8">
-              {content.hero_description}
-            </p>
+            </>
+          }
+          description={content.hero_description}
+          cta={
             <div className="flex gap-4 justify-center">
-              <Button onClick={() => onNavigate?.('explore')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold text-lg px-8">
+              <Button onClick={() => onNavigate?.("explore")} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold text-lg px-8">
                 시작하기
               </Button>
             </div>
-          </div>
-        </section>
+          }
+          background={
+            <>
+              <picture className="absolute inset-0">
+                <source media="(max-width: 767px)" srcSet={aboutMobileImage} />
+                <source media="(max-width: 1279px)" srcSet={aboutTabletImage} />
+                <img
+                  src={aboutMasterImage}
+                  alt=""
+                  aria-hidden="true"
+                  className="h-full w-full object-cover opacity-65"
+                  style={{ filter: "brightness(1.6)" }}
+                />
+              </picture>
+              <div className="absolute inset-0 bg-gradient-to-b from-[#0B1020]/39 via-[#0B1020]/46 to-[#0B1020]/55" />
+            </>
+          }
+        />
 
         <section className="py-12 grid grid-cols-1 md:grid-cols-3 gap-6">
           {content.values.map((value) => (

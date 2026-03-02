@@ -4,6 +4,11 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
+import { TopNav } from "@/components/TopNav"
+import { CommentComposer } from "@/components/CommentComposer"
+import { CommentList } from "@/components/CommentList"
+import { ReportModal } from "@/components/ReportModal"
+import { Toast } from "@/components/Toast"
 import { api, type Project, type Comment } from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
@@ -54,6 +59,9 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   const [likeCount, setLikeCount] = useState(0)
   const [commentText, setCommentText] = useState("")
   const [isSubmittingComment, setIsSubmittingComment] = useState(false)
+  const [reportCommentId, setReportCommentId] = useState<string | null>(null)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [toastTone, setToastTone] = useState<"info" | "success" | "error">("info")
   const [shareMenuOpen, setShareMenuOpen] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
   const targetProjectId = projectId ?? "1"
@@ -120,6 +128,13 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     const content = commentText.trim()
     if (!content || isSubmittingComment) return
 
+    const softBlockedWords = ["병신", "멍청", "쓰레기", "죽어", "혐오"]
+    const hasSoftBlockedWord = softBlockedWords.some((word) => content.includes(word))
+    if (hasSoftBlockedWord) {
+      const proceed = window.confirm("공격적으로 보일 수 있는 표현이 포함되어 있어요. 이대로 제출할까요?")
+      if (!proceed) return
+    }
+
     if (!user) {
       alert("댓글 작성은 로그인 후 이용할 수 있습니다.")
       onNavigate?.("login")
@@ -149,9 +164,21 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
       console.error("Comment failed:", error)
       setComments((prev) => prev.filter((comment) => comment.id !== optimisticComment.id))
       setCommentText(content)
+      setToastTone("error")
+      setToastMessage("댓글 등록에 실패했습니다. 잠시 후 다시 시도해주세요.")
     } finally {
       setIsSubmittingComment(false)
     }
+  }
+
+  const handleReportComment = async (commentId: string, reason: string) => {
+    await api.reportComment(commentId, {
+      target_type: "comment",
+      target_id: commentId,
+      reason,
+    })
+    setToastTone("success")
+    setToastMessage("신고가 접수되었습니다.")
   }
 
   useEffect(() => {
@@ -162,10 +189,22 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     return () => window.clearTimeout(timer)
   }, [shareCopied])
 
+  useEffect(() => {
+    if (!toastMessage) return
+    const timer = window.setTimeout(() => setToastMessage(null), 2200)
+    return () => window.clearTimeout(timer)
+  }, [toastMessage])
+
   if (loading || !project) {
     return (
-      <div className="min-h-screen bg-[#0B1020] flex items-center justify-center">
-        <p className="text-[#B8C3E6]">로딩 중...</p>
+      <div className="min-h-screen bg-[#0B1020] px-4 py-10">
+        <div className="max-w-7xl mx-auto animate-pulse space-y-4">
+          <div className="h-10 w-1/2 bg-[#111936] rounded" />
+          <div className="h-4 w-1/3 bg-[#111936] rounded" />
+          <div className="aspect-video bg-[#111936] rounded-xl" />
+          <div className="h-24 bg-[#111936] rounded-xl" />
+          <div className="h-24 bg-[#111936] rounded-xl" />
+        </div>
       </div>
     )
   }
@@ -257,24 +296,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      {/* Top Navigation */}
-      <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
-          <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
-            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
-            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
-            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
-          </nav>
-          <Button 
-            className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold"
-            onClick={() => onNavigate?.('submit')}
-          >
-            작품 올리기
-          </Button>
-        </div>
-      </header>
+      <TopNav active="home" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         {/* Project Header */}
@@ -458,54 +480,32 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
             댓글 {comments.length}
           </h3>
           
-          {/* Comment Input */}
-          <div className="mb-6">
-            <p className="text-sm text-[#B8C3E6] mb-2">좋 있었던 포인트 한 가지를 남겨보세요</p>
-            <p className="text-xs text-[#B8C3E6] mb-3">존중 기반 피드백만 허용</p>
-            <textarea 
-              className="w-full bg-[#161F42] border border-[#111936] rounded-lg p-4 text-[#F4F7FF] placeholder-[#B8C3E6]/50 focus:outline-none focus:ring-2 focus:ring-[#23D5AB]"
-              rows={4}
-              placeholder={user ? "댓글을 입력하세요..." : "로그인 후 댓글을 작성할 수 있습니다."}
-              value={commentText}
-              onChange={(e) => setCommentText(e.target.value)}
-              disabled={!user}
-            />
-            {!user ? (
-              <p className="text-xs text-[#FFB547] mt-2">댓글 작성은 로그인 후 가능합니다.</p>
-            ) : null}
-            <Button 
-              className="mt-2 bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020]"
-              onClick={handleCommentSubmit}
-              disabled={isSubmittingComment || !user}
-            >
-              {isSubmittingComment ? "작성 중..." : user ? "댓글 작성" : "로그인 필요"}
-            </Button>
-          </div>
+          <CommentComposer
+            value={commentText}
+            onChange={setCommentText}
+            onSubmit={() => void handleCommentSubmit()}
+            disabled={!user}
+            isSubmitting={isSubmittingComment}
+          />
 
-          {/* Comment List */}
-          <div className="space-y-4">
-            {comments.map(comment => (
-              <Card key={comment.id} className="bg-[#161F42] border-0">
-                <CardContent className="p-4">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <strong className="text-[#F4F7FF]">{comment.author_nickname}</strong>
-                      <span className="text-[#B8C3E6] text-sm ml-2">{formatDate(comment.created_at)}</span>
-                    </div>
-                    <button className="text-[#B8C3E6] hover:text-[#FF6B6B] text-sm">
-                      신고
-                    </button>
-                  </div>
-                  <p className="text-[#F4F7FF]">{comment.content}</p>
-                  <button className="text-[#B8C3E6] text-sm mt-2 hover:text-[#23D5AB]">
-                    ❤️ {comment.like_count}
-                  </button>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+          <CommentList
+            comments={comments}
+            onReport={(commentId) => setReportCommentId(commentId)}
+            formatDate={formatDate}
+          />
         </section>
       </main>
+
+      <ReportModal
+        open={!!reportCommentId}
+        onClose={() => setReportCommentId(null)}
+        onSubmit={async (reason) => {
+          if (!reportCommentId) return
+          await handleReportComment(reportCommentId, reason)
+        }}
+      />
+
+      {toastMessage ? <Toast message={toastMessage} tone={toastTone} /> : null}
     </div>
   )
 }

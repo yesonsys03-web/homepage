@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { TopNav } from "@/components/TopNav"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -54,20 +55,7 @@ const challenges = [
 export function ChallengesScreen({ onNavigate }: ScreenProps) {
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
-          <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
-            <button onClick={() => onNavigate?.('explore')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Explore</button>
-            <button onClick={() => onNavigate?.('challenges')} className="text-[#23D5AB] font-medium">Challenges</button>
-            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
-          </nav>
-          <Button onClick={() => onNavigate?.('submit')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
-            작품 올리기
-          </Button>
-        </div>
-      </header>
+      <TopNav active="challenges" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="text-center mb-12">

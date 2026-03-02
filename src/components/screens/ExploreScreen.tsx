@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react"
-import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
+import { TopNav } from "@/components/TopNav"
+import { FilterChips } from "@/components/FilterChips"
+import { ProjectMeta } from "@/components/ProjectMeta"
+import { Button } from "@/components/ui/button"
 import { api, type Project } from "@/lib/api"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
@@ -61,20 +63,7 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
-      <header className="sticky top-0 z-50 bg-[#0B1020]/95 backdrop-blur-sm border-b border-[#111936]">
-        <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
-          <h1 className="font-display text-2xl font-bold text-[#F4F7FF]">VibeCoder</h1>
-          <nav className="flex gap-6">
-            <button onClick={() => onNavigate?.('home')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Home</button>
-            <button onClick={() => onNavigate?.('explore')} className="text-[#23D5AB] font-medium">Explore</button>
-            <button onClick={() => onNavigate?.('challenges')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">Challenges</button>
-            <button onClick={() => onNavigate?.('about')} className="text-[#B8C3E6] hover:text-[#F4F7FF] transition-colors">About</button>
-          </nav>
-          <Button onClick={() => onNavigate?.('submit')} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
-            작품 올리기
-          </Button>
-        </div>
-      </header>
+      <TopNav active="explore" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-8">
@@ -98,26 +87,21 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
         </div>
 
         {/* Categories */}
-        <div className="flex gap-3 mb-8 overflow-x-auto pb-2">
-          {categories.map((cat) => (
-            <button
-              key={cat.id}
-              className={`px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
-                cat.id === category
-                  ? "bg-[#23D5AB] text-[#0B1020]"
-                  : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1f2a52]"
-              }`}
-              onClick={() => setCategory(cat.id)}
-            >
-              {cat.label}
-            </button>
-          ))}
-        </div>
+        <FilterChips items={categories} value={category} onChange={setCategory} className="flex gap-3 mb-8 overflow-x-auto pb-2" />
 
         {/* Projects Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {loading ? (
-            <div className="text-[#B8C3E6]">로딩 중...</div>
+            Array.from({ length: 6 }).map((_, idx) => (
+              <div key={`explore-skeleton-${idx}`} className="rounded-xl bg-[#161F42] border border-[#111936] overflow-hidden animate-pulse">
+                <div className="aspect-video bg-[#111936]" />
+                <div className="p-4 space-y-2">
+                  <div className="h-4 bg-[#111936] rounded w-2/3" />
+                  <div className="h-3 bg-[#111936] rounded w-full" />
+                  <div className="h-3 bg-[#111936] rounded w-5/6" />
+                </div>
+              </div>
+            ))
           ) : (
             projects.map((project) => (
             <Card key={project.id} onClick={() => onOpenProject?.(project.id)} className="bg-[#161F42] border-[#111936] overflow-hidden hover:border-[#23D5AB]/50 transition-colors cursor-pointer">
@@ -140,22 +124,14 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
                 )}
               </div>
               <CardContent className="p-4">
-                <div className="flex gap-2 mb-2">
-                  {project.tags.slice(0, 2).map((tag) => (
-                    <Badge key={tag} variant="secondary" className="bg-[#0B1020] text-[#B8C3E6] text-xs">
-                      {tag}
-                    </Badge>
-                  ))}
-                </div>
-                <h3 className="font-display font-bold text-[#F4F7FF] mb-1">{project.title}</h3>
-                <p className="text-[#B8C3E6] text-sm mb-3 line-clamp-2">{project.summary}</p>
-                <div className="flex items-center justify-between text-sm text-[#B8C3E6]">
-                  <span>by {project.author_nickname}</span>
-                  <div className="flex gap-3">
-                    <span>❤️ {project.like_count}</span>
-                    <span>💬 {project.comment_count}</span>
-                  </div>
-                </div>
+                <ProjectMeta
+                  title={project.title}
+                  summary={project.summary}
+                  tags={project.tags}
+                  author={project.author_nickname}
+                  likes={project.like_count}
+                  comments={project.comment_count}
+                />
               </CardContent>
             </Card>
           ))
