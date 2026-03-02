@@ -199,6 +199,12 @@ function actionToText(actionType: string): string {
   if (actionType === "user_unlimited") return "사용자 제한 해제"
   if (actionType === "user_approved") return "가입 승인"
   if (actionType === "user_rejected") return "가입 반려"
+  if (actionType === "user_suspended") return "계정 정지"
+  if (actionType === "user_unsuspended") return "정지 해제"
+  if (actionType === "user_tokens_revoked") return "세션 무효화"
+  if (actionType === "user_delete_scheduled") return "삭제 예약"
+  if (actionType === "user_delete_schedule_canceled") return "삭제 예약 취소"
+  if (actionType === "user_deleted") return "사용자 삭제"
   if (actionType === "project_updated") return "프로젝트 수정"
   if (actionType === "project_hidden") return "프로젝트 숨김"
   if (actionType === "project_restored") return "프로젝트 복구"
@@ -270,11 +276,20 @@ function getUserApprovalState(user: AdminManagedUser): {
   if (status === "rejected") {
     return { tone: "destructive", label: "반려" }
   }
+  if (status === "suspended") {
+    return { tone: "destructive", label: "정지" }
+  }
+  if (status === "pending_delete") {
+    return { tone: "destructive", label: "삭제 예정" }
+  }
+  if (status === "deleted") {
+    return { tone: "destructive", label: "삭제됨" }
+  }
   return { tone: "secondary", label: "활성" }
 }
 
 export function AdminScreen({ onNavigate }: ScreenProps) {
-  const { logout } = useAuth()
+  const { logout, user: authUser } = useAuth()
 
   const [reports, setReports] = useState<AdminReportRow[]>([])
   const [actionLogs, setActionLogs] = useState<AdminActionLog[]>([])
@@ -936,6 +951,89 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const handleSuspendUser = async (userId: string) => {
+    const reason = window.prompt("정지 사유를 입력하세요", "보안 정책 위반")
+    if (!reason || !reason.trim()) {
+      return
+    }
+
+    try {
+      await api.suspendUser(userId, reason.trim())
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to suspend user:", error)
+    }
+  }
+
+  const handleUnsuspendUser = async (userId: string) => {
+    try {
+      await api.unsuspendUser(userId)
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to unsuspend user:", error)
+    }
+  }
+
+  const handleRevokeUserTokens = async (userId: string) => {
+    const reason = window.prompt("세션 무효화 사유를 입력하세요", "보안 점검")
+    try {
+      await api.revokeUserTokens(userId, reason || undefined)
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to revoke user tokens:", error)
+    }
+  }
+
+  const handleScheduleUserDelete = async (userId: string) => {
+    const daysText = window.prompt("삭제 예약 기간(일)을 입력하세요", "30")
+    if (!daysText) {
+      return
+    }
+    const days = Number(daysText)
+    if (!Number.isFinite(days) || days < 1) {
+      window.alert("유효한 기간(1일 이상)을 입력해주세요")
+      return
+    }
+
+    const reason = window.prompt("삭제 예약 사유를 입력하세요", "보안 위협 계정 조사")
+    if (!reason || !reason.trim()) {
+      return
+    }
+
+    try {
+      await api.scheduleUserDelete(userId, days, reason.trim())
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to schedule user deletion:", error)
+    }
+  }
+
+  const handleCancelUserDeleteSchedule = async (userId: string) => {
+    try {
+      await api.cancelUserDeleteSchedule(userId)
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to cancel user deletion schedule:", error)
+    }
+  }
+
+  const handleDeleteUserNow = async (userId: string) => {
+    const reason = window.prompt("즉시 삭제 사유를 입력하세요", "중대한 보안 위협")
+    if (!reason || !reason.trim()) {
+      return
+    }
+    if (!window.confirm("정말로 즉시 삭제 처리하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) {
+      return
+    }
+
+    try {
+      await api.deleteUserNow(userId, reason.trim())
+      await Promise.all([loadUsers(true), loadActionLogs(true)])
+    } catch (error) {
+      console.error("Failed to delete user now:", error)
+    }
+  }
+
   const handleApproveUser = async (userId: string) => {
     try {
       await api.approveUser(userId)
@@ -1457,6 +1555,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                       {users.map((user) => {
                         const limitState = getUserLimitState(user)
                         const approvalState = getUserApprovalState(user)
+                        const canHardDelete = (authUser?.role ?? "") === "super_admin"
                         return (
                           <tr key={user.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
                             <td className="p-4 text-[#F4F7FF]">{user.nickname}</td>
@@ -1471,11 +1570,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                             <td className="p-4 text-[#B8C3E6]">
                               {user.limited_until ? new Date(user.limited_until).toLocaleString("ko-KR") : "-"}
                             </td>
-                            <td className="p-4">
-                              <div className="flex gap-1">
+                            <td className="p-4 align-top">
+                              <div className="flex flex-wrap gap-1 max-w-[640px]">
                                 <Button
                                   size="sm"
-                                  className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-xs"
+                                  className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-xs whitespace-nowrap"
                                   disabled={user.role === "admin" || user.status !== "pending"}
                                   onClick={() => handleApproveUser(user.id)}
                                 >
@@ -1484,7 +1583,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs"
+                                  className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs whitespace-nowrap"
                                   disabled={user.role === "admin" || user.status !== "pending"}
                                   onClick={() => handleRejectUser(user.id)}
                                 >
@@ -1492,7 +1591,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                                 </Button>
                                 <Button
                                   size="sm"
-                                  className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
+                                  className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs whitespace-nowrap"
                                   disabled={user.role === "admin" || limitState.isLimited || user.status !== "active"}
                                   onClick={() => handleLimitUser(user.id)}
                                 >
@@ -1501,11 +1600,63 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                                 <Button
                                   size="sm"
                                   variant="outline"
-                                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
+                                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs whitespace-nowrap"
                                   disabled={user.role === "admin" || !limitState.isLimited}
                                   onClick={() => handleUnlimitUser(user.id)}
                                 >
                                   제한 해제
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className="bg-[#FFB547] hover:bg-[#FFB547]/90 text-[#0B1020] text-xs whitespace-nowrap"
+                                  disabled={user.role === "admin" || user.status === "suspended" || user.status === "deleted"}
+                                  onClick={() => handleSuspendUser(user.id)}
+                                >
+                                  계정 정지
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#FFB547] text-[#FFB547] hover:bg-[#FFB547]/10 text-xs whitespace-nowrap"
+                                  disabled={user.role === "admin" || user.status !== "suspended"}
+                                  onClick={() => handleUnsuspendUser(user.id)}
+                                >
+                                  정지 해제
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10 text-xs whitespace-nowrap"
+                                  disabled={user.role === "admin" || user.status === "deleted"}
+                                  onClick={() => handleRevokeUserTokens(user.id)}
+                                >
+                                  세션 무효화
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  className="bg-[#6B8BFF] hover:bg-[#6B8BFF]/90 text-white text-xs whitespace-nowrap"
+                                  disabled={user.role === "admin" || user.status === "pending_delete" || user.status === "deleted"}
+                                  onClick={() => handleScheduleUserDelete(user.id)}
+                                >
+                                  삭제 예약
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#6B8BFF] text-[#6B8BFF] hover:bg-[#6B8BFF]/10 text-xs whitespace-nowrap"
+                                  disabled={user.status !== "pending_delete"}
+                                  onClick={() => handleCancelUserDeleteSchedule(user.id)}
+                                >
+                                  예약 취소
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs whitespace-nowrap"
+                                  disabled={!canHardDelete || user.role === "admin" || user.status === "deleted"}
+                                  onClick={() => handleDeleteUserNow(user.id)}
+                                >
+                                  즉시 삭제
                                 </Button>
                               </div>
                             </td>

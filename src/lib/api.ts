@@ -65,10 +65,17 @@ export interface AdminManagedUser {
   email: string
   nickname: string
   role: string
-  status?: "pending" | "active" | "rejected" | string
+  status?: "pending" | "active" | "rejected" | "suspended" | "pending_delete" | "deleted" | string
   created_at: string
   limited_until?: string | null
   limited_reason?: string | null
+  suspended_reason?: string | null
+  suspended_at?: string | null
+  suspended_by?: string | null
+  delete_scheduled_at?: string | null
+  deleted_at?: string | null
+  deleted_by?: string | null
+  token_version?: number
 }
 
 export interface AdminManagedProject {
@@ -803,6 +810,56 @@ export const api = {
   unlimitUser: async (userId: string) => {
     const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/limit`, {
       method: "DELETE",
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  suspendUser: async (userId: string, reason: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/suspend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  unsuspendUser: async (userId: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/suspend`, {
+      method: "DELETE",
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  revokeUserTokens: async (userId: string, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/tokens/revoke`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  scheduleUserDelete: async (userId: string, days: number, reason: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/delete-schedule`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days, reason }),
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  cancelUserDeleteSchedule: async (userId: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/delete-schedule`, {
+      method: "DELETE",
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  deleteUserNow: async (userId: string, reason: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/delete-now`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
     })
     return res.json() as Promise<AdminManagedUser>
   },
