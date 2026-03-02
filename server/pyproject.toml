@@ -20,3 +20,8 @@ dev = [
     "ruff",
     "basedpyright",
 ]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+]
