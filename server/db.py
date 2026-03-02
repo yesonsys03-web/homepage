@@ -1,4 +1,5 @@
 import os
+import hashlib
 import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
@@ -149,6 +150,14 @@ def init_db():
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS oauth_state_tokens (
+                    state_hash VARCHAR(64) PRIMARY KEY,
+                    expires_at TIMESTAMP NOT NULL,
+                    consumed_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
 
             # 기본 사용자 생성 (테스트용)
             cur.execute(
@@ -226,6 +235,14 @@ def init_db():
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_provider_user_id
                 ON users (provider, provider_user_id)
                 WHERE provider_user_id IS NOT NULL
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_oauth_state_tokens_expires_at
+                ON oauth_state_tokens (expires_at)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_oauth_state_tokens_consumed_at
+                ON oauth_state_tokens (consumed_at)
             """)
 
             conn.commit()
@@ -814,6 +831,60 @@ def update_oauth_runtime_settings(
             )
             conn.commit()
             return cur.fetchone()
+
+
+def _hash_oauth_state(state: str) -> str:
+    return hashlib.sha256(state.encode("utf-8")).hexdigest()
+
+
+def create_oauth_state_token(state: str, ttl_seconds: int):
+    state_hash = _hash_oauth_state(state)
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO oauth_state_tokens (state_hash, expires_at)
+                VALUES (%s, NOW() + (%s * INTERVAL '1 second'))
+                ON CONFLICT (state_hash) DO UPDATE
+                SET expires_at = EXCLUDED.expires_at,
+                    consumed_at = NULL
+                RETURNING state_hash, expires_at, consumed_at, created_at
+                """,
+                (state_hash, ttl_seconds),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def consume_oauth_state_token(state: str) -> bool:
+    state_hash = _hash_oauth_state(state)
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE oauth_state_tokens
+                SET consumed_at = NOW()
+                WHERE state_hash = %s
+                  AND consumed_at IS NULL
+                  AND expires_at > NOW()
+                """,
+                (state_hash,),
+            )
+            conn.commit()
+            return cur.rowcount == 1
+
+
+def cleanup_oauth_state_tokens():
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                DELETE FROM oauth_state_tokens
+                WHERE expires_at <= NOW()
+                   OR (consumed_at IS NOT NULL AND consumed_at <= NOW() - INTERVAL '1 day')
+                """
+            )
+            conn.commit()
 
 
 def get_site_content(content_key: str):

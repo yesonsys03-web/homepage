@@ -5,6 +5,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional, Mapping, Sequence, Any
+from datetime import timedelta
 import re
 import unicodedata
 import time
@@ -53,6 +54,9 @@ from db import (
     update_moderation_settings,
     get_oauth_runtime_settings,
     update_oauth_runtime_settings,
+    create_oauth_state_token,
+    consume_oauth_state_token,
+    cleanup_oauth_state_tokens,
     get_site_content,
     upsert_site_content,
 )
@@ -319,6 +323,7 @@ class ProfileUpdateRequest(BaseModel):
 PROFILE_NICKNAME_MIN_LEN = 2
 PROFILE_NICKNAME_MAX_LEN = 24
 PROFILE_BIO_MAX_LEN = 300
+GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -1235,8 +1240,11 @@ def google_auth_start():
     oauth_settings = ensure_google_oauth_available()
 
     state = create_access_token(
-        data={"type": "google_oauth_state", "nonce": secrets.token_hex(12)}
+        data={"type": "google_oauth_state", "nonce": secrets.token_hex(12)},
+        expires_delta=timedelta(seconds=GOOGLE_OAUTH_STATE_TTL_SECONDS),
     )
+    create_oauth_state_token(state=state, ttl_seconds=GOOGLE_OAUTH_STATE_TTL_SECONDS)
+    cleanup_oauth_state_tokens()
     params = {
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": oauth_settings["google_redirect_uri"],
@@ -1257,6 +1265,12 @@ def google_auth_callback(code: str, state: str):
     decoded_state = decode_token(state)
     if not decoded_state or decoded_state.get("type") != "google_oauth_state":
         raise HTTPException(status_code=400, detail="유효하지 않은 OAuth state입니다")
+    if not consume_oauth_state_token(state):
+        raise HTTPException(
+            status_code=400,
+            detail="만료되었거나 이미 사용된 OAuth state입니다",
+        )
+    cleanup_oauth_state_tokens()
 
     token_request_body = urlencode(
         {
