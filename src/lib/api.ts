@@ -98,6 +98,9 @@ export interface ModerationPolicy {
   auto_hide_report_threshold: number
   home_filter_tabs: FilterTab[]
   explore_filter_tabs: FilterTab[]
+  admin_log_retention_days: number
+  admin_log_view_window_days: number
+  admin_log_mask_reasons: boolean
   updated_at: string
   last_updated_by?: string | null
   last_updated_by_id?: string | null
@@ -866,12 +869,18 @@ export const api = {
     auto_hide_report_threshold: number,
     home_filter_tabs?: FilterTab[],
     explore_filter_tabs?: FilterTab[],
+    admin_log_retention_days?: number,
+    admin_log_view_window_days?: number,
+    admin_log_mask_reasons?: boolean,
   ) => {
     const payload: {
       blocked_keywords: string[]
       auto_hide_report_threshold: number
       home_filter_tabs?: FilterTab[]
       explore_filter_tabs?: FilterTab[]
+      admin_log_retention_days?: number
+      admin_log_view_window_days?: number
+      admin_log_mask_reasons?: boolean
     } = {
       blocked_keywords,
       auto_hide_report_threshold,
@@ -881,6 +890,15 @@ export const api = {
     }
     if (explore_filter_tabs) {
       payload.explore_filter_tabs = explore_filter_tabs
+    }
+    if (typeof admin_log_retention_days === "number") {
+      payload.admin_log_retention_days = admin_log_retention_days
+    }
+    if (typeof admin_log_view_window_days === "number") {
+      payload.admin_log_view_window_days = admin_log_view_window_days
+    }
+    if (typeof admin_log_mask_reasons === "boolean") {
+      payload.admin_log_mask_reasons = admin_log_mask_reasons
     }
 
     const res = await authFetch(`${API_BASE}/api/admin/policies`, {

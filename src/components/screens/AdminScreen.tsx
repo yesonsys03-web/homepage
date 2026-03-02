@@ -33,6 +33,7 @@ type Screen =
 type ReportStatus = "open" | "reviewing" | "resolved" | "rejected" | "all"
 type ProjectStatus = "all" | "published" | "hidden" | "deleted"
 type ActionLogFilter = "all" | "project" | "report" | "user" | "moderation_settings"
+type ActionLogPeriod = 0 | 7 | 30 | 90
 type AdminTabKey = "reports" | "users" | "content" | "pages" | "policies" | "actions"
 
 const ABOUT_CONTENT_FALLBACK: AboutContent = {
@@ -208,6 +209,36 @@ function actionToText(actionType: string): string {
   return actionType
 }
 
+const POLICY_REASON_LABELS: Record<string, string> = {
+  keywords: "금칙어 수",
+  threshold: "자동 숨김 임계치",
+  retention_days: "로그 보존(일)",
+  view_window_days: "로그 조회 기간(일)",
+  mask_reasons: "사유 마스킹",
+}
+
+function parsePolicyReason(reason?: string): Record<string, string> {
+  if (!reason) {
+    return {}
+  }
+
+  const result: Record<string, string> = {}
+  reason
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .forEach((part) => {
+      const [rawKey = "", ...rest] = part.split("=")
+      const key = rawKey.trim()
+      const value = rest.join("=").trim()
+      if (key && value) {
+        result[key] = value
+      }
+    })
+
+  return result
+}
+
 function getUserLimitState(user: AdminManagedUser): {
   isLimited: boolean
   label: string
@@ -268,6 +299,9 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [policyPreviewQuery, setPolicyPreviewQuery] = useState("")
   const [collapsedPolicyCategories, setCollapsedPolicyCategories] = useState<Record<string, boolean>>({})
   const [autoHideThreshold, setAutoHideThreshold] = useState(3)
+  const [adminLogRetentionDays, setAdminLogRetentionDays] = useState(365)
+  const [adminLogViewWindowDays, setAdminLogViewWindowDays] = useState(30)
+  const [adminLogMaskReasons, setAdminLogMaskReasons] = useState(true)
   const [homeFilterTabsInput, setHomeFilterTabsInput] = useState(
     tabsToTextarea(HOME_FILTER_TABS_FALLBACK),
   )
@@ -292,6 +326,8 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [editingProjectTagInput, setEditingProjectTagInput] = useState("")
   const [editingProjectReason, setEditingProjectReason] = useState("")
   const [actionLogFilter, setActionLogFilter] = useState<ActionLogFilter>("all")
+  const [policyOnlyLogs, setPolicyOnlyLogs] = useState(false)
+  const [actionLogPeriodDays, setActionLogPeriodDays] = useState<ActionLogPeriod>(30)
   const [selectedActionLogId, setSelectedActionLogId] = useState<string | null>(null)
   const [loadingAboutContent, setLoadingAboutContent] = useState(true)
   const [savingAboutContent, setSavingAboutContent] = useState(false)
@@ -427,6 +463,9 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         return next
       })
       setAutoHideThreshold(policy.auto_hide_report_threshold || 3)
+      setAdminLogRetentionDays(policy.admin_log_retention_days || 365)
+      setAdminLogViewWindowDays(policy.admin_log_view_window_days || 30)
+      setAdminLogMaskReasons(policy.admin_log_mask_reasons ?? true)
       setHomeFilterTabsInput(
         tabsToTextarea(
           policy.home_filter_tabs && policy.home_filter_tabs.length > 0
@@ -453,6 +492,9 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       setBlockedKeywordsInput("")
       setBaselineKeywordCategories({})
       setAutoHideThreshold(3)
+      setAdminLogRetentionDays(365)
+      setAdminLogViewWindowDays(30)
+      setAdminLogMaskReasons(true)
       setHomeFilterTabsInput(tabsToTextarea(HOME_FILTER_TABS_FALLBACK))
       setExploreFilterTabsInput(tabsToTextarea(EXPLORE_FILTER_TABS_FALLBACK))
       setPolicyUpdatedBy(null)
@@ -563,6 +605,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         break
       case "actions":
         loadActionLogs()
+        loadPolicies()
         break
     }
   }, [activeTab, loadReports])
@@ -653,11 +696,25 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   }, [projects, projectStatusFilter, projectSearchQuery])
 
   const filteredActionLogs = useMemo(() => {
-    if (actionLogFilter === "all") {
-      return actionLogs
-    }
-    return actionLogs.filter((log) => log.target_type === actionLogFilter)
-  }, [actionLogs, actionLogFilter])
+    const now = Date.now()
+    const periodMs = actionLogPeriodDays > 0 ? actionLogPeriodDays * 24 * 60 * 60 * 1000 : 0
+
+    return actionLogs.filter((log) => {
+      if (actionLogFilter !== "all" && log.target_type !== actionLogFilter) {
+        return false
+      }
+      if (policyOnlyLogs && log.action_type !== "policy_updated") {
+        return false
+      }
+      if (periodMs > 0) {
+        const createdAt = new Date(log.created_at).getTime()
+        if (!Number.isFinite(createdAt) || now - createdAt > periodMs) {
+          return false
+        }
+      }
+      return true
+    })
+  }, [actionLogs, actionLogFilter, policyOnlyLogs, actionLogPeriodDays])
 
   const selectedActionLog = useMemo(() => {
     if (!selectedActionLogId) {
@@ -665,6 +722,29 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
     return filteredActionLogs.find((log) => log.id === selectedActionLogId) || null
   }, [filteredActionLogs, selectedActionLogId])
+
+  const policyChangeHistory = useMemo(() => {
+    const policyLogs = filteredActionLogs.filter((log) => log.action_type === "policy_updated")
+    return policyLogs.map((log, index) => {
+      const current = parsePolicyReason(log.reason)
+      const previous = index + 1 < policyLogs.length
+        ? parsePolicyReason(policyLogs[index + 1].reason)
+        : {}
+
+      const keys = Array.from(new Set([...Object.keys(current), ...Object.keys(previous)]))
+      const diffs = keys
+        .filter((key) => current[key] !== previous[key])
+        .map((key) => {
+          const label = POLICY_REASON_LABELS[key] || key
+          return `${label}: ${previous[key] ?? "-"} -> ${current[key] ?? "-"}`
+        })
+
+      return {
+        log,
+        diffs,
+      }
+    })
+  }, [filteredActionLogs])
 
   const isProjectActionReasonValid = projectActionReason.trim().length > 0
   const areAllFilteredProjectsSelected =
@@ -1025,6 +1105,14 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       window.alert("임계치는 1 이상이어야 합니다")
       return
     }
+    if (adminLogRetentionDays < 30) {
+      window.alert("로그 보존 기간은 최소 30일 이상이어야 합니다")
+      return
+    }
+    if (adminLogViewWindowDays < 1) {
+      window.alert("로그 기본 조회 기간은 최소 1일 이상이어야 합니다")
+      return
+    }
 
     const homeTabs = parseTabsTextarea(homeFilterTabsInput)
     const exploreTabs = parseTabsTextarea(exploreFilterTabsInput)
@@ -1040,6 +1128,9 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         autoHideThreshold,
         homeTabs,
         exploreTabs,
+        adminLogRetentionDays,
+        adminLogViewWindowDays,
+        adminLogMaskReasons,
       )
       await Promise.all([loadPolicies(true), loadActionLogs(true)])
       window.alert("정책이 저장되었습니다")
@@ -1924,6 +2015,41 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                       />
                     </div>
 
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <h3 className="text-[#F4F7FF] font-semibold mb-2">관리자 로그 보존 기간(일)</h3>
+                        <p className="text-xs text-[#B8C3E6] mb-2">만료된 로그는 서버 시작 시 정리됩니다 (최소 30일)</p>
+                        <input
+                          type="number"
+                          min={30}
+                          value={adminLogRetentionDays}
+                          onChange={(event) => setAdminLogRetentionDays(Number(event.target.value) || 30)}
+                          className="w-32 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+                        />
+                      </div>
+                      <div>
+                        <h3 className="text-[#F4F7FF] font-semibold mb-2">관리자 로그 기본 조회 기간(일)</h3>
+                        <p className="text-xs text-[#B8C3E6] mb-2">로그 탭 기본 목록 조회 범위 (최소 1일)</p>
+                        <input
+                          type="number"
+                          min={1}
+                          value={adminLogViewWindowDays}
+                          onChange={(event) => setAdminLogViewWindowDays(Number(event.target.value) || 1)}
+                          className="w-32 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+                        />
+                      </div>
+                    </div>
+
+                    <label className="inline-flex items-center gap-2 text-sm text-[#F4F7FF]">
+                      <input
+                        type="checkbox"
+                        checked={adminLogMaskReasons}
+                        onChange={(event) => setAdminLogMaskReasons(event.target.checked)}
+                        className="rounded border-[#111936] bg-[#0B1020]"
+                      />
+                      로그 사유(reason) 민감정보 마스킹 사용
+                    </label>
+
                     <div>
                       <h3 className="text-[#F4F7FF] font-semibold mb-2">Home 탭 구성</h3>
                       <p className="text-xs text-[#B8C3E6] mb-2">한 줄에 `id|label` 형식으로 입력 (예: web|Web)</p>
@@ -1962,6 +2088,49 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
           </TabsContent>
 
           <TabsContent value="actions">
+            <div className="mb-3 flex flex-wrap gap-2">
+              <Badge className="bg-[#111936] text-[#F4F7FF] border border-[#2A3669]">
+                보존 {adminLogRetentionDays}일
+              </Badge>
+              <Badge className="bg-[#111936] text-[#F4F7FF] border border-[#2A3669]">
+                조회 {adminLogViewWindowDays}일
+              </Badge>
+              <Badge className="bg-[#111936] text-[#F4F7FF] border border-[#2A3669]">
+                사유 마스킹 {adminLogMaskReasons ? "ON" : "OFF"}
+              </Badge>
+            </div>
+            <div className="mb-3 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPolicyOnlyLogs((prev) => !prev)}
+                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                  policyOnlyLogs
+                    ? "bg-[#FF5D8F] text-white"
+                    : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
+                }`}
+              >
+                정책 로그만 보기 {policyOnlyLogs ? "ON" : "OFF"}
+              </button>
+              {([
+                { value: 7 as const, label: "7일" },
+                { value: 30 as const, label: "30일" },
+                { value: 90 as const, label: "90일" },
+                { value: 0 as const, label: "전체" },
+              ] as const).map((period) => (
+                <button
+                  key={period.value}
+                  type="button"
+                  onClick={() => setActionLogPeriodDays(period.value)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                    actionLogPeriodDays === period.value
+                      ? "bg-[#23D5AB] text-[#0B1020]"
+                      : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
+                  }`}
+                >
+                  {period.label}
+                </button>
+              ))}
+            </div>
             <div className="mb-3 flex gap-2 flex-wrap">
               {([
                 { value: "all", label: "전체" },
@@ -2015,6 +2184,25 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                       ))}
                     </tbody>
                   </table>
+                )}
+              </CardContent>
+            </Card>
+            <Card className="mt-4 bg-[#161F42] border-0">
+              <CardContent className="p-4">
+                <h3 className="text-sm font-semibold text-[#F4F7FF] mb-3">정책 변경 이력(diff)</h3>
+                {policyChangeHistory.length === 0 ? (
+                  <p className="text-xs text-[#B8C3E6]">정책 변경 이력이 없습니다.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {policyChangeHistory.slice(0, 8).map(({ log, diffs }) => (
+                      <div key={log.id} className="rounded-md border border-[#111936] bg-[#0B1020] p-3">
+                        <p className="text-xs text-[#F4F7FF]">
+                          {new Date(log.created_at).toLocaleString("ko-KR")} · {log.admin_nickname || "admin"}
+                        </p>
+                        <p className="text-xs text-[#B8C3E6] mt-1">{diffs.length > 0 ? diffs.join(" | ") : "변경값 차이 없음"}</p>
+                      </div>
+                    ))}
+                  </div>
                 )}
               </CardContent>
             </Card>
