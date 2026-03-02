@@ -53,6 +53,13 @@ from db import (
     get_admin_users,
     limit_user,
     unlimit_user,
+    suspend_user,
+    unsuspend_user,
+    revoke_user_tokens,
+    schedule_user_deletion,
+    cancel_user_deletion,
+    delete_user_now,
+    purge_due_user_deletions,
     approve_user,
     reject_user,
     get_moderation_settings,
@@ -362,6 +369,7 @@ GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
 DEFAULT_ADMIN_LOG_RETENTION_DAYS = 365
 DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS = 30
 ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
+SYSTEM_ADMIN_USER_ID = "11111111-1111-1111-1111-111111111111"
 _admin_log_cleanup_task: Optional[asyncio.Task[None]] = None
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -403,6 +411,11 @@ class AdminReportUpdateRequest(BaseModel):
 
 class AdminUserLimitRequest(BaseModel):
     hours: int = 24
+    reason: Optional[str] = None
+
+
+class AdminUserDeleteScheduleRequest(BaseModel):
+    days: int = 30
     reason: Optional[str] = None
 
 
@@ -477,6 +490,31 @@ def require_action_reason(reason: Optional[str]) -> str:
     if not normalized_reason:
         raise HTTPException(status_code=400, detail="처리 사유(reason)는 필수입니다")
     return normalized_reason
+
+
+def validate_enforcement_target(
+    target_user_id: str,
+    current_user: UserContext,
+    *,
+    allow_super_admin_target: bool = False,
+) -> None:
+    if current_user["id"] == target_user_id:
+        raise HTTPException(status_code=400, detail="본인 계정에는 적용할 수 없습니다")
+
+    target_user = get_user_by_id(target_user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    target_role = target_user.get("role")
+    if target_role == "admin":
+        raise HTTPException(
+            status_code=403, detail="관리자 계정에는 적용할 수 없습니다"
+        )
+    if target_role == "super_admin" and not allow_super_admin_target:
+        raise HTTPException(
+            status_code=403,
+            detail="슈퍼 관리자 계정에는 적용할 수 없습니다",
+        )
 
 
 def get_effective_oauth_settings() -> dict[str, object]:
@@ -593,6 +631,20 @@ def text_contains_blocked_keyword(text: str, blocked_keywords: list[str]) -> boo
     if not normalized_text:
         return False
     return any(keyword in normalized_text for keyword in blocked_keywords)
+
+
+def get_blocked_user_message(user_status: str) -> str:
+    if user_status == "pending":
+        return "가입 승인이 대기 중입니다. 관리자 승인 후 로그인할 수 있습니다"
+    if user_status == "rejected":
+        return "가입이 반려된 계정입니다. 관리자에게 문의해 주세요"
+    if user_status == "suspended":
+        return "보안 정책으로 계정이 정지되었습니다. 관리자에게 문의해 주세요"
+    if user_status == "pending_delete":
+        return "삭제 예정 상태의 계정입니다. 관리자에게 문의해 주세요"
+    if user_status == "deleted":
+        return "삭제된 계정입니다"
+    return "활성화되지 않은 계정입니다"
 
 
 def normalize_filter_tabs(
@@ -815,6 +867,20 @@ def ensure_baseline_moderation_settings() -> None:
         )
 
 
+def perform_due_user_deletion_cleanup() -> int:
+    deleted_users = purge_due_user_deletions(limit=200)
+    for deleted_user in deleted_users:
+        target_id = str(deleted_user["id"])
+        write_admin_action_log(
+            admin_id=SYSTEM_ADMIN_USER_ID,
+            action_type="user_deleted",
+            target_type="user",
+            target_id=target_id,
+            reason="삭제 예약 만료로 자동 삭제 처리",
+        )
+    return len(deleted_users)
+
+
 async def run_admin_log_cleanup_loop() -> None:
     while True:
         try:
@@ -823,6 +889,11 @@ async def run_admin_log_cleanup_loop() -> None:
             deleted_count = cleanup_admin_action_logs(retention_days=retention_days)
             if deleted_count > 0:
                 print(f"[admin-log] cleaned up {deleted_count} expired action logs")
+            user_deleted_count = perform_due_user_deletion_cleanup()
+            if user_deleted_count > 0:
+                print(
+                    f"[admin-user] auto-deleted {user_deleted_count} due pending_delete accounts"
+                )
         except Exception as error:
             print(f"[admin-log] cleanup loop error: {error}")
         await asyncio.sleep(ADMIN_LOG_CLEANUP_INTERVAL_SECONDS)
@@ -840,6 +911,7 @@ async def startup_event():
         _ = cleanup_admin_action_logs(
             retention_days=cast(int, settings["admin_log_retention_days"])
         )
+        _ = perform_due_user_deletion_cleanup()
         _ = get_about_content_payload()
         _set_cached_projects(
             sort="latest", platform=None, tag=None, items=get_projects(sort="latest")
@@ -1021,7 +1093,22 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
     user_status = user.get("status") or "active"
     if user_status != "active":
-        raise HTTPException(status_code=403, detail="활성화되지 않은 계정입니다")
+        raise HTTPException(
+            status_code=403, detail=get_blocked_user_message(user_status)
+        )
+
+    token_version_claim = payload.get("sv")
+    token_version_from_claim = (
+        token_version_claim if isinstance(token_version_claim, int) else 0
+    )
+    user_token_version = user.get("token_version")
+    current_token_version = (
+        user_token_version if isinstance(user_token_version, int) else 0
+    )
+    if token_version_from_claim != current_token_version:
+        raise HTTPException(
+            status_code=401, detail="세션이 만료되었습니다. 다시 로그인해 주세요"
+        )
 
     return {
         "id": str(user["id"]),
@@ -1035,8 +1122,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 async def require_admin(current_user: UserContext = Depends(get_current_user)):
-    if current_user.get("role") != "admin":
+    if current_user.get("role") not in {"admin", "super_admin"}:
         raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
+    return current_user
+
+
+async def require_super_admin(current_user: UserContext = Depends(get_current_user)):
+    if current_user.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="슈퍼 관리자 권한이 필요합니다")
     return current_user
 
 
@@ -1204,6 +1297,10 @@ def list_admin_users(
     users = get_admin_users(limit=limit)
     for user in users:
         user["id"] = str(user["id"])
+        if user.get("suspended_by"):
+            user["suspended_by"] = str(user["suspended_by"])
+        if user.get("deleted_by"):
+            user["deleted_by"] = str(user["deleted_by"])
     return {"items": users, "next_cursor": None}
 
 
@@ -1376,6 +1473,184 @@ def unlimit_user_endpoint(
 
     released_user["id"] = str(released_user["id"])
     return released_user
+
+
+@app.post("/api/admin/users/{user_id}/suspend")
+def suspend_user_endpoint(
+    user_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: UserContext = Depends(require_admin),
+):
+    validate_enforcement_target(user_id, current_user)
+    reason = require_action_reason(payload.reason)
+    suspended_user = suspend_user(
+        user_id=user_id, admin_id=current_user["id"], reason=reason
+    )
+    if not suspended_user:
+        raise HTTPException(
+            status_code=404, detail="사용자를 찾을 수 없거나 정지할 수 없습니다"
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_suspended",
+        target_type="user",
+        target_id=user_id,
+        reason=reason,
+    )
+
+    suspended_user["id"] = str(suspended_user["id"])
+    if suspended_user.get("suspended_by"):
+        suspended_user["suspended_by"] = str(suspended_user["suspended_by"])
+    return suspended_user
+
+
+@app.delete("/api/admin/users/{user_id}/suspend")
+def unsuspend_user_endpoint(
+    user_id: str,
+    current_user: UserContext = Depends(require_admin),
+):
+    validate_enforcement_target(user_id, current_user)
+    released_user = unsuspend_user(user_id=user_id)
+    if not released_user:
+        raise HTTPException(
+            status_code=404, detail="사용자를 찾을 수 없거나 정지 해제할 수 없습니다"
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_unsuspended",
+        target_type="user",
+        target_id=user_id,
+        reason="계정 정지 해제",
+    )
+
+    released_user["id"] = str(released_user["id"])
+    return released_user
+
+
+@app.post("/api/admin/users/{user_id}/tokens/revoke")
+def revoke_user_tokens_endpoint(
+    user_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: UserContext = Depends(require_admin),
+):
+    validate_enforcement_target(user_id, current_user)
+    reason = (
+        payload.reason.strip() if isinstance(payload.reason, str) else "세션 무효화"
+    )
+    updated_user = revoke_user_tokens(user_id=user_id)
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_tokens_revoked",
+        target_type="user",
+        target_id=user_id,
+        reason=reason,
+    )
+
+    updated_user["id"] = str(updated_user["id"])
+    if updated_user.get("suspended_by"):
+        updated_user["suspended_by"] = str(updated_user["suspended_by"])
+    return updated_user
+
+
+@app.post("/api/admin/users/{user_id}/delete-schedule")
+def schedule_user_delete_endpoint(
+    user_id: str,
+    payload: AdminUserDeleteScheduleRequest,
+    current_user: UserContext = Depends(require_admin),
+):
+    validate_enforcement_target(user_id, current_user)
+    if payload.days < 1:
+        raise HTTPException(status_code=400, detail="days는 1 이상이어야 합니다")
+
+    reason = require_action_reason(payload.reason)
+    scheduled_user = schedule_user_deletion(
+        user_id=user_id,
+        admin_id=current_user["id"],
+        days=payload.days,
+        reason=reason,
+    )
+    if not scheduled_user:
+        raise HTTPException(
+            status_code=404,
+            detail="사용자를 찾을 수 없거나 삭제 예약할 수 없습니다",
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_delete_scheduled",
+        target_type="user",
+        target_id=user_id,
+        reason=f"days={payload.days}, reason={reason}",
+    )
+
+    scheduled_user["id"] = str(scheduled_user["id"])
+    if scheduled_user.get("suspended_by"):
+        scheduled_user["suspended_by"] = str(scheduled_user["suspended_by"])
+    return scheduled_user
+
+
+@app.delete("/api/admin/users/{user_id}/delete-schedule")
+def cancel_user_delete_schedule_endpoint(
+    user_id: str,
+    current_user: UserContext = Depends(require_admin),
+):
+    validate_enforcement_target(user_id, current_user)
+    restored_user = cancel_user_deletion(user_id=user_id)
+    if not restored_user:
+        raise HTTPException(
+            status_code=404,
+            detail="삭제 예약 상태 사용자를 찾을 수 없거나 예약 취소할 수 없습니다",
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_delete_schedule_canceled",
+        target_type="user",
+        target_id=user_id,
+        reason="삭제 예약 취소",
+    )
+
+    restored_user["id"] = str(restored_user["id"])
+    return restored_user
+
+
+@app.post("/api/admin/users/{user_id}/delete-now")
+def delete_user_now_endpoint(
+    user_id: str,
+    payload: AdminActionReasonRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    validate_enforcement_target(user_id, current_user)
+    reason = require_action_reason(payload.reason)
+    deleted_user = delete_user_now(
+        user_id=user_id,
+        admin_id=current_user["id"],
+        reason=reason,
+    )
+    if not deleted_user:
+        raise HTTPException(
+            status_code=404, detail="사용자를 찾을 수 없거나 삭제할 수 없습니다"
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_deleted",
+        target_type="user",
+        target_id=user_id,
+        reason=reason,
+    )
+
+    deleted_user["id"] = str(deleted_user["id"])
+    if deleted_user.get("suspended_by"):
+        deleted_user["suspended_by"] = str(deleted_user["suspended_by"])
+    if deleted_user.get("deleted_by"):
+        deleted_user["deleted_by"] = str(deleted_user["deleted_by"])
+    return deleted_user
 
 
 @app.post("/api/admin/users/{user_id}/approve")
@@ -1684,8 +1959,14 @@ def google_auth_callback(code: str, state: str):
             status_code=302,
         )
 
+    token_version = user.get("token_version")
+    token_version_value = token_version if isinstance(token_version, int) else 0
     access_token = create_access_token(
-        data={"sub": str(user["id"]), "email": user["email"]}
+        data={
+            "sub": str(user["id"]),
+            "email": user["email"],
+            "sv": token_version_value,
+        }
     )
     return RedirectResponse(
         url=f"{frontend_base}/?oauth_token={quote(access_token)}",
@@ -1708,8 +1989,14 @@ def register(request: RegisterRequest):
         raise HTTPException(status_code=500, detail="회원가입 처리에 실패했습니다")
 
     # 토큰 생성
+    token_version = user.get("token_version")
+    token_version_value = token_version if isinstance(token_version, int) else 0
     access_token = create_access_token(
-        data={"sub": str(user["id"]), "email": user["email"]}
+        data={
+            "sub": str(user["id"]),
+            "email": user["email"],
+            "sv": token_version_value,
+        }
     )
 
     return TokenResponse(
@@ -1748,19 +2035,20 @@ def login(request: LoginRequest):
         )
 
     user_status = user.get("status") or "active"
-    if user_status == "pending":
+    if user_status != "active":
         raise HTTPException(
-            status_code=403,
-            detail="가입 승인이 대기 중입니다. 관리자 승인 후 로그인할 수 있습니다",
-        )
-    if user_status == "rejected":
-        raise HTTPException(
-            status_code=403,
-            detail="가입이 반려된 계정입니다. 관리자에게 문의해 주세요",
+            status_code=403, detail=get_blocked_user_message(user_status)
         )
 
+    token_version = user.get("token_version")
+    token_version_value = token_version if isinstance(token_version, int) else 0
+
     access_token = create_access_token(
-        data={"sub": str(user["id"]), "email": user["email"]}
+        data={
+            "sub": str(user["id"]),
+            "email": user["email"],
+            "sv": token_version_value,
+        }
     )
 
     return TokenResponse(

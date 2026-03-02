@@ -61,6 +61,13 @@ def init_db():
                     provider VARCHAR(20) DEFAULT 'local',
                     provider_user_id VARCHAR(255),
                     email_verified BOOLEAN DEFAULT FALSE,
+                    suspended_reason TEXT,
+                    suspended_at TIMESTAMP,
+                    suspended_by UUID REFERENCES users(id),
+                    delete_scheduled_at TIMESTAMP,
+                    deleted_at TIMESTAMP,
+                    deleted_by UUID REFERENCES users(id),
+                    token_version INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT NOW(),
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
@@ -196,7 +203,31 @@ def init_db():
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE
             """)
             cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_reason TEXT
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_at TIMESTAMP
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS suspended_by UUID REFERENCES users(id)
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_scheduled_at TIMESTAMP
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_by UUID REFERENCES users(id)
+            """)
+            cur.execute("""
+                ALTER TABLE users ADD COLUMN IF NOT EXISTS token_version INTEGER DEFAULT 0
+            """)
+            cur.execute("""
                 UPDATE users SET status = 'active' WHERE status IS NULL
+            """)
+            cur.execute("""
+                UPDATE users SET token_version = 0 WHERE token_version IS NULL
             """)
             cur.execute("""
                 UPDATE users SET provider = 'local' WHERE provider IS NULL
@@ -759,7 +790,8 @@ def get_admin_users(limit: int = 200):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, created_at, limited_until, limited_reason
+                SELECT id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                       suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 FROM users
                 ORDER BY created_at DESC
                 LIMIT %s
@@ -778,7 +810,8 @@ def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
                 SET limited_until = NOW() + (%s || ' hours')::INTERVAL,
                     limited_reason = %s
                 WHERE id = %s AND role != 'admin'
-                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
                 (hours, reason, user_id),
             )
@@ -795,7 +828,8 @@ def unlimit_user(user_id: str):
                 SET limited_until = NULL,
                     limited_reason = NULL
                 WHERE id = %s AND role != 'admin'
-                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
                 (user_id,),
             )
@@ -809,9 +843,14 @@ def approve_user(user_id: str):
             cur.execute(
                 """
                 UPDATE users
-                SET status = 'active', updated_at = NOW()
+                SET status = 'active',
+                    suspended_reason = NULL,
+                    suspended_at = NULL,
+                    suspended_by = NULL,
+                    updated_at = NOW()
                 WHERE id = %s
-                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
                 (user_id,),
             )
@@ -827,12 +866,175 @@ def reject_user(user_id: str):
                 UPDATE users
                 SET status = 'rejected', updated_at = NOW()
                 WHERE id = %s
-                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
                 (user_id,),
             )
             conn.commit()
             return cur.fetchone()
+
+
+def suspend_user(user_id: str, admin_id: str, reason: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'suspended',
+                    suspended_reason = %s,
+                    suspended_at = NOW(),
+                    suspended_by = %s,
+                    token_version = token_version + 1,
+                    updated_at = NOW()
+                WHERE id = %s AND role != 'admin'
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (reason, admin_id, user_id),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def unsuspend_user(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'active',
+                    suspended_reason = NULL,
+                    suspended_at = NULL,
+                    suspended_by = NULL,
+                    updated_at = NOW()
+                WHERE id = %s AND role != 'admin' AND status = 'suspended'
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (user_id,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def revoke_user_tokens(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET token_version = token_version + 1,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (user_id,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def schedule_user_deletion(user_id: str, admin_id: str, days: int, reason: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'pending_delete',
+                    delete_scheduled_at = NOW() + (%s * INTERVAL '1 day'),
+                    suspended_reason = %s,
+                    suspended_at = NOW(),
+                    suspended_by = %s,
+                    token_version = token_version + 1,
+                    updated_at = NOW()
+                WHERE id = %s AND role NOT IN ('admin', 'super_admin')
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (days, reason, admin_id, user_id),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def cancel_user_deletion(user_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'active',
+                    delete_scheduled_at = NULL,
+                    suspended_reason = NULL,
+                    suspended_at = NULL,
+                    suspended_by = NULL,
+                    updated_at = NOW()
+                WHERE id = %s AND status = 'pending_delete' AND role NOT IN ('admin', 'super_admin')
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (user_id,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def delete_user_now(user_id: str, admin_id: str, reason: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'deleted',
+                    deleted_at = NOW(),
+                    deleted_by = %s,
+                    delete_scheduled_at = NULL,
+                    suspended_reason = %s,
+                    suspended_at = NOW(),
+                    suspended_by = %s,
+                    token_version = token_version + 1,
+                    updated_at = NOW()
+                WHERE id = %s AND role NOT IN ('admin', 'super_admin')
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (admin_id, reason, admin_id, user_id),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def purge_due_user_deletions(limit: int = 200):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET status = 'deleted',
+                    deleted_at = NOW(),
+                    deleted_by = NULL,
+                    delete_scheduled_at = NULL,
+                    token_version = token_version + 1,
+                    updated_at = NOW()
+                WHERE id IN (
+                    SELECT id
+                    FROM users
+                    WHERE status = 'pending_delete'
+                      AND delete_scheduled_at IS NOT NULL
+                      AND delete_scheduled_at <= NOW()
+                    ORDER BY delete_scheduled_at ASC
+                    LIMIT %s
+                )
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+            conn.commit()
+            return rows
 
 
 def get_moderation_settings():
@@ -1024,7 +1226,7 @@ def create_user(email: str, nickname: str, password_hash: str, status: str = "pe
                 """
                 INSERT INTO users (email, nickname, password_hash, status)
                 VALUES (%s, %s, %s, %s)
-                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
             """,
                 (email, nickname, password_hash, status),
             )
@@ -1038,7 +1240,7 @@ def get_user_by_email(email: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, password_hash, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                SELECT id, email, nickname, password_hash, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 FROM users WHERE email = %s
             """,
                 (email,),
@@ -1051,7 +1253,7 @@ def get_user_by_provider(provider: str, provider_user_id: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, password_hash, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                SELECT id, email, nickname, password_hash, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 FROM users
                 WHERE provider = %s AND provider_user_id = %s
                 """,
@@ -1070,7 +1272,7 @@ def create_or_update_google_user(
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 FROM users
                 WHERE provider = 'google' AND provider_user_id = %s
                 """,
@@ -1085,7 +1287,7 @@ def create_or_update_google_user(
                         email_verified = %s,
                         updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                    RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                     """,
                     (email, email_verified, provider_user["id"]),
                 )
@@ -1094,7 +1296,7 @@ def create_or_update_google_user(
 
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 FROM users
                 WHERE email = %s
                 """,
@@ -1110,7 +1312,7 @@ def create_or_update_google_user(
                         email_verified = %s,
                         updated_at = NOW()
                     WHERE id = %s
-                    RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                    RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                     """,
                     (provider_user_id, email_verified, email_user["id"]),
                 )
@@ -1129,7 +1331,7 @@ def create_or_update_google_user(
                     email_verified
                 )
                 VALUES (%s, %s, 'user', 'pending', 'google', %s, %s)
-                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 """,
                 (email, nickname, provider_user_id, email_verified),
             )
@@ -1143,7 +1345,7 @@ def get_user_by_nickname(nickname: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 FROM users WHERE nickname = %s
             """,
                 (nickname,),
@@ -1157,7 +1359,7 @@ def get_user_by_id(user_id: str):
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                SELECT id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
                 FROM users WHERE id = %s
             """,
                 (user_id,),
@@ -1184,7 +1386,7 @@ def update_user_profile(user_id: str, updates: dict[str, object]):
                 UPDATE users
                 SET {", ".join(fields_to_update)}, updated_at = NOW()
                 WHERE id = %s
-                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, created_at
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
             """
             params.append(user_id)
             cur.execute(query, params)
