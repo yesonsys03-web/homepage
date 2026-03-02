@@ -1442,3 +1442,64 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. 승인/반려 메일 발송 파이프라인 구현
 2. OAuth 설정 저장 시 URI 형식 검증 강화
 3. Admin users 탭 캐시 TTL 최적화
+
+## Session 2026-03-02-01
+
+### 1) Goal
+- 학습용으로 "이번 CI 연결 + OAuth state 1회성 소비"가 왜 필요한지, 하지 않으면 어떤 문제가 실제로 생기는지 명확히 정리한다.
+
+### 2) Inputs
+- 이번 구현 변경:
+  - `.github/workflows/ci.yml`
+  - `server/main.py`
+  - `server/db.py`
+  - `server/tests/test_oauth_regression.py`
+- 참고 가이드:
+  - OWASP OAuth2 Cheat Sheet (state/CSRF 권장)
+  - Auth0 state parameter guidance
+  - RFC 6819 (OAuth 2.0 Threat Model)
+- 저장소 문서:
+  - `docs/UV_WORKFLOW.md`
+  - `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`
+
+### 3) Design Decisions
+- OAuth `state`는 JWT 서명 검증만으로는 "재사용(replay)"을 완전히 막을 수 없으므로, 서버 DB에서 1회성으로 소비하도록 설계했다.
+- CI는 "사람이 수동 확인"을 대체하는 자동 안전장치로 두고, PR/Push마다 테스트와 빌드를 강제 실행하도록 구성했다.
+
+### 4) Implementation Notes
+- CI 자동 검증 연결
+  - `.github/workflows/ci.yml`
+    - frontend: `pnpm install --frozen-lockfile` -> `pnpm test` -> `pnpm build`
+    - backend: `uv sync --frozen --extra dev --group dev` -> `uv run pytest` -> import/py_compile 검증
+- OAuth state 1회성 소비
+  - `server/db.py`
+    - `oauth_state_tokens` 테이블 추가 (`state_hash`, `expires_at`, `consumed_at`)
+    - `create_oauth_state_token`, `consume_oauth_state_token`, `cleanup_oauth_state_tokens` 추가
+  - `server/main.py`
+    - Google OAuth start 시 state TTL(10분)로 생성 + DB 저장
+    - callback 시 state를 원자적으로 1회 소비, 실패 시 400 반환
+  - `server/tests/test_oauth_regression.py`
+    - 동일 state 재사용 시 두 번째 요청이 차단되는 회귀 테스트 추가
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- CI가 없으면
+  - 테스트/빌드를 사람이 매번 수동으로 돌려야 해서 누락이 발생한다.
+  - "내 PC에서는 됨" 상태가 PR에 그대로 합쳐져 배포 직전 또는 배포 후 장애로 이어질 수 있다.
+  - 동일 실수가 반복되어 디버깅/롤백 시간이 커진다.
+- OAuth state 1회성 소비가 없으면
+  - 공격자/중간자가 획득한 state를 유효 시간 내 재사용하는 replay 공격 가능성이 남는다.
+  - 콜백 흐름 위조/재시도로 로그인 세션 연결 안정성이 약해진다.
+  - 결과적으로 인증 플로우 신뢰도가 떨어지고, 보안 이슈 대응 비용이 커진다.
+
+### 6) Outcome
+#### 잘된 점
+- "왜 필요한지"를 구현 단위(파일/로직/테스트)와 위험 시나리오로 연결해 학습 재사용성이 높아졌다.
+- 단순 권장사항이 아니라 "미적용 시 실제 장애/보안 문제" 중심으로 정리해 의사결정 근거가 명확해졌다.
+
+#### 아쉬운 점
+- CI 단계는 현재 smoke 성격(테스트+빌드) 위주라, 추후 lint/typecheck/security scan까지 확장 여지가 있다.
+
+#### 다음 액션
+1. CI에 `ruff`/`basedpyright`를 추가해 정적 분석 자동화 범위를 넓힌다.
+2. OAuth state 관련 실패 로그(재사용/만료)를 운영 대시보드에서 집계 가능하도록 이벤트화한다.
+3. 학습용 문서에 "실제 공격 시나리오 그림"(정상 흐름 vs replay 시도)을 추가한다.
