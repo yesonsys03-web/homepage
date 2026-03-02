@@ -1503,3 +1503,64 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. CI에 `ruff`/`basedpyright`를 추가해 정적 분석 자동화 범위를 넓힌다.
 2. OAuth state 관련 실패 로그(재사용/만료)를 운영 대시보드에서 집계 가능하도록 이벤트화한다.
 3. 학습용 문서에 "실제 공격 시나리오 그림"(정상 흐름 vs replay 시도)을 추가한다.
+
+## Session 2026-03-02-02
+
+### 1) Goal
+- CI의 typecheck 게이트를 실사용 가능한 수준으로 안정화하고, 경고/에러를 줄여 "자동 검증이 실제 품질을 지키는 상태"를 만든다.
+
+### 2) Inputs
+- 변경 파일
+  - `.github/workflows/ci.yml`
+  - `server/main.py`
+  - `server/auth.py`
+  - `server/db.py`
+  - `server/pyproject.toml`
+  - `server/pyrightconfig.json`
+- 실행 검증
+  - `uv run basedpyright`
+  - `uv run ruff check .`
+  - `uv run pytest`
+
+### 3) Design Decisions
+- 기반 원칙: "타입체크는 CI에서 실패를 빨리 알려야 의미가 있다".
+- `basedpyright`를 무조건 넓게 돌리는 대신, 백엔드 핵심 파일(`auth.py`, `db.py`, `main.py`) 중심으로 스코프를 명확히 고정했다.
+- OAuth/권한 흐름은 런타임에서 자주 깨지는 구간이므로, `TypedDict`와 안전 캐스팅으로 타입 의도를 코드에 명시했다.
+
+### 4) Implementation Notes
+- CI 파이프라인 확장
+  - `.github/workflows/ci.yml`에 backend lint/typecheck를 고정 단계로 포함
+  - `uv run basedpyright`를 비차단 모드에서 실제 차단 게이트로 전환
+- 타입 안정화
+  - `server/main.py`: `UserContext` 도입, OAuth 응답 파싱/검증 시 타입 안전 처리
+  - `server/auth.py`: 토큰 타입 시그니처 정리, UTC 기준 시간 처리
+  - `server/db.py`: 시그니처 타입 정리 및 DB 레이어의 노이즈 규칙 범위 조정
+- typecheck 스코프 정리
+  - `server/pyrightconfig.json` 추가로 `.venv`/tests를 제외하고 핵심 앱 파일에 집중
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- 왜 필요한가
+  - 타입 경계가 애매하면 인증/권한/응답 파싱 같은 핵심 로직에서 사소한 수정이 런타임 버그로 이어지기 쉽다.
+  - CI에서 타입체크를 강제하면 "코드 리뷰 때 놓친 위험"을 자동으로 잡아준다.
+  - 스코프 없는 타입체크는 노이즈가 커서 팀이 결과를 무시하게 되므로, 운영 가능한 범위 설정이 필수다.
+- 안 하면 어떤 문제가 생기나
+  - PR마다 "통과/실패 기준"이 흔들려 배포 품질이 사람 숙련도에 의존하게 된다.
+  - OAuth/사용자 컨텍스트처럼 입력 타입이 다양한 구간에서 `None`/타입 불일치 버그가 재발한다.
+  - 타입체크 출력이 `.venv` 같은 외부 영역 잡음으로 오염되면, 실제 프로젝트 경고를 놓치게 된다.
+
+### 6) Validation
+- `uv run basedpyright`: 통과 (0 errors, 0 warnings, 0 notes)
+- `uv run ruff check .`: 통과
+- `uv run pytest`: 통과 (5 passed)
+
+### 7) Outcome
+#### 잘된 점
+- 타입체크를 "보여주기용"이 아니라 "실제 차단 게이트"로 운영 가능한 상태로 바꿨다.
+- 학습 관점에서 "스코프 설정 -> 타입 정리 -> CI 고정" 순서를 재사용 가능한 패턴으로 남겼다.
+
+#### 아쉬운 점
+- 아직 `main.py` 내부에는 동적 응답 처리 구간이 남아 있어, 더 엄격한 타입 모델링 여지가 있다.
+
+#### 다음 액션
+1. `main.py`의 OAuth/profile payload를 별도 Pydantic 모델로 분리해 캐스팅 의존도를 줄인다.
+2. `AdminScreen`의 React hook dependency 경고 2건을 정리해 프론트 lint 경고를 0으로 맞춘다.
