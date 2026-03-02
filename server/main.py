@@ -8,6 +8,7 @@ from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional, Mapping, Protocol, Sequence, TypedDict, cast
 from datetime import timedelta
+import asyncio
 import re
 import unicodedata
 import time
@@ -17,6 +18,7 @@ import secrets
 from urllib.parse import urlparse, urlencode, quote
 from urllib.request import Request, urlopen
 from threading import Lock
+from contextlib import asynccontextmanager, suppress
 from collections import deque
 
 from db import (
@@ -46,6 +48,7 @@ from db import (
     set_project_status,
     create_admin_action_log,
     get_admin_action_logs,
+    cleanup_admin_action_logs,
     get_latest_policy_update_action,
     get_admin_users,
     limit_user,
@@ -69,7 +72,18 @@ from auth import (
     decode_token,
 )
 
-app = FastAPI(title="VibeCoder Playground API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _ = app
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
+app = FastAPI(title="VibeCoder Playground API", lifespan=lifespan)
 
 PROJECT_LIST_CACHE_TTL_SECONDS = 12.0
 PROJECT_PERF_WINDOW_SIZE = 300
@@ -345,6 +359,10 @@ PROFILE_NICKNAME_MIN_LEN = 2
 PROFILE_NICKNAME_MAX_LEN = 24
 PROFILE_BIO_MAX_LEN = 300
 GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
+DEFAULT_ADMIN_LOG_RETENTION_DAYS = 365
+DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS = 30
+ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
+_admin_log_cleanup_task: Optional[asyncio.Task[None]] = None
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -398,6 +416,9 @@ class AdminPolicyUpdateRequest(BaseModel):
     auto_hide_report_threshold: int
     home_filter_tabs: Optional[list[PolicyFilterTab]] = None
     explore_filter_tabs: Optional[list[PolicyFilterTab]] = None
+    admin_log_retention_days: Optional[int] = None
+    admin_log_view_window_days: Optional[int] = None
+    admin_log_mask_reasons: Optional[bool] = None
 
 
 class AdminOAuthSettingsUpdateRequest(BaseModel):
@@ -611,6 +632,65 @@ def normalize_filter_tabs(
     return cleaned
 
 
+def normalize_positive_int(
+    value: object,
+    fallback: int,
+    minimum: int,
+    maximum: int,
+) -> int:
+    if not isinstance(value, int):
+        return fallback
+    if value < minimum:
+        return minimum
+    if value > maximum:
+        return maximum
+    return value
+
+
+def mask_sensitive_reason(reason: Optional[str], mask_enabled: bool) -> Optional[str]:
+    if reason is None:
+        return None
+
+    normalized = reason.strip()
+    if not normalized or not mask_enabled:
+        return normalized
+
+    patterns = [
+        (r"([\w.+-]+)@([\w.-]+\.[A-Za-z]{2,})", "[masked-email]"),
+        (r"\b(01[0-9]-?\d{3,4}-?\d{4})\b", "[masked-phone]"),
+        (r"\b(Bearer\s+[A-Za-z0-9._-]+)\b", "[masked-token]"),
+        (r"\b(sk-[A-Za-z0-9]{10,})\b", "[masked-secret]"),
+        (
+            r"\b([A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,})\b",
+            "[masked-jwt]",
+        ),
+    ]
+
+    masked = normalized
+    for pattern, replacement in patterns:
+        masked = re.sub(pattern, replacement, masked)
+    return masked
+
+
+def write_admin_action_log(
+    admin_id: str,
+    action_type: str,
+    target_type: str,
+    target_id: str,
+    reason: Optional[str],
+) -> None:
+    settings = get_effective_moderation_settings()
+    mask_enabled = bool(settings.get("admin_log_mask_reasons", True))
+    sanitized_reason = mask_sensitive_reason(reason, mask_enabled)
+    create_admin_action_log(
+        admin_id=admin_id,
+        action_type=action_type,
+        target_type=target_type,
+        target_id=target_id,
+        reason=sanitized_reason,
+    )
+
+
 def get_effective_moderation_settings() -> dict[str, object]:
     settings = get_moderation_settings()
     if not settings:
@@ -641,6 +721,19 @@ def get_effective_moderation_settings() -> dict[str, object]:
         settings.get("explore_filter_tabs"),
         DEFAULT_EXPLORE_FILTER_TABS,
     )
+    admin_log_retention_days = normalize_positive_int(
+        settings.get("admin_log_retention_days"),
+        DEFAULT_ADMIN_LOG_RETENTION_DAYS,
+        minimum=30,
+        maximum=3650,
+    )
+    admin_log_view_window_days = normalize_positive_int(
+        settings.get("admin_log_view_window_days"),
+        DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS,
+        minimum=1,
+        maximum=365,
+    )
+    admin_log_mask_reasons = bool(settings.get("admin_log_mask_reasons", True))
     baseline_categories = {
         category: normalize_keyword_list(keywords)
         for category, keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.items()
@@ -664,6 +757,9 @@ def get_effective_moderation_settings() -> dict[str, object]:
         "auto_hide_report_threshold": settings["auto_hide_report_threshold"],
         "home_filter_tabs": home_filter_tabs,
         "explore_filter_tabs": explore_filter_tabs,
+        "admin_log_retention_days": admin_log_retention_days,
+        "admin_log_view_window_days": admin_log_view_window_days,
+        "admin_log_mask_reasons": admin_log_mask_reasons,
         "updated_at": settings["updated_at"],
         "last_updated_by": last_updated_by,
         "last_updated_by_id": last_updated_by_id,
@@ -687,34 +783,83 @@ def ensure_baseline_moderation_settings() -> None:
         settings.get("explore_filter_tabs"),
         DEFAULT_EXPLORE_FILTER_TABS,
     )
+    admin_log_retention_days = normalize_positive_int(
+        settings.get("admin_log_retention_days"),
+        DEFAULT_ADMIN_LOG_RETENTION_DAYS,
+        minimum=30,
+        maximum=3650,
+    )
+    admin_log_view_window_days = normalize_positive_int(
+        settings.get("admin_log_view_window_days"),
+        DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS,
+        minimum=1,
+        maximum=365,
+    )
+    admin_log_mask_reasons = bool(settings.get("admin_log_mask_reasons", True))
     if (
         effective_keywords != (settings.get("blocked_keywords") or [])
         or home_filter_tabs != (settings.get("home_filter_tabs") or [])
         or explore_filter_tabs != (settings.get("explore_filter_tabs") or [])
+        or admin_log_retention_days != settings.get("admin_log_retention_days")
+        or admin_log_view_window_days != settings.get("admin_log_view_window_days")
+        or admin_log_mask_reasons != settings.get("admin_log_mask_reasons")
     ):
         update_moderation_settings(
             blocked_keywords=effective_keywords,
             auto_hide_report_threshold=settings["auto_hide_report_threshold"],
             home_filter_tabs=home_filter_tabs,
             explore_filter_tabs=explore_filter_tabs,
+            admin_log_retention_days=admin_log_retention_days,
+            admin_log_view_window_days=admin_log_view_window_days,
+            admin_log_mask_reasons=admin_log_mask_reasons,
         )
+
+
+async def run_admin_log_cleanup_loop() -> None:
+    while True:
+        try:
+            settings = get_effective_moderation_settings()
+            retention_days = cast(int, settings["admin_log_retention_days"])
+            deleted_count = cleanup_admin_action_logs(retention_days=retention_days)
+            if deleted_count > 0:
+                print(f"[admin-log] cleaned up {deleted_count} expired action logs")
+        except Exception as error:
+            print(f"[admin-log] cleanup loop error: {error}")
+        await asyncio.sleep(ADMIN_LOG_CLEANUP_INTERVAL_SECONDS)
 
 
 # ============ Startup Event ============
 
 
-@app.on_event("startup")
 async def startup_event():
     """앱 시작 시 DB 테이블 초기화"""
     try:
         init_db()
         ensure_baseline_moderation_settings()
+        settings = get_effective_moderation_settings()
+        _ = cleanup_admin_action_logs(
+            retention_days=cast(int, settings["admin_log_retention_days"])
+        )
         _ = get_about_content_payload()
         _set_cached_projects(
             sort="latest", platform=None, tag=None, items=get_projects(sort="latest")
         )
+        global _admin_log_cleanup_task
+        if _admin_log_cleanup_task is None or _admin_log_cleanup_task.done():
+            _admin_log_cleanup_task = asyncio.create_task(run_admin_log_cleanup_loop())
     except Exception as e:
         print(f"⚠️  DB initialization warning: {e}")
+
+
+async def shutdown_event() -> None:
+    global _admin_log_cleanup_task
+    if _admin_log_cleanup_task is None:
+        return
+
+    _ = _admin_log_cleanup_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await _admin_log_cleanup_task
+    _admin_log_cleanup_task = None
 
 
 # ============ Health Check ============
@@ -994,7 +1139,7 @@ def update_admin_oauth_settings(
     if not updated:
         raise HTTPException(status_code=500, detail="OAuth 설정 저장에 실패했습니다")
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="oauth_settings_updated",
         target_type="moderation_settings",
@@ -1035,12 +1180,19 @@ def list_admin_action_logs(
     limit: int = 50, current_user: UserContext = Depends(require_admin)
 ):
     _ = current_user
-    logs = get_admin_action_logs(limit=limit)
+    settings = get_effective_moderation_settings()
+    view_window_days = cast(int, settings["admin_log_view_window_days"])
+    mask_reasons = bool(settings.get("admin_log_mask_reasons", True))
+    logs = get_admin_action_logs(limit=limit, view_window_days=view_window_days)
     for log in logs:
         log["id"] = str(log["id"])
         if log.get("admin_id"):
             log["admin_id"] = str(log["admin_id"])
         log["target_id"] = str(log["target_id"])
+        log["reason"] = mask_sensitive_reason(
+            cast(Optional[str], log.get("reason")),
+            mask_reasons,
+        )
     return {"items": logs, "next_cursor": None}
 
 
@@ -1086,7 +1238,7 @@ def update_admin_project(
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     _invalidate_projects_cache()
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="project_updated",
         target_type="project",
@@ -1111,7 +1263,7 @@ def hide_admin_project(
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     _invalidate_projects_cache()
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="project_hidden",
         target_type="project",
@@ -1136,7 +1288,7 @@ def restore_admin_project(
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     _invalidate_projects_cache()
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="project_restored",
         target_type="project",
@@ -1161,7 +1313,7 @@ def delete_admin_project(
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
     _invalidate_projects_cache()
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="project_deleted",
         target_type="project",
@@ -1191,7 +1343,7 @@ def limit_user_endpoint(
             status_code=404, detail="사용자를 찾을 수 없거나 제한할 수 없습니다"
         )
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="user_limited",
         target_type="user",
@@ -1214,7 +1366,7 @@ def unlimit_user_endpoint(
             status_code=404, detail="사용자를 찾을 수 없거나 해제할 수 없습니다"
         )
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="user_unlimited",
         target_type="user",
@@ -1235,7 +1387,7 @@ def approve_user_endpoint(
     if not approved_user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="user_approved",
         target_type="user",
@@ -1258,7 +1410,7 @@ def reject_user_endpoint(
     if not rejected_user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="user_rejected",
         target_type="user",
@@ -1304,22 +1456,48 @@ def update_admin_policies(
         explore_tabs_payload,
         DEFAULT_EXPLORE_FILTER_TABS,
     )
+    admin_log_retention_days = normalize_positive_int(
+        payload.admin_log_retention_days,
+        cast(int, current_settings["admin_log_retention_days"]),
+        minimum=30,
+        maximum=3650,
+    )
+    admin_log_view_window_days = normalize_positive_int(
+        payload.admin_log_view_window_days,
+        cast(int, current_settings["admin_log_view_window_days"]),
+        minimum=1,
+        maximum=365,
+    )
+    admin_log_mask_reasons = (
+        payload.admin_log_mask_reasons
+        if payload.admin_log_mask_reasons is not None
+        else bool(current_settings.get("admin_log_mask_reasons", True))
+    )
 
     updated = update_moderation_settings(
         blocked_keywords=effective_keywords,
         auto_hide_report_threshold=payload.auto_hide_report_threshold,
         home_filter_tabs=home_filter_tabs,
         explore_filter_tabs=explore_filter_tabs,
+        admin_log_retention_days=admin_log_retention_days,
+        admin_log_view_window_days=admin_log_view_window_days,
+        admin_log_mask_reasons=admin_log_mask_reasons,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="policy_updated",
         target_type="moderation_settings",
         target_id="00000000-0000-0000-0000-000000000001",
-        reason=f"keywords={len(effective_keywords)}, threshold={payload.auto_hide_report_threshold}",
+        reason=(
+            f"keywords={len(effective_keywords)}, "
+            f"threshold={payload.auto_hide_report_threshold}, "
+            f"retention_days={admin_log_retention_days}, "
+            f"view_window_days={admin_log_view_window_days}, "
+            f"mask_reasons={admin_log_mask_reasons}"
+        ),
     )
 
     return get_effective_moderation_settings()
@@ -1336,7 +1514,7 @@ def update_about_content_endpoint(
     if not updated:
         raise HTTPException(status_code=500, detail="소개 페이지 저장에 실패했습니다")
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type="about_content_updated",
         target_type="content",
@@ -1364,7 +1542,7 @@ def update_report_endpoint(
     if updated.get("reporter_id"):
         updated["reporter_id"] = str(updated["reporter_id"])
 
-    create_admin_action_log(
+    write_admin_action_log(
         admin_id=current_user["id"],
         action_type=f"report_{payload.status}",
         target_type="report",

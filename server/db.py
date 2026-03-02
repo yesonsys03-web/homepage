@@ -134,6 +134,9 @@ def init_db():
                     auto_hide_report_threshold INTEGER DEFAULT 3,
                     home_filter_tabs JSONB DEFAULT '[]'::jsonb,
                     explore_filter_tabs JSONB DEFAULT '[]'::jsonb,
+                    admin_log_retention_days INTEGER DEFAULT 365,
+                    admin_log_view_window_days INTEGER DEFAULT 30,
+                    admin_log_mask_reasons BOOLEAN DEFAULT TRUE,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -219,6 +222,24 @@ def init_db():
             )
             cur.execute(
                 """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS admin_log_retention_days INTEGER DEFAULT 365
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS admin_log_view_window_days INTEGER DEFAULT 30
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS admin_log_mask_reasons BOOLEAN DEFAULT TRUE
+                """
+            )
+            cur.execute(
+                """
                 INSERT INTO oauth_runtime_settings (id, google_oauth_enabled)
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
@@ -258,6 +279,18 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_oauth_state_tokens_consumed_at
                 ON oauth_state_tokens (consumed_at)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_admin_action_logs_created_at
+                ON admin_action_logs (created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_admin_action_logs_target
+                ON admin_action_logs (target_type, target_id)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_admin_action_logs_action_type
+                ON admin_action_logs (action_type)
             """)
 
             conn.commit()
@@ -661,20 +694,48 @@ def create_admin_action_log(
             return cur.fetchone()
 
 
-def get_admin_action_logs(limit: int = 50):
+def get_admin_action_logs(limit: int = 50, view_window_days: Optional[int] = None):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if view_window_days and view_window_days > 0:
+                cur.execute(
+                    """
+                    SELECT l.*, u.nickname as admin_nickname
+                    FROM admin_action_logs l
+                    LEFT JOIN users u ON l.admin_id = u.id
+                    WHERE l.created_at >= NOW() - (%s * INTERVAL '1 day')
+                    ORDER BY l.created_at DESC
+                    LIMIT %s
+                    """,
+                    (view_window_days, limit),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT l.*, u.nickname as admin_nickname
+                    FROM admin_action_logs l
+                    LEFT JOIN users u ON l.admin_id = u.id
+                    ORDER BY l.created_at DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            return cur.fetchall()
+
+
+def cleanup_admin_action_logs(retention_days: int) -> int:
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT l.*, u.nickname as admin_nickname
-                FROM admin_action_logs l
-                LEFT JOIN users u ON l.admin_id = u.id
-                ORDER BY l.created_at DESC
-                LIMIT %s
+                DELETE FROM admin_action_logs
+                WHERE created_at < NOW() - (%s * INTERVAL '1 day')
                 """,
-                (limit,),
+                (retention_days,),
             )
-            return cur.fetchall()
+            deleted_count = cur.rowcount
+            conn.commit()
+            return deleted_count
 
 
 def get_latest_policy_update_action():
@@ -779,7 +840,8 @@ def get_moderation_settings():
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs, updated_at
+                SELECT id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
+                       admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons, updated_at
                 FROM moderation_settings
                 WHERE id = 1
                 """
@@ -792,6 +854,9 @@ def update_moderation_settings(
     auto_hide_report_threshold: int,
     home_filter_tabs: list[dict[str, str]],
     explore_filter_tabs: list[dict[str, str]],
+    admin_log_retention_days: int,
+    admin_log_view_window_days: int,
+    admin_log_mask_reasons: bool,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -802,15 +867,22 @@ def update_moderation_settings(
                     auto_hide_report_threshold = %s,
                     home_filter_tabs = %s,
                     explore_filter_tabs = %s,
+                    admin_log_retention_days = %s,
+                    admin_log_view_window_days = %s,
+                    admin_log_mask_reasons = %s,
                     updated_at = NOW()
                 WHERE id = 1
-                RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs, updated_at
+                RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
+                          admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons, updated_at
                 """,
                 (
                     blocked_keywords,
                     auto_hide_report_threshold,
                     Json(home_filter_tabs),
                     Json(explore_filter_tabs),
+                    admin_log_retention_days,
+                    admin_log_view_window_days,
+                    admin_log_mask_reasons,
                 ),
             )
             conn.commit()
