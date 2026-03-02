@@ -96,10 +96,22 @@ export interface ModerationPolicy {
   custom_blocked_keywords: string[]
   baseline_keyword_categories: Record<string, string[]>
   auto_hide_report_threshold: number
+  home_filter_tabs: FilterTab[]
+  explore_filter_tabs: FilterTab[]
   updated_at: string
   last_updated_by?: string | null
   last_updated_by_id?: string | null
   last_updated_action_at?: string | null
+}
+
+export interface FilterTab {
+  id: string
+  label: string
+}
+
+export interface FilterTabsConfig {
+  home_filter_tabs: FilterTab[]
+  explore_filter_tabs: FilterTab[]
 }
 
 export interface AboutValueItem {
@@ -192,6 +204,7 @@ const PUBLIC_TTL_MS = {
   projects: 45_000,
   projectDetail: 20_000,
   comments: 8_000,
+  filterTabs: 180_000,
 } as const
 
 const adminTabCache = new Map<string, AdminTabCacheEntry<unknown>>()
@@ -500,6 +513,20 @@ export const api = {
         const res = await fetch(`${API_BASE}/api/content/about`, { signal })
         if (!res.ok) throw new Error("Failed to load about content")
         return res.json() as Promise<AboutContent>
+      },
+      options,
+    )
+  },
+
+  getFilterTabs: async (options?: SWRFetchOptions<FilterTabsConfig>) => {
+    const key = createPublicCacheKey("filterTabs")
+    return fetchWithPublicSWR(
+      key,
+      PUBLIC_TTL_MS.filterTabs,
+      async (signal) => {
+        const res = await fetch(`${API_BASE}/api/content/filter-tabs`, { signal })
+        if (!res.ok) throw new Error("Failed to load filter tabs")
+        return res.json() as Promise<FilterTabsConfig>
       },
       options,
     )
@@ -834,11 +861,32 @@ export const api = {
     }
   },
 
-  updateAdminPolicies: async (blocked_keywords: string[], auto_hide_report_threshold: number) => {
+  updateAdminPolicies: async (
+    blocked_keywords: string[],
+    auto_hide_report_threshold: number,
+    home_filter_tabs?: FilterTab[],
+    explore_filter_tabs?: FilterTab[],
+  ) => {
+    const payload: {
+      blocked_keywords: string[]
+      auto_hide_report_threshold: number
+      home_filter_tabs?: FilterTab[]
+      explore_filter_tabs?: FilterTab[]
+    } = {
+      blocked_keywords,
+      auto_hide_report_threshold,
+    }
+    if (home_filter_tabs) {
+      payload.home_filter_tabs = home_filter_tabs
+    }
+    if (explore_filter_tabs) {
+      payload.explore_filter_tabs = explore_filter_tabs
+    }
+
     const res = await authFetch(`${API_BASE}/api/admin/policies`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ blocked_keywords, auto_hide_report_threshold }),
+      body: JSON.stringify(payload),
     })
     return res.json() as Promise<ModerationPolicy>
   },

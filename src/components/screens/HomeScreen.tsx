@@ -7,7 +7,7 @@ import { TopNav } from "@/components/TopNav"
 import { HeroBanner } from "@/components/HeroBanner"
 import { FilterChips } from "@/components/FilterChips"
 import { ProjectMeta } from "@/components/ProjectMeta"
-import { api, type Project } from "@/lib/api"
+import { api, type FilterTab, type Project } from "@/lib/api"
 import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
 import heroMobileImage from "../../../img/master_mobile.webp"
@@ -93,13 +93,13 @@ function ProjectCard({
   )
 }
 
-const filterChipItems = [
-  { id: "전체", label: "전체" },
-  { id: "Web", label: "Web" },
-  { id: "App", label: "App" },
-  { id: "AI", label: "AI" },
-  { id: "Tool", label: "Tool" },
-  { id: "Game", label: "Game" },
+const HOME_FILTER_TABS_FALLBACK: FilterTab[] = [
+  { id: "all", label: "전체" },
+  { id: "web", label: "Web" },
+  { id: "app", label: "App" },
+  { id: "ai", label: "AI" },
+  { id: "tool", label: "Tool" },
+  { id: "game", label: "Game" },
   { id: "和学习", label: "和学习" },
 ]
 
@@ -107,13 +107,41 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   const [projects, setProjects] = useState<ProjectWithMeta[]>([])
   const [loading, setLoading] = useState(true)
   const [sort, setSort] = useState<"latest" | "popular">("latest")
-  const [filter, setFilter] = useState("전체")
+  const [filter, setFilter] = useState("all")
+  const [filterChipItems, setFilterChipItems] = useState<FilterTab[]>(
+    HOME_FILTER_TABS_FALLBACK,
+  )
+
+  useEffect(() => {
+    const applyTabs = (tabs: FilterTab[]) => {
+      if (Array.isArray(tabs) && tabs.length > 0) {
+        setFilterChipItems(tabs)
+      }
+    }
+
+    void api.getFilterTabs({
+      onRevalidate: (data) => applyTabs(data.home_filter_tabs || HOME_FILTER_TABS_FALLBACK),
+    })
+      .then((data) => {
+        applyTabs(data.home_filter_tabs || HOME_FILTER_TABS_FALLBACK)
+      })
+      .catch((error) => {
+        console.error("Failed to fetch home filter tabs:", error)
+        setFilterChipItems(HOME_FILTER_TABS_FALLBACK)
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!filterChipItems.some((item) => item.id === filter)) {
+      setFilter(filterChipItems[0]?.id || "all")
+    }
+  }, [filterChipItems, filter])
 
   useEffect(() => {
     const fetchProjects = async () => {
-      const params: { sort?: string; platform?: string } = { sort }
-      if (filter !== "전체") {
-        params.platform = filter
+      const params: { sort?: string; tag?: string } = { sort }
+      if (filter !== "all") {
+        params.tag = filter
       }
 
       const hasCache = api.hasProjectsCache(params)

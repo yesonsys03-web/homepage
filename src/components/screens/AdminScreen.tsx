@@ -13,6 +13,7 @@ import {
   type AdminOAuthHealth,
   type AdminOAuthSettings,
   type AboutContent,
+  type FilterTab,
   type ModerationPolicy,
 } from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
@@ -60,6 +61,55 @@ const ABOUT_CONTENT_FALLBACK: AboutContent = {
       answer: "로그인 후 작품 올리기 버튼에서 등록할 수 있습니다.",
     },
   ],
+}
+
+const HOME_FILTER_TABS_FALLBACK: FilterTab[] = [
+  { id: "all", label: "전체" },
+  { id: "web", label: "Web" },
+  { id: "app", label: "App" },
+  { id: "ai", label: "AI" },
+  { id: "tool", label: "Tool" },
+  { id: "game", label: "Game" },
+  { id: "和学习", label: "和学习" },
+]
+
+const EXPLORE_FILTER_TABS_FALLBACK: FilterTab[] = [
+  { id: "all", label: "전체" },
+  { id: "web", label: "Web" },
+  { id: "game", label: "Game" },
+  { id: "tool", label: "Tool" },
+  { id: "ai", label: "AI" },
+  { id: "mobile", label: "Mobile" },
+]
+
+function tabsToTextarea(tabs: FilterTab[]): string {
+  return tabs.map((tab) => `${tab.id}|${tab.label}`).join("\n")
+}
+
+function parseTabsTextarea(input: string): FilterTab[] {
+  const seen = new Set<string>()
+  return input
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [rawId = "", ...rest] = line.split("|")
+      return {
+        id: rawId.trim(),
+        label: rest.join("|").trim(),
+      }
+    })
+    .filter((tab) => {
+      if (!tab.id || !tab.label) {
+        return false
+      }
+      const key = tab.id.toLowerCase()
+      if (seen.has(key)) {
+        return false
+      }
+      seen.add(key)
+      return true
+    })
 }
 
 function linesToTriples(input: string): Array<{ a: string; b: string; c: string }> {
@@ -218,6 +268,12 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [policyPreviewQuery, setPolicyPreviewQuery] = useState("")
   const [collapsedPolicyCategories, setCollapsedPolicyCategories] = useState<Record<string, boolean>>({})
   const [autoHideThreshold, setAutoHideThreshold] = useState(3)
+  const [homeFilterTabsInput, setHomeFilterTabsInput] = useState(
+    tabsToTextarea(HOME_FILTER_TABS_FALLBACK),
+  )
+  const [exploreFilterTabsInput, setExploreFilterTabsInput] = useState(
+    tabsToTextarea(EXPLORE_FILTER_TABS_FALLBACK),
+  )
   const [policyUpdatedBy, setPolicyUpdatedBy] = useState<string | null>(null)
   const [policyUpdatedAt, setPolicyUpdatedAt] = useState<string | null>(null)
   const [oauthEnabled, setOauthEnabled] = useState(false)
@@ -232,8 +288,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null)
   const [editingProjectTitle, setEditingProjectTitle] = useState("")
   const [editingProjectSummary, setEditingProjectSummary] = useState("")
+  const [editingProjectTags, setEditingProjectTags] = useState<string[]>([])
+  const [editingProjectTagInput, setEditingProjectTagInput] = useState("")
   const [editingProjectReason, setEditingProjectReason] = useState("")
   const [actionLogFilter, setActionLogFilter] = useState<ActionLogFilter>("all")
+  const [selectedActionLogId, setSelectedActionLogId] = useState<string | null>(null)
   const [loadingAboutContent, setLoadingAboutContent] = useState(true)
   const [savingAboutContent, setSavingAboutContent] = useState(false)
   const [aboutReason, setAboutReason] = useState("")
@@ -368,6 +427,20 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         return next
       })
       setAutoHideThreshold(policy.auto_hide_report_threshold || 3)
+      setHomeFilterTabsInput(
+        tabsToTextarea(
+          policy.home_filter_tabs && policy.home_filter_tabs.length > 0
+            ? policy.home_filter_tabs
+            : HOME_FILTER_TABS_FALLBACK,
+        ),
+      )
+      setExploreFilterTabsInput(
+        tabsToTextarea(
+          policy.explore_filter_tabs && policy.explore_filter_tabs.length > 0
+            ? policy.explore_filter_tabs
+            : EXPLORE_FILTER_TABS_FALLBACK,
+        ),
+      )
       setPolicyUpdatedBy(policy.last_updated_by || null)
       setPolicyUpdatedAt(policy.last_updated_action_at || null)
     }
@@ -380,6 +453,8 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       setBlockedKeywordsInput("")
       setBaselineKeywordCategories({})
       setAutoHideThreshold(3)
+      setHomeFilterTabsInput(tabsToTextarea(HOME_FILTER_TABS_FALLBACK))
+      setExploreFilterTabsInput(tabsToTextarea(EXPLORE_FILTER_TABS_FALLBACK))
       setPolicyUpdatedBy(null)
       setPolicyUpdatedAt(null)
     } finally {
@@ -584,6 +659,13 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     return actionLogs.filter((log) => log.target_type === actionLogFilter)
   }, [actionLogs, actionLogFilter])
 
+  const selectedActionLog = useMemo(() => {
+    if (!selectedActionLogId) {
+      return null
+    }
+    return filteredActionLogs.find((log) => log.id === selectedActionLogId) || null
+  }, [filteredActionLogs, selectedActionLogId])
+
   const isProjectActionReasonValid = projectActionReason.trim().length > 0
   const areAllFilteredProjectsSelected =
     filteredProjects.length > 0
@@ -614,6 +696,12 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       .map((keyword) => keyword.trim())
       .filter(Boolean)
   }, [blockedKeywordsInput])
+
+  useEffect(() => {
+    if (selectedActionLogId && !filteredActionLogs.some((log) => log.id === selectedActionLogId)) {
+      setSelectedActionLogId(null)
+    }
+  }, [filteredActionLogs, selectedActionLogId])
 
   const handleTogglePolicyCategory = (category: string) => {
     setCollapsedPolicyCategories((prev) => ({
@@ -818,6 +906,8 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     setEditingProjectId(project.id)
     setEditingProjectTitle(project.title)
     setEditingProjectSummary(project.summary)
+    setEditingProjectTags(project.tags ?? [])
+    setEditingProjectTagInput("")
     setEditingProjectReason("")
   }
 
@@ -825,7 +915,24 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     setEditingProjectId(null)
     setEditingProjectTitle("")
     setEditingProjectSummary("")
+    setEditingProjectTags([])
+    setEditingProjectTagInput("")
     setEditingProjectReason("")
+  }
+
+  const handleAddEditingProjectTag = () => {
+    const nextTag = editingProjectTagInput.trim()
+    if (!nextTag) return
+    setEditingProjectTags((prev) => {
+      const exists = prev.some((tag) => tag.toLowerCase() === nextTag.toLowerCase())
+      if (exists) return prev
+      return [...prev, nextTag]
+    })
+    setEditingProjectTagInput("")
+  }
+
+  const handleRemoveEditingProjectTag = (targetTag: string) => {
+    setEditingProjectTags((prev) => prev.filter((tag) => tag !== targetTag))
   }
 
   const handleSaveProjectEdit = async () => {
@@ -841,6 +948,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       await api.updateAdminProject(editingProjectId, {
         title: editingProjectTitle.trim(),
         summary: editingProjectSummary.trim(),
+        tags: editingProjectTags,
         reason,
       })
       await Promise.all([loadProjects(true), loadActionLogs(true)])
@@ -918,9 +1026,21 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       return
     }
 
+    const homeTabs = parseTabsTextarea(homeFilterTabsInput)
+    const exploreTabs = parseTabsTextarea(exploreFilterTabsInput)
+    if (homeTabs.length === 0 || exploreTabs.length === 0) {
+      window.alert("Home/Explore 탭은 최소 1개 이상 입력해야 합니다 (형식: id|label)")
+      return
+    }
+
     setSavingPolicies(true)
     try {
-      await api.updateAdminPolicies(keywords, autoHideThreshold)
+      await api.updateAdminPolicies(
+        keywords,
+        autoHideThreshold,
+        homeTabs,
+        exploreTabs,
+      )
       await Promise.all([loadPolicies(true), loadActionLogs(true)])
       window.alert("정책이 저장되었습니다")
     } catch (error) {
@@ -1380,6 +1500,44 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                     rows={3}
                     className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
                   />
+                  <div className="space-y-2">
+                    <p className="text-xs text-[#B8C3E6]">태그 수정 (추가/제거)</p>
+                    <div className="flex gap-2">
+                      <input
+                        value={editingProjectTagInput}
+                        onChange={(event) => setEditingProjectTagInput(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault()
+                            handleAddEditingProjectTag()
+                          }
+                        }}
+                        placeholder="태그 입력 후 Enter"
+                        className="flex-1 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                        onClick={handleAddEditingProjectTag}
+                      >
+                        태그 추가
+                      </Button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {editingProjectTags.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => handleRemoveEditingProjectTag(tag)}
+                          className="rounded-full bg-[#111936] px-3 py-1 text-xs text-[#B8C3E6] hover:bg-[#FF5D8F]/20 hover:text-[#F4F7FF]"
+                          title="클릭해서 제거"
+                        >
+                          {tag} ×
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                   <input
                     value={editingProjectReason}
                     onChange={(event) => setEditingProjectReason(event.target.value)}
@@ -1766,6 +1924,28 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                       />
                     </div>
 
+                    <div>
+                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Home 탭 구성</h3>
+                      <p className="text-xs text-[#B8C3E6] mb-2">한 줄에 `id|label` 형식으로 입력 (예: web|Web)</p>
+                      <textarea
+                        value={homeFilterTabsInput}
+                        onChange={(event) => setHomeFilterTabsInput(event.target.value)}
+                        rows={6}
+                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+                      />
+                    </div>
+
+                    <div>
+                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Explore 탭 구성</h3>
+                      <p className="text-xs text-[#B8C3E6] mb-2">한 줄에 `id|label` 형식으로 입력 (예: mobile|Mobile)</p>
+                      <textarea
+                        value={exploreFilterTabsInput}
+                        onChange={(event) => setExploreFilterTabsInput(event.target.value)}
+                        rows={6}
+                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
+                      />
+                    </div>
+
                     <div className="pt-2">
                       <Button
                         onClick={handleSavePolicies}
@@ -1821,7 +2001,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                     </thead>
                     <tbody>
                       {filteredActionLogs.map((log) => (
-                        <tr key={log.id} className="border-b border-[#111936]/50">
+                        <tr
+                          key={log.id}
+                          className={`border-b border-[#111936]/50 cursor-pointer ${selectedActionLogId === log.id ? "bg-[#111936]/60" : "hover:bg-[#111936]/30"}`}
+                          onClick={() => setSelectedActionLogId(log.id)}
+                        >
                           <td className="p-4 text-[#F4F7FF]">{actionToText(log.action_type)}</td>
                           <td className="p-4 text-[#FF5D8F]">{log.target_type}:{log.target_id}</td>
                           <td className="p-4 text-[#B8C3E6]">{log.reason || "-"}</td>
@@ -1834,6 +2018,31 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
                 )}
               </CardContent>
             </Card>
+            {selectedActionLog ? (
+              <Card className="mt-4 bg-[#161F42] border border-[#FF5D8F]/30">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-[#F4F7FF]">선택한 로그 상세</h3>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
+                      onClick={() => setSelectedActionLogId(null)}
+                    >
+                      닫기
+                    </Button>
+                  </div>
+                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">작업:</span> {actionToText(selectedActionLog.action_type)}</p>
+                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">대상:</span> {selectedActionLog.target_type}:{selectedActionLog.target_id}</p>
+                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">관리자:</span> {selectedActionLog.admin_nickname || "admin"}</p>
+                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">시간:</span> {new Date(selectedActionLog.created_at).toLocaleString("ko-KR")}</p>
+                  <div className="rounded-md border border-[#111936] bg-[#0B1020] p-3">
+                    <p className="text-xs text-[#F4F7FF] mb-1">사유 / 내용</p>
+                    <p className="text-xs text-[#B8C3E6] whitespace-pre-wrap break-words">{selectedActionLog.reason || "기록된 사유가 없습니다."}</p>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : null}
           </TabsContent>
         </Tabs>
       </main>

@@ -5,7 +5,7 @@ import { TopNav } from "@/components/TopNav"
 import { FilterChips } from "@/components/FilterChips"
 import { ProjectMeta } from "@/components/ProjectMeta"
 import { Button } from "@/components/ui/button"
-import { api, type Project } from "@/lib/api"
+import { api, type FilterTab, type Project } from "@/lib/api"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -16,7 +16,7 @@ interface ScreenProps {
   onOpenProject?: (projectId: string) => void
 }
 
-const categories = [
+const EXPLORE_FILTER_TABS_FALLBACK: FilterTab[] = [
   { id: "all", label: "전체" },
   { id: "web", label: "Web" },
   { id: "game", label: "Game" },
@@ -30,12 +30,40 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
   const [loading, setLoading] = useState(true)
   const [sort, setSort] = useState<"popular" | "latest">("popular")
   const [category, setCategory] = useState("all")
+  const [categories, setCategories] = useState<FilterTab[]>(
+    EXPLORE_FILTER_TABS_FALLBACK,
+  )
+
+  useEffect(() => {
+    const applyTabs = (tabs: FilterTab[]) => {
+      if (Array.isArray(tabs) && tabs.length > 0) {
+        setCategories(tabs)
+      }
+    }
+
+    void api.getFilterTabs({
+      onRevalidate: (data) => applyTabs(data.explore_filter_tabs || EXPLORE_FILTER_TABS_FALLBACK),
+    })
+      .then((data) => {
+        applyTabs(data.explore_filter_tabs || EXPLORE_FILTER_TABS_FALLBACK)
+      })
+      .catch((error) => {
+        console.error("Failed to fetch explore filter tabs:", error)
+        setCategories(EXPLORE_FILTER_TABS_FALLBACK)
+      })
+  }, [])
+
+  useEffect(() => {
+    if (!categories.some((item) => item.id === category)) {
+      setCategory(categories[0]?.id || "all")
+    }
+  }, [categories, category])
 
   useEffect(() => {
     const fetchProjects = async () => {
-      const params: { sort?: string; platform?: string } = { sort }
+      const params: { sort?: string; tag?: string } = { sort }
       if (category !== "all") {
-        params.platform = category
+        params.tag = category
       }
 
       const hasCache = api.hasProjectsCache(params)
