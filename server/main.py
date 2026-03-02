@@ -197,6 +197,25 @@ BASELINE_BLOCKED_KEYWORD_CATEGORIES: dict[str, list[str]] = {
     ],
 }
 
+DEFAULT_HOME_FILTER_TABS: list[dict[str, str]] = [
+    {"id": "all", "label": "전체"},
+    {"id": "web", "label": "Web"},
+    {"id": "app", "label": "App"},
+    {"id": "ai", "label": "AI"},
+    {"id": "tool", "label": "Tool"},
+    {"id": "game", "label": "Game"},
+    {"id": "和学习", "label": "和学习"},
+]
+
+DEFAULT_EXPLORE_FILTER_TABS: list[dict[str, str]] = [
+    {"id": "all", "label": "전체"},
+    {"id": "web", "label": "Web"},
+    {"id": "game", "label": "Game"},
+    {"id": "tool", "label": "Tool"},
+    {"id": "ai", "label": "AI"},
+    {"id": "mobile", "label": "Mobile"},
+]
+
 ABOUT_CONTENT_KEY = "about_page"
 ABOUT_CONTENT_TARGET_ID = "00000000-0000-0000-0000-000000000003"
 ABOUT_CONTENT_DEFAULT = {
@@ -369,9 +388,16 @@ class AdminUserLimitRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class PolicyFilterTab(BaseModel):
+    id: str
+    label: str
+
+
 class AdminPolicyUpdateRequest(BaseModel):
     blocked_keywords: list[str]
     auto_hide_report_threshold: int
+    home_filter_tabs: Optional[list[PolicyFilterTab]] = None
+    explore_filter_tabs: Optional[list[PolicyFilterTab]] = None
 
 
 class AdminOAuthSettingsUpdateRequest(BaseModel):
@@ -548,6 +574,43 @@ def text_contains_blocked_keyword(text: str, blocked_keywords: list[str]) -> boo
     return any(keyword in normalized_text for keyword in blocked_keywords)
 
 
+def normalize_filter_tabs(
+    tabs: object,
+    fallback: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    if not isinstance(tabs, list):
+        return [dict(item) for item in fallback]
+
+    cleaned: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+
+    for item in tabs:
+        if not isinstance(item, Mapping):
+            continue
+
+        raw_id = item.get("id")
+        raw_label = item.get("label")
+        if not isinstance(raw_id, str) or not isinstance(raw_label, str):
+            continue
+
+        tab_id = raw_id.strip()
+        label = raw_label.strip()
+        if not tab_id or not label:
+            continue
+
+        dedupe_key = tab_id.lower()
+        if dedupe_key in seen_ids:
+            continue
+
+        seen_ids.add(dedupe_key)
+        cleaned.append({"id": tab_id, "label": label})
+
+    if not cleaned:
+        return [dict(item) for item in fallback]
+
+    return cleaned
+
+
 def get_effective_moderation_settings() -> dict[str, object]:
     settings = get_moderation_settings()
     if not settings:
@@ -570,6 +633,14 @@ def get_effective_moderation_settings() -> dict[str, object]:
         for keyword in normalized_raw_keywords
         if keyword not in baseline_keywords
     ]
+    home_filter_tabs = normalize_filter_tabs(
+        settings.get("home_filter_tabs"),
+        DEFAULT_HOME_FILTER_TABS,
+    )
+    explore_filter_tabs = normalize_filter_tabs(
+        settings.get("explore_filter_tabs"),
+        DEFAULT_EXPLORE_FILTER_TABS,
+    )
     baseline_categories = {
         category: normalize_keyword_list(keywords)
         for category, keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.items()
@@ -591,6 +662,8 @@ def get_effective_moderation_settings() -> dict[str, object]:
         "custom_blocked_keywords": custom_keywords,
         "baseline_keyword_categories": baseline_categories,
         "auto_hide_report_threshold": settings["auto_hide_report_threshold"],
+        "home_filter_tabs": home_filter_tabs,
+        "explore_filter_tabs": explore_filter_tabs,
         "updated_at": settings["updated_at"],
         "last_updated_by": last_updated_by,
         "last_updated_by_id": last_updated_by_id,
@@ -606,10 +679,24 @@ def ensure_baseline_moderation_settings() -> None:
     effective_keywords = get_effective_blocked_keywords(
         settings.get("blocked_keywords") or []
     )
-    if effective_keywords != (settings.get("blocked_keywords") or []):
+    home_filter_tabs = normalize_filter_tabs(
+        settings.get("home_filter_tabs"),
+        DEFAULT_HOME_FILTER_TABS,
+    )
+    explore_filter_tabs = normalize_filter_tabs(
+        settings.get("explore_filter_tabs"),
+        DEFAULT_EXPLORE_FILTER_TABS,
+    )
+    if (
+        effective_keywords != (settings.get("blocked_keywords") or [])
+        or home_filter_tabs != (settings.get("home_filter_tabs") or [])
+        or explore_filter_tabs != (settings.get("explore_filter_tabs") or [])
+    ):
         update_moderation_settings(
             blocked_keywords=effective_keywords,
             auto_hide_report_threshold=settings["auto_hide_report_threshold"],
+            home_filter_tabs=home_filter_tabs,
+            explore_filter_tabs=explore_filter_tabs,
         )
 
 
@@ -641,6 +728,18 @@ def health() -> dict[str, str]:
 @app.get("/api/content/about")
 def get_about_content_endpoint():
     return get_about_content_payload()
+
+
+@app.get("/api/content/filter-tabs")
+def get_filter_tabs_endpoint() -> dict[str, list[dict[str, str]]]:
+    settings = get_effective_moderation_settings()
+    return {
+        "home_filter_tabs": cast(list[dict[str, str]], settings["home_filter_tabs"]),
+        "explore_filter_tabs": cast(
+            list[dict[str, str]],
+            settings["explore_filter_tabs"],
+        ),
+    }
 
 
 # ============ Projects API ============
@@ -1187,10 +1286,30 @@ def update_admin_policies(
 
     cleaned_keywords = normalize_keyword_list(payload.blocked_keywords)
     effective_keywords = get_effective_blocked_keywords(cleaned_keywords)
+    current_settings = get_effective_moderation_settings()
+    home_tabs_payload = (
+        [tab.model_dump() for tab in payload.home_filter_tabs]
+        if payload.home_filter_tabs is not None
+        else cast(list[dict[str, str]], current_settings["home_filter_tabs"])
+    )
+    explore_tabs_payload = (
+        [tab.model_dump() for tab in payload.explore_filter_tabs]
+        if payload.explore_filter_tabs is not None
+        else cast(list[dict[str, str]], current_settings["explore_filter_tabs"])
+    )
+    home_filter_tabs = normalize_filter_tabs(
+        home_tabs_payload, DEFAULT_HOME_FILTER_TABS
+    )
+    explore_filter_tabs = normalize_filter_tabs(
+        explore_tabs_payload,
+        DEFAULT_EXPLORE_FILTER_TABS,
+    )
 
     updated = update_moderation_settings(
         blocked_keywords=effective_keywords,
         auto_hide_report_threshold=payload.auto_hide_report_threshold,
+        home_filter_tabs=home_filter_tabs,
+        explore_filter_tabs=explore_filter_tabs,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
@@ -1203,7 +1322,7 @@ def update_admin_policies(
         reason=f"keywords={len(effective_keywords)}, threshold={payload.auto_hide_report_threshold}",
     )
 
-    return updated
+    return get_effective_moderation_settings()
 
 
 @app.patch("/api/admin/content/about")

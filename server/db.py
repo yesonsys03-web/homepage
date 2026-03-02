@@ -132,6 +132,8 @@ def init_db():
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     blocked_keywords TEXT[] DEFAULT '{}',
                     auto_hide_report_threshold INTEGER DEFAULT 3,
+                    home_filter_tabs JSONB DEFAULT '[]'::jsonb,
+                    explore_filter_tabs JSONB DEFAULT '[]'::jsonb,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -201,6 +203,18 @@ def init_db():
                 INSERT INTO moderation_settings (id, blocked_keywords, auto_hide_report_threshold)
                 VALUES (1, '{}', 3)
                 ON CONFLICT (id) DO NOTHING
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS home_filter_tabs JSONB DEFAULT '[]'::jsonb
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS explore_filter_tabs JSONB DEFAULT '[]'::jsonb
                 """
             )
             cur.execute(
@@ -277,11 +291,11 @@ def get_projects(
             params = []
 
             if platform:
-                query += " AND p.platform = %s"
+                query += " AND LOWER(p.platform) = LOWER(%s)"
                 params.append(platform)
 
             if tag:
-                query += " AND %s = ANY(p.tags)"
+                query += " AND EXISTS (SELECT 1 FROM unnest(p.tags) AS t WHERE LOWER(t) = LOWER(%s))"
                 params.append(tag)
 
             if sort == "popular":
@@ -765,7 +779,7 @@ def get_moderation_settings():
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                SELECT id, blocked_keywords, auto_hide_report_threshold, updated_at
+                SELECT id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs, updated_at
                 FROM moderation_settings
                 WHERE id = 1
                 """
@@ -776,6 +790,8 @@ def get_moderation_settings():
 def update_moderation_settings(
     blocked_keywords: list[str],
     auto_hide_report_threshold: int,
+    home_filter_tabs: list[dict[str, str]],
+    explore_filter_tabs: list[dict[str, str]],
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -784,11 +800,18 @@ def update_moderation_settings(
                 UPDATE moderation_settings
                 SET blocked_keywords = %s,
                     auto_hide_report_threshold = %s,
+                    home_filter_tabs = %s,
+                    explore_filter_tabs = %s,
                     updated_at = NOW()
                 WHERE id = 1
-                RETURNING id, blocked_keywords, auto_hide_report_threshold, updated_at
+                RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs, updated_at
                 """,
-                (blocked_keywords, auto_hide_report_threshold),
+                (
+                    blocked_keywords,
+                    auto_hide_report_threshold,
+                    Json(home_filter_tabs),
+                    Json(explore_filter_tabs),
+                ),
             )
             conn.commit()
             return cur.fetchone()
