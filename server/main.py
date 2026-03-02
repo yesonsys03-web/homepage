@@ -1,10 +1,12 @@
+# pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false, reportCallInDefaultInitializer=false, reportDeprecated=false
+
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Optional, Mapping, Sequence, Any
+from typing import Optional, Mapping, Protocol, Sequence, TypedDict, cast
 from datetime import timedelta
 import re
 import unicodedata
@@ -72,7 +74,7 @@ app = FastAPI(title="VibeCoder Playground API")
 PROJECT_LIST_CACHE_TTL_SECONDS = 12.0
 PROJECT_PERF_WINDOW_SIZE = 300
 _project_list_cache: dict[
-    tuple[str, Optional[str], Optional[str]], tuple[float, list[dict[str, Any]]]
+    tuple[str, Optional[str], Optional[str]], tuple[float, list[dict[str, object]]]
 ] = {}
 _project_list_cache_lock = Lock()
 _project_perf_samples: deque[tuple[float, float, int]] = deque(
@@ -89,7 +91,7 @@ def _project_cache_key(
 
 def _get_cached_projects(
     sort: str, platform: Optional[str], tag: Optional[str]
-) -> Optional[list[dict[str, Any]]]:
+) -> Optional[list[dict[str, object]]]:
     now = time.perf_counter()
     key = _project_cache_key(sort, platform, tag)
     with _project_list_cache_lock:
@@ -98,7 +100,7 @@ def _get_cached_projects(
             return None
         expires_at, items = cached
         if expires_at <= now:
-            _project_list_cache.pop(key, None)
+            _ = _project_list_cache.pop(key, None)
             return None
         return [dict(item) for item in items]
 
@@ -107,7 +109,7 @@ def _set_cached_projects(
     sort: str,
     platform: Optional[str],
     tag: Optional[str],
-    items: Sequence[Mapping[str, Any]],
+    items: Sequence[Mapping[str, object]],
 ) -> None:
     key = _project_cache_key(sort, platform, tag)
     expires_at = time.perf_counter() + PROJECT_LIST_CACHE_TTL_SECONDS
@@ -134,7 +136,7 @@ def _record_project_perf(elapsed_ms: float, db_ms: float, cache_hit: bool) -> No
         _project_perf_samples.append((elapsed_ms, db_ms, 1 if cache_hit else 0))
 
 
-def _project_perf_snapshot() -> dict[str, Any]:
+def _project_perf_snapshot() -> dict[str, object]:
     with _project_perf_lock:
         samples = list(_project_perf_samples)
 
@@ -338,7 +340,23 @@ GOOGLE_FRONTEND_REDIRECT_URI = os.getenv(
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
-    user: dict
+    user: "UserContext"
+
+
+class UserContext(TypedDict):
+    id: str
+    email: str
+    nickname: str
+    role: str
+    status: str
+    avatar_url: str | None
+    bio: str | None
+
+
+class _ReadableResponse(Protocol):
+    def __enter__(self) -> "_ReadableResponse": ...
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> bool: ...
+    def read(self) -> bytes: ...
 
 
 class AdminReportUpdateRequest(BaseModel):
@@ -414,7 +432,7 @@ def require_action_reason(reason: Optional[str]) -> str:
     return normalized_reason
 
 
-def get_effective_oauth_settings() -> dict[str, Any]:
+def get_effective_oauth_settings() -> dict[str, object]:
     runtime = get_oauth_runtime_settings() or {}
     enabled = bool(runtime.get("google_oauth_enabled", False))
     google_redirect_uri = (
@@ -432,7 +450,7 @@ def get_effective_oauth_settings() -> dict[str, Any]:
     }
 
 
-def ensure_google_oauth_available() -> dict[str, Any]:
+def ensure_google_oauth_available() -> dict[str, object]:
     settings = get_effective_oauth_settings()
     if not settings["google_oauth_enabled"]:
         raise HTTPException(
@@ -454,13 +472,15 @@ def ensure_google_oauth_available() -> dict[str, Any]:
     return settings
 
 
-def build_google_nickname(profile: dict[str, Any]) -> str:
-    preferred_name = (profile.get("name") or "").strip()
+def build_google_nickname(profile: dict[str, object]) -> str:
+    raw_name = profile.get("name")
+    preferred_name = raw_name.strip() if isinstance(raw_name, str) else ""
     if preferred_name:
         normalized = re.sub(r"\s+", " ", preferred_name)
         return normalized[:PROFILE_NICKNAME_MAX_LEN]
 
-    email = (profile.get("email") or "").strip()
+    raw_email = profile.get("email")
+    email = raw_email.strip() if isinstance(raw_email, str) else ""
     local_part = email.split("@")[0] if "@" in email else "user"
     local_part = re.sub(r"[^a-zA-Z0-9_.-]", "", local_part)
     return (local_part or "user")[:PROFILE_NICKNAME_MAX_LEN]
@@ -482,7 +502,7 @@ def ensure_unique_nickname(base_nickname: str) -> str:
     return fallback[:PROFILE_NICKNAME_MAX_LEN]
 
 
-def get_about_content_payload() -> dict:
+def get_about_content_payload() -> dict[str, object]:
     record = get_site_content(ABOUT_CONTENT_KEY)
     if record and record.get("content_json"):
         content = record["content_json"]
@@ -528,7 +548,7 @@ def text_contains_blocked_keyword(text: str, blocked_keywords: list[str]) -> boo
     return any(keyword in normalized_text for keyword in blocked_keywords)
 
 
-def get_effective_moderation_settings() -> dict:
+def get_effective_moderation_settings() -> dict[str, object]:
     settings = get_moderation_settings()
     if not settings:
         raise HTTPException(status_code=404, detail="정책 설정을 찾을 수 없습니다")
@@ -602,7 +622,7 @@ async def startup_event():
     try:
         init_db()
         ensure_baseline_moderation_settings()
-        get_about_content_payload()
+        _ = get_about_content_payload()
         _set_cached_projects(
             sort="latest", platform=None, tag=None, items=get_projects(sort="latest")
         )
@@ -691,7 +711,7 @@ def like_project_endpoint(project_id: str):
         like_count = like_project(project_id)
         _invalidate_projects_cache()
         return {"like_count": like_count}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
@@ -702,7 +722,7 @@ def unlike_project_endpoint(project_id: str):
         like_count = unlike_project(project_id)
         _invalidate_projects_cache()
         return {"like_count": like_count}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=404, detail="Project not found")
 
 
@@ -719,7 +739,7 @@ def list_comments(project_id: str, sort: str = "latest"):
         c["author_id"] = str(c["author_id"])
         if c.get("parent_id"):
             c["parent_id"] = str(c["parent_id"])
-    return {"items": comments}
+    return {"items": comments, "next_cursor": None}
 
 
 # ============ Reports API ============
@@ -748,7 +768,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
 
     user_id = payload.get("sub")
-    if not user_id:
+    if not isinstance(user_id, str) or not user_id:
         raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
 
     user = get_user_by_id(user_id)
@@ -770,7 +790,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     }
 
 
-async def require_admin(current_user: dict = Depends(get_current_user)):
+async def require_admin(current_user: UserContext = Depends(get_current_user)):
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
     return current_user
@@ -780,7 +800,7 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
 def update_project_endpoint(
     project_id: str,
     payload: ProjectUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: UserContext = Depends(get_current_user),
 ):
     existing = get_project(project_id)
     if not existing:
@@ -803,7 +823,8 @@ def update_project_endpoint(
         ]
     )
     settings = get_effective_moderation_settings()
-    if text_contains_blocked_keyword(content_for_check, settings["blocked_keywords"]):
+    blocked_keywords = cast(list[str], settings["blocked_keywords"])
+    if text_contains_blocked_keyword(content_for_check, blocked_keywords):
         raise HTTPException(
             status_code=400, detail="금칙어가 포함된 내용은 수정할 수 없습니다"
         )
@@ -826,7 +847,7 @@ def list_reports(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     """신고 목록 조회 (관리자)"""
     _ = current_user
@@ -836,17 +857,17 @@ def list_reports(
         r["id"] = str(r["id"])
         if r.get("reporter_id"):
             r["reporter_id"] = str(r["reporter_id"])
-    return {"items": reports, "total": total}
+    return {"items": reports, "total": total, "next_cursor": None}
 
 
 @app.get("/api/admin/perf/projects")
-def get_projects_perf(current_user: dict = Depends(require_admin)):
+def get_projects_perf(current_user: UserContext = Depends(require_admin)):
     _ = current_user
     return _project_perf_snapshot()
 
 
 @app.get("/api/admin/integrations/oauth")
-def get_admin_oauth_settings(current_user: dict = Depends(require_admin)):
+def get_admin_oauth_settings(current_user: UserContext = Depends(require_admin)):
     _ = current_user
     settings = get_effective_oauth_settings()
     return {
@@ -859,7 +880,7 @@ def get_admin_oauth_settings(current_user: dict = Depends(require_admin)):
 @app.patch("/api/admin/integrations/oauth")
 def update_admin_oauth_settings(
     payload: AdminOAuthSettingsUpdateRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     google_redirect_uri = (payload.google_redirect_uri or "").strip() or None
     google_frontend_redirect_uri = (
@@ -891,7 +912,7 @@ def update_admin_oauth_settings(
 
 
 @app.get("/api/admin/integrations/oauth/health")
-def get_admin_oauth_health(current_user: dict = Depends(require_admin)):
+def get_admin_oauth_health(current_user: UserContext = Depends(require_admin)):
     _ = current_user
     settings = get_effective_oauth_settings()
     has_client_id = bool(GOOGLE_CLIENT_ID)
@@ -912,7 +933,7 @@ def get_admin_oauth_health(current_user: dict = Depends(require_admin)):
 
 @app.get("/api/admin/action-logs")
 def list_admin_action_logs(
-    limit: int = 50, current_user: dict = Depends(require_admin)
+    limit: int = 50, current_user: UserContext = Depends(require_admin)
 ):
     _ = current_user
     logs = get_admin_action_logs(limit=limit)
@@ -921,40 +942,43 @@ def list_admin_action_logs(
         if log.get("admin_id"):
             log["admin_id"] = str(log["admin_id"])
         log["target_id"] = str(log["target_id"])
-    return {"items": logs}
+    return {"items": logs, "next_cursor": None}
 
 
 @app.get("/api/admin/users")
-def list_admin_users(limit: int = 200, current_user: dict = Depends(require_admin)):
+def list_admin_users(
+    limit: int = 200, current_user: UserContext = Depends(require_admin)
+):
     _ = current_user
     users = get_admin_users(limit=limit)
     for user in users:
         user["id"] = str(user["id"])
-    return {"items": users}
+    return {"items": users, "next_cursor": None}
 
 
 @app.get("/api/admin/projects")
 def list_admin_projects(
     status: Optional[str] = None,
     limit: int = 200,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     _ = current_user
     projects = get_admin_projects(status=status, limit=limit)
     for project in projects:
         project["id"] = str(project["id"])
         project["author_id"] = str(project["author_id"])
-    return {"items": projects}
+    return {"items": projects, "next_cursor": None}
 
 
 @app.patch("/api/admin/projects/{project_id}")
 def update_admin_project(
     project_id: str,
     payload: AdminProjectUpdateRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
-    updates = payload.model_dump(exclude_none=True)
-    reason = require_action_reason(updates.pop("reason", None))
+    updates = cast(dict[str, object], payload.model_dump(exclude_none=True))
+    raw_reason = updates.pop("reason", None)
+    reason = require_action_reason(raw_reason if isinstance(raw_reason, str) else None)
     if not updates:
         raise HTTPException(status_code=400, detail="변경할 프로젝트 필드가 없습니다")
 
@@ -980,7 +1004,7 @@ def update_admin_project(
 def hide_admin_project(
     project_id: str,
     payload: AdminActionReasonRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     reason = require_action_reason(payload.reason)
     updated = set_project_status(project_id=project_id, status="hidden")
@@ -1005,7 +1029,7 @@ def hide_admin_project(
 def restore_admin_project(
     project_id: str,
     payload: AdminActionReasonRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     reason = require_action_reason(payload.reason)
     updated = set_project_status(project_id=project_id, status="published")
@@ -1030,7 +1054,7 @@ def restore_admin_project(
 def delete_admin_project(
     project_id: str,
     payload: AdminActionReasonRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     reason = require_action_reason(payload.reason)
     updated = set_project_status(project_id=project_id, status="deleted")
@@ -1055,7 +1079,7 @@ def delete_admin_project(
 def limit_user_endpoint(
     user_id: str,
     payload: AdminUserLimitRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     if payload.hours <= 0:
         raise HTTPException(status_code=400, detail="hours는 1 이상이어야 합니다")
@@ -1083,7 +1107,7 @@ def limit_user_endpoint(
 @app.delete("/api/admin/users/{user_id}/limit")
 def unlimit_user_endpoint(
     user_id: str,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     released_user = unlimit_user(user_id=user_id)
     if not released_user:
@@ -1106,7 +1130,7 @@ def unlimit_user_endpoint(
 @app.post("/api/admin/users/{user_id}/approve")
 def approve_user_endpoint(
     user_id: str,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     approved_user = approve_user(user_id=user_id)
     if not approved_user:
@@ -1128,7 +1152,7 @@ def approve_user_endpoint(
 def reject_user_endpoint(
     user_id: str,
     payload: AdminActionReasonRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     reason = require_action_reason(payload.reason)
     rejected_user = reject_user(user_id=user_id)
@@ -1148,7 +1172,7 @@ def reject_user_endpoint(
 
 
 @app.get("/api/admin/policies")
-def get_admin_policies(current_user: dict = Depends(require_admin)):
+def get_admin_policies(current_user: UserContext = Depends(require_admin)):
     _ = current_user
     return get_effective_moderation_settings()
 
@@ -1156,7 +1180,7 @@ def get_admin_policies(current_user: dict = Depends(require_admin)):
 @app.patch("/api/admin/policies")
 def update_admin_policies(
     payload: AdminPolicyUpdateRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     if payload.auto_hide_report_threshold < 1:
         raise HTTPException(status_code=400, detail="임계치는 1 이상이어야 합니다")
@@ -1185,7 +1209,7 @@ def update_admin_policies(
 @app.patch("/api/admin/content/about")
 def update_about_content_endpoint(
     payload: AboutContentUpdateRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     reason = require_action_reason(payload.reason)
     content = payload.model_dump(exclude={"reason"})
@@ -1210,7 +1234,7 @@ def update_about_content_endpoint(
 def update_report_endpoint(
     report_id: str,
     payload: AdminReportUpdateRequest,
-    current_user: dict = Depends(require_admin),
+    current_user: UserContext = Depends(require_admin),
 ):
     """신고 처리 상태 변경 (관리자)"""
     _ = current_user
@@ -1282,6 +1306,7 @@ def google_auth_callback(code: str, state: str):
         }
     ).encode("utf-8")
 
+    token_payload: dict[str, object] = {}
     try:
         token_request = Request(
             "https://oauth2.googleapis.com/token",
@@ -1289,31 +1314,46 @@ def google_auth_callback(code: str, state: str):
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             method="POST",
         )
-        with urlopen(token_request, timeout=10) as response:
-            token_payload = json.loads(response.read().decode("utf-8"))
+        with cast(_ReadableResponse, urlopen(token_request, timeout=10)) as response:
+            token_json = cast(object, json.loads(response.read().decode("utf-8")))
+            if not isinstance(token_json, dict):
+                raise HTTPException(
+                    status_code=502, detail="Google 토큰 응답이 유효하지 않습니다"
+                )
+            token_payload = cast(dict[str, object], token_json)
     except Exception as error:
         raise HTTPException(
             status_code=502, detail="Google 토큰 교환에 실패했습니다"
         ) from error
 
-    id_token = token_payload.get("id_token")
-    if not id_token:
+    raw_id_token = token_payload.get("id_token")
+    if not isinstance(raw_id_token, str) or not raw_id_token:
         raise HTTPException(status_code=400, detail="Google id_token이 누락되었습니다")
+    id_token = raw_id_token
 
+    profile_payload: dict[str, object] = {}
     try:
         profile_request = Request(
             f"https://oauth2.googleapis.com/tokeninfo?id_token={quote(id_token)}",
             method="GET",
         )
-        with urlopen(profile_request, timeout=10) as response:
-            profile_payload = json.loads(response.read().decode("utf-8"))
+        with cast(_ReadableResponse, urlopen(profile_request, timeout=10)) as response:
+            profile_json = cast(object, json.loads(response.read().decode("utf-8")))
+            if not isinstance(profile_json, dict):
+                raise HTTPException(
+                    status_code=502,
+                    detail="Google 프로필 응답이 유효하지 않습니다",
+                )
+            profile_payload = cast(dict[str, object], profile_json)
     except Exception as error:
         raise HTTPException(
             status_code=502, detail="Google 프로필 검증에 실패했습니다"
         ) from error
 
-    email = (profile_payload.get("email") or "").strip().lower()
-    provider_user_id = (profile_payload.get("sub") or "").strip()
+    raw_email = profile_payload.get("email")
+    email = raw_email.strip().lower() if isinstance(raw_email, str) else ""
+    raw_sub = profile_payload.get("sub")
+    provider_user_id = raw_sub.strip() if isinstance(raw_sub, str) else ""
     email_verified = profile_payload.get("email_verified") in ("true", True)
     if not email or not provider_user_id:
         raise HTTPException(
@@ -1339,7 +1379,7 @@ def google_auth_callback(code: str, state: str):
             status_code=500, detail="Google 로그인 계정 생성에 실패했습니다"
         )
 
-    frontend_base = oauth_settings["google_frontend_redirect_uri"].rstrip("/")
+    frontend_base = str(oauth_settings["google_frontend_redirect_uri"]).rstrip("/")
     user_status = user.get("status") or "active"
     if user_status != "active":
         return RedirectResponse(
@@ -1441,7 +1481,7 @@ def login(request: LoginRequest):
 
 
 @app.get("/api/me")
-async def get_me(current_user: dict = Depends(get_current_user)):
+async def get_me(current_user: UserContext = Depends(get_current_user)):
     """현재 사용자 정보"""
     return current_user
 
@@ -1449,7 +1489,7 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 @app.post("/api/projects")
 def create_project_endpoint(
     project: ProjectCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: UserContext = Depends(get_current_user),
 ):
     settings = get_effective_moderation_settings()
     content_for_check = " ".join(
@@ -1459,7 +1499,8 @@ def create_project_endpoint(
             project.description or "",
         ]
     )
-    if text_contains_blocked_keyword(content_for_check, settings["blocked_keywords"]):
+    blocked_keywords = cast(list[str], settings["blocked_keywords"])
+    if text_contains_blocked_keyword(content_for_check, blocked_keywords):
         raise HTTPException(
             status_code=400, detail="금칙어가 포함된 내용은 등록할 수 없습니다"
         )
@@ -1478,7 +1519,7 @@ def create_project_endpoint(
 @app.patch("/api/me")
 async def update_me(
     payload: ProfileUpdateRequest,
-    current_user: dict = Depends(get_current_user),
+    current_user: UserContext = Depends(get_current_user),
 ):
     updates = payload.model_dump(exclude_none=True)
     if not updates:
@@ -1546,10 +1587,11 @@ async def update_me(
 def create_comment_endpoint(
     project_id: str,
     comment: CommentCreate,
-    current_user: dict = Depends(get_current_user),
+    current_user: UserContext = Depends(get_current_user),
 ):
     settings = get_effective_moderation_settings()
-    if text_contains_blocked_keyword(comment.content, settings["blocked_keywords"]):
+    blocked_keywords = cast(list[str], settings["blocked_keywords"])
+    if text_contains_blocked_keyword(comment.content, blocked_keywords):
         raise HTTPException(
             status_code=400, detail="금칙어가 포함된 댓글은 작성할 수 없습니다"
         )
@@ -1568,10 +1610,10 @@ def create_comment_endpoint(
 
 
 @app.get("/api/me/projects")
-def get_my_projects(current_user: dict = Depends(get_current_user)):
+def get_my_projects(current_user: UserContext = Depends(get_current_user)):
     """내 프로젝트 목록"""
     projects = get_user_projects(current_user["id"])
     for p in projects:
         p["id"] = str(p["id"])
         p["author_id"] = str(p["author_id"])
-    return {"items": projects}
+    return {"items": projects, "next_cursor": None}

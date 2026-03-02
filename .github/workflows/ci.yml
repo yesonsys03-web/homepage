@@ -26,6 +26,9 @@ jobs:
       - name: Run frontend tests
         run: pnpm test
 
+      - name: Run frontend lint
+        run: pnpm lint --ignore-pattern "server/.venv/**"
+
       - name: Build frontend
         run: pnpm build
 
@@ -51,6 +54,12 @@ jobs:
 
       - name: Run backend tests
         run: uv run pytest
+
+      - name: Run backend lint
+        run: uv run ruff check .
+
+      - name: Run backend typecheck
+        run: uv run basedpyright
 
       - name: Validate backend import
         run: uv run python -m py_compile main.py db.py auth.py && uv run python -c "from main import app; print('app-import-ok')"

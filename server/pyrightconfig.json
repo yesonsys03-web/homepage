@@ -1,0 +1,12 @@
+{
+  "include": [
+    "auth.py",
+    "db.py",
+    "main.py"
+  ],
+  "exclude": [
+    ".venv",
+    "tests",
+    "__pycache__"
+  ]
+}

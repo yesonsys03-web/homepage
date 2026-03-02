@@ -1,21 +1,22 @@
+# pyright: reportUnknownVariableType=false, reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportDeprecated=false
+
 import os
 import hashlib
-import psycopg2
 from psycopg2.extras import Json, RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 from contextlib import contextmanager
-from typing import Optional
+from typing import Mapping, Optional
 from dotenv import load_dotenv
 from threading import Lock
 
 # .env 파일 로드
-load_dotenv(".env")
+_ = load_dotenv(".env")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 DB_POOL_MIN_CONN = int(os.getenv("DB_POOL_MIN_CONN", "1"))
 DB_POOL_MAX_CONN = int(os.getenv("DB_POOL_MAX_CONN", "12"))
 
-_db_pool: Optional[SimpleConnectionPool] = None
+_db_pool: SimpleConnectionPool | None = None
 _db_pool_lock = Lock()
 
 if not DATABASE_URL:
@@ -344,7 +345,7 @@ def get_admin_projects(status: Optional[str] = None, limit: int = 200):
             return cur.fetchall()
 
 
-def update_project_admin(project_id: str, updates: dict):
+def update_project_admin(project_id: str, updates: dict[str, object]):
     allowed_fields = [
         "title",
         "summary",
@@ -381,7 +382,7 @@ def update_project_admin(project_id: str, updates: dict):
             return cur.fetchone()
 
 
-def update_project_owner_fields(project_id: str, updates: dict):
+def update_project_owner_fields(project_id: str, updates: dict[str, object]):
     allowed_fields = [
         "title",
         "summary",
@@ -433,7 +434,7 @@ def set_project_status(project_id: str, status: str):
             return cur.fetchone()
 
 
-def create_project(data: dict):
+def create_project(data: dict[str, object]):
     """프로젝트 생성"""
     author_id = data.get("author_id")
     if not author_id:
@@ -902,7 +903,7 @@ def get_site_content(content_key: str):
             return cur.fetchone()
 
 
-def upsert_site_content(content_key: str, content_json: dict):
+def upsert_site_content(content_key: str, content_json: Mapping[str, object]):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             ensure_site_contents_table(cur)
@@ -1069,7 +1070,7 @@ def get_user_by_id(user_id: str):
             return cur.fetchone()
 
 
-def update_user_profile(user_id: str, updates: dict):
+def update_user_profile(user_id: str, updates: dict[str, object]):
     allowed_fields = ["nickname", "bio", "avatar_url"]
     fields_to_update = []
     params = []

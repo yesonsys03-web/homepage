@@ -1,11 +1,12 @@
 import os
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import UTC, datetime, timedelta
+from typing import cast
+
 from jose import JWTError, jwt
 import bcrypt
 from dotenv import load_dotenv
 
-load_dotenv(".env")
+_ = load_dotenv(".env")
 
 # JWT 설정
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
@@ -25,23 +26,25 @@ def get_password_hash(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    data: dict[str, object], expires_delta: timedelta | None = None
+) -> str:
     """JWT 액세스 토큰 생성"""
     to_encode = data.copy()
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(UTC) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
 
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
 
 
-def decode_token(token: str) -> Optional[dict]:
+def decode_token(token: str) -> dict[str, object] | None:
     """JWT 토큰 디코딩"""
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return payload
+        return cast(dict[str, object], payload)
     except JWTError:
         return None

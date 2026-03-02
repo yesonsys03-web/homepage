@@ -292,7 +292,7 @@ def get_comments(
     else:
         comments = sorted(comments, key=lambda c: c.created_at, reverse=True)
 
-    return {"items": comments}
+    return {"items": comments, "next_cursor": None}
 
 
 @app.post("/api/projects/{project_id}/comments")
@@ -351,7 +351,7 @@ def get_reports(
 
     reports = sorted(reports, key=lambda r: r.created_at, reverse=True)
 
-    return {"items": reports}
+    return {"items": reports, "next_cursor": None}
 
 
 @app.patch("/api/admin/reports/{report_id}")
@@ -376,4 +376,4 @@ def get_my_projects() -> dict:
     """내 프로젝트 목록"""
     user_id = "1"  # TODO: 실제 사용자 ID
     my_projects = [p for p in projects_db.values() if p.author_id == user_id]
-    return {"items": my_projects}
+    return {"items": my_projects, "next_cursor": None}
