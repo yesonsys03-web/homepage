@@ -850,3 +850,1140 @@ curl -X POST http://localhost:8000/api/auth/login \
 - **Repo**: https://github.com/yesonsys03-web/homepage.git
 - **커밋**: fd14f20b - `feat(auth): 프론트엔드 인증 화면 구현`
 - **Branch**: main
+
+## Session 2026-02-28-05
+
+### 1) Goal
+- `docs/remaining-features.md` 기준으로 남은 핵심 기능을 실제 코드에 반영하고, 검증까지 완료한다.
+- 초보자도 다시 따라할 수 있도록 작업 과정을 학습용 로그로 남긴다.
+
+### 2) Inputs
+- 참고 문서: `docs/remaining-features.md`, `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 사용자 피드백/이슈: "계획 말고 실제 진행", "완료 후 md로 정리"
+- 제약 조건:
+  - 기존 디자인/코드 스타일 유지
+  - 리팩터링은 동작을 바꾸지 않는 범위에서 최소 수정
+
+### 3) Design Decisions
+- 상세 페이지 프로젝트 ID를 하드코딩(`"1"`)에서 앱 상태 기반 전달 방식으로 변경했다.
+- Explore/Profile/Admin의 목데이터를 API 호출 기반으로 전환해 실제 데이터 흐름을 통일했다.
+- 관리자 API는 프론트/백엔드 계약을 동일한 형태(JSON body의 `status`)로 맞췄다.
+- `react-refresh/only-export-components` lint 규칙을 만족하기 위해 비컴포넌트 export를 분리했다.
+
+### 4) Implementation Notes
+- 백엔드 (`server/main.py`, `server/db.py`)
+  - `GET /api/me/projects`를 실제 DB 조회로 구현 (`get_user_projects` 추가)
+  - `PATCH /api/admin/reports/{report_id}`를 `{"status":"..."}` 요청 본문으로 처리
+  - 관리자 라우트에 권한 가드(`require_admin`) 적용
+  - 생성/수정 API에 `None` 방어 로직을 추가해 런타임 오류 가능성 축소
+- 프론트 (`src/App.tsx`, `HomeScreen.tsx`, `ProjectDetailScreen.tsx`)
+  - `selectedProjectId` 상태를 추가하고 카드 클릭 시 상세로 ID 전달
+  - 상세 화면의 프로젝트/좋아요/댓글 API 호출이 선택된 ID를 사용하도록 수정
+- 프론트 데이터 연동 (`ExploreScreen.tsx`, `ProfileScreen.tsx`, `AdminScreen.tsx`)
+  - Explore: 정렬/카테고리 기반 API 조회로 전환
+  - Profile: 내 프로젝트 API 연동 및 사용자 정보 표시를 인증 상태와 연결
+  - Admin: 신고 목록 조회/상태 변경 API 연동
+- 인증/구조 정리 (`src/lib/*`)
+  - 세션 복원 시 `api.getMe()`로 토큰 유효성 재검증
+  - lint 이슈 해결을 위해 auth 모듈을 분리:
+    - `auth-types.ts` (타입)
+    - `auth-store.ts` (context 저장소)
+    - `use-auth.ts` (커스텀 훅)
+  - UI 컴포넌트 파일의 비컴포넌트 export 제거:
+    - `button.tsx`, `badge.tsx`, `tabs.tsx`
+
+### 5) Validation
+- 프론트 lint:
+  - `pnpm lint` -> 통과
+- 프론트 build:
+  - `pnpm build` -> 통과 (`tsc -b && vite build` 성공)
+- 백엔드 문법/import:
+  - `uv run python -m py_compile main.py db.py auth.py` -> 통과
+  - `uv run python -c "import main; print('backend import ok')"` -> 통과
+- 참고:
+  - 이 세션 환경에서는 LSP 서버(`typescript-language-server`, `basedpyright-langserver`)가 미설치라 LSP 진단 대신 실제 빌드/컴파일 검증을 사용했다.
+
+### 6) Outcome
+#### 잘된 점
+- 남은 핵심 기능을 목데이터 중심 구조에서 실데이터 중심 구조로 전환했다.
+- 프론트-백엔드 API 계약 불일치 포인트를 정리해 연동 안정성을 높였다.
+- lint/build/backend import 검증까지 완료해 "실행 가능한 상태"를 확인했다.
+
+#### 아쉬운 점
+- 브라우저 E2E(클릭 흐름) 자동 테스트는 아직 없다.
+- LSP 기반 실시간 정적 분석 환경은 아직 미설치다.
+
+#### 다음 액션 (초보자용)
+1. 일반 유저/관리자 계정으로 실제 화면 흐름을 손으로 한번 점검한다.
+2. `remaining-features.md`에서 남은 항목을 P2 중심으로 재정렬한다.
+3. 필요하면 Playwright로 핵심 시나리오(홈->상세, 관리자 신고 처리) 자동화 테스트를 추가한다.
+
+## Session 2026-02-28-06
+
+### 1) Goal
+- no-thumbnail 카드의 스티커를 랜덤 스타일에서 "의미 기반 아트디렉션"으로 고도화한다.
+- 초보자도 이해하기 쉽게 규칙(임계값/태그/언어)을 문서화한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`, `src/components/ProjectCoverPlaceholder.tsx`
+- 사용자 피드백/이슈: "스티커를 랜덤이 아니라 상태 기반으로 더 고급화"
+- 제약 조건: 기존 시각 톤은 유지하고, 규칙만 명확히 개선
+
+### 3) Design Decisions
+- `HOT` 임계값을 대규모 서비스 기준(100+)에서 초기 커뮤니티 기준(30+)으로 낮췄다.
+- 태그 사전에 `prototype`, `hackathon`, `study`, `automation`, `featured` 등을 추가해 분류 품질을 높였다.
+- 스티커 문구를 브라우저 언어에 따라 KO/EN 자동 전환하도록 결정했다.
+
+### 4) Implementation Notes
+- `src/components/ProjectCoverPlaceholder.tsx`
+  - `HOT_STICKER_THRESHOLD = 30` 상수 추가
+  - `TAG_KEYWORDS` 확장(Hot/New/WIP/Tool/Game)
+  - 상태 결정 로직(`resolveMood`)을 임계값 + 태그 기반으로 튜닝
+  - 스티커 국제화 함수 추가(`detectLocale`, `localizeStickerLabel`)
+- `src/components/screens/HomeScreen.tsx`
+  - `HOT_PROJECT_THRESHOLD = 30`으로 `isHot` 계산 동기화
+- `src/components/screens/ExploreScreen.tsx`
+  - `isHot` 전달 기준을 30으로 동기화
+- `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`
+  - "No-Thumbnail 아트디렉션 규칙" 섹션 추가
+
+### 5) Validation
+- `pnpm lint` -> 통과
+- `pnpm build` -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 같은 카드 fallback이라도 프로젝트 상태를 더 정확하게 보여주게 됐다.
+- 작은 커뮤니티 규모에서도 `HOT`가 실제로 드러나는 균형점을 만들었다.
+- 규칙을 문서화해서 이후 작업자가 같은 방향으로 유지보수할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재 분류는 키워드 기반이라 프로젝트 맥락을 100% 이해하진 못한다.
+
+#### 다음 액션
+1. 실사용 데이터 1~2주 관찰 후 `HOT` 임계값(30) 재조정
+2. 태그 입력 UI에서 추천 태그를 제공해 분류 품질 향상
+
+## Session 2026-02-28-07
+
+### 1) Goal
+- 관리자 대시보드를 운영 실무 수준으로 확장한다.
+- 신고/유저 관리 중심에서 콘텐츠 모더레이션(프로젝트 수정/숨김/복구/삭제)까지 연결한다.
+
+### 2) Inputs
+- 사용자 요청: 관리자 카드(프로젝트) 직접 수정/삭제 기능 필요
+- 기존 상태: 신고 처리/정책/유저 제한은 구현 완료, 콘텐츠 직접 조치는 미구현
+
+### 3) Design Decisions
+- 즉시 삭제 대신 `status` 기반 소프트 삭제(`published/hidden/deleted`)를 채택했다.
+- 관리자 액션은 모두 이유(reason)와 로그를 남겨 추적 가능하도록 통일했다.
+- 관리자 탭 전환 성능을 위해 서버 재요청 필터 방식에서 클라이언트 필터 방식으로 변경했다.
+
+### 4) Implementation Notes
+- 백엔드 (`server/main.py`, `server/db.py`)
+  - 관리자 프로젝트 API 추가:
+    - `GET /api/admin/projects`
+    - `PATCH /api/admin/projects/{project_id}`
+    - `POST /api/admin/projects/{project_id}/hide`
+    - `POST /api/admin/projects/{project_id}/restore`
+    - `DELETE /api/admin/projects/{project_id}` (soft delete)
+  - 공용 상세 API는 `published` 상태만 노출되게 제한
+  - 관리자 액션 로그(`project_updated/hidden/restored/deleted`) 자동 기록
+  - 정책 응답에 `baseline_keyword_categories`, `custom_blocked_keywords`, 최근 수정자 메타 포함
+- 프론트 (`src/components/screens/AdminScreen.tsx`, `src/lib/api.ts`)
+  - 콘텐츠 관리 탭 추가 및 상태 필터/검색 지원
+  - 프로젝트 단건 액션(수정/숨김/복구/삭제) + 다중 선택 일괄 액션(숨김/복구)
+  - 정책 탭 고도화:
+    - 카테고리별 카운트
+    - 접기/펼치기
+    - 미리보기 검색
+    - CSV 내보내기 + CSV 가져오기
+  - 로그 탭에 대상 타입 필터 추가(`all/project/report/user/moderation_settings`)
+  - 관리자 신고 탭 성능 개선:
+    - 탭 클릭 시 서버 재요청 제거(클라이언트 필터)
+    - 30초 폴링 + 비가시 탭 스킵으로 최신성 유지
+
+### 5) Validation
+- `pnpm lint` -> 통과
+- `pnpm build` -> 통과
+- `uv run python -m py_compile main.py db.py auth.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 관리자 기능이 신고 중심에서 콘텐츠 운영까지 확장되어 실제 운영 대응 속도가 올라갔다.
+- 정책 룰이 카테고리 기반으로 시각화되어 운영자가 기준을 빠르게 이해할 수 있게 됐다.
+- 액션 로그/사유 필드 강화로 운영 결정의 사후 추적성이 좋아졌다.
+
+#### 아쉬운 점
+- 프로젝트 수정 폼은 아직 간단한 단일 패널이라 고급 편집 UX(필드 검증/미리보기)는 추가 여지가 있다.
+- DB 연결은 요청마다 새 연결 구조라 고트래픽 대비 성능 튜닝은 남아 있다.
+
+#### 다음 액션
+1. DB 커넥션 풀 적용으로 관리자 API 응답 지연 감소
+2. 콘텐츠 관리 탭에 정렬/페이지네이션 추가
+3. Playwright로 관리자 핵심 시나리오(E2E) 자동화
+
+## Session 2026-02-28-08
+
+### 1) Goal
+- About 페이지를 하드코딩 화면에서 "관리자가 실시간 수정 가능한 운영 콘텐츠"로 전환한다.
+- 운영 기록(누가/왜 수정했는지)을 관리자 로그에 남긴다.
+
+### 2) Inputs
+- 사용자 요청: About 페이지도 관리자 수정 가능해야 함
+- 기존 상태: About 화면은 프론트 코드에 정적 데이터 하드코딩
+
+### 3) Design Decisions
+- About 콘텐츠는 별도 키-값 저장 구조(`site_contents`)로 분리 저장한다.
+- 공개 조회 API와 관리자 수정 API를 분리해 권한 경계를 명확히 한다.
+- 관리자 수정에는 `reason`을 필수로 받아 액션 로그 추적성을 유지한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `site_contents` 테이블 추가 (`content_key`, `content_json`, `updated_at`)
+    - `get_site_content`, `upsert_site_content` 추가
+  - `server/main.py`
+    - `GET /api/content/about` 추가 (공개 조회)
+    - `PATCH /api/admin/content/about` 추가 (관리자 수정, reason 필수)
+    - 앱 시작 시 About 기본값 시드 처리
+    - 로그 기록: `about_content_updated`
+- 프론트
+  - `src/lib/api.ts`
+    - `AboutContent` 관련 타입 추가
+    - `getAboutContent`, `updateAboutContent` 추가
+  - `src/components/screens/AboutScreen.tsx`
+    - 하드코딩 데이터 제거, API 기반 렌더링으로 전환
+  - `src/components/screens/AdminScreen.tsx`
+    - `페이지 관리` 탭 추가
+    - About Hero/Values/Team/FAQ/Contact 이메일 편집 및 저장 UI 추가
+    - 저장 시 reason 필수, 저장 후 로그/콘텐츠 재동기화
+
+### 5) Validation
+- `pnpm lint` -> 통과
+- `pnpm build` -> 통과
+- `uv run python -m py_compile main.py db.py auth.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 운영자가 코드 수정 없이 About 내용을 즉시 업데이트할 수 있게 됐다.
+- 공개 페이지와 관리자 편집 데이터 소스가 일치하게 정리됐다.
+- 수정 이력(사유 포함)이 관리자 로그로 추적 가능해졌다.
+
+#### 아쉬운 점
+- About 편집은 현재 텍스트 기반 입력(`|` 구분)이라 UX가 아직 기술자 친화적이다.
+
+#### 다음 액션
+1. About 편집 폼을 블록 단위(Values/Team/FAQ) 카드 에디터로 고도화
+2. 저장 전 미리보기 패널 추가
+3. About 변경 이력 전용 로그 필터/롤백 기능 검토
+
+## Session 2026-02-28-09
+
+### 1) Goal
+- 관리자 페이지 초기 체감 속도를 개선하기 위해 신고 큐 페이지네이션(50개)과 탭 기반 Lazy Loading을 적용한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈: 관리자 페이지 진입 시 신고 큐가 늦게 표시됨
+- 제약 조건: 기존 관리자 기능(신고 처리/사용자 관리/콘텐츠 관리) 동작은 유지해야 함
+
+### 3) Design Decisions
+- 신고 API는 `status + limit + offset` 기반 페이지네이션을 지원하고, 별도 `total` 값을 함께 반환한다.
+- 관리자 화면은 활성 탭 데이터만 요청하는 Lazy Loading으로 변경해 초기 과호출을 제거한다.
+- 신고 탭은 50개 단위 페이지 이동 UI를 제공하고 현재 페이지를 유지한 채 재조회 가능하게 한다.
+
+### 4) Implementation Notes
+- 백엔드(FastAPI)
+  - `server/db.py`
+    - `get_reports(status, limit, offset)`로 확장
+    - `get_reports_count(status)` 추가
+  - `server/main.py`
+    - `GET /api/admin/reports`에 `limit`, `offset` 파라미터 추가
+    - 응답을 `{ items, total }` 형태로 확장
+- 프론트
+  - `src/lib/api.ts`
+    - `api.getReports(status?, limit=50, offset=0)`로 확장
+  - `src/components/screens/AdminScreen.tsx`
+    - 신고 탭 상태 추가: `reportPage`, `reportTotal`, `REPORT_PAGE_SIZE`
+    - 탭 상태 추가: `activeTab`
+    - 초기 전체 동시 로드 제거, 탭별 데이터 로드로 전환(Lazy Loading)
+    - 신고 탭 하단에 이전/다음 페이지네이션 UI 추가
+    - 수동 새로고침을 활성 탭 기준으로 동작하도록 조정
+
+### 5) Validation
+- `uv run python -m py_compile server/db.py server/main.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` (workdir=`server`) -> 통과
+- `pnpm build` (`tsc -b && vite build`) -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 관리자 첫 진입 시 불필요한 API 동시 호출을 줄여 초기 체감 속도가 개선됐다.
+- 신고 목록 렌더링 비용을 고정(페이지 50개)해 데이터 증가 시에도 UI 안정성이 좋아졌다.
+
+#### 아쉬운 점
+- 현재는 단순 이전/다음 방식이라 임의 페이지 점프 UX는 아직 없다.
+
+#### 다음 액션
+1. 신고 탭 페이지 번호 직접 이동/페이지 크기 선택 옵션 검토
+2. 탭별 캐시 TTL(예: 30초) 적용으로 재진입 체감 속도 추가 개선
+
+## Session 2026-02-28-10
+
+### 1) Goal
+- 커뮤니티 핵심 UX(탐색/상세/댓글/좋아요)의 반응성을 높이기 위해 공개 영역에도 캐시 정책(TTL + SWR + 무효화)을 도입한다.
+
+### 2) Inputs
+- 사용자 요청: "즐겁게 노는" 컨셉에 맞게 체감 즉시성을 높이고, 변경 후 일관성도 유지할 것
+- 기존 상태: 공개 영역은 `fetch` 직접 호출 구조로 매 요청마다 네트워크 대기 발생
+
+### 3) Design Decisions
+- 공개 영역 캐시 정책은 `cache-first + stale-while-revalidate`로 채택한다.
+- TTL은 데이터 성격별 차등 적용:
+  - 프로젝트 목록: 45초
+  - 프로젝트 상세: 20초
+  - 댓글: 8초
+- 상호작용(좋아요/좋아요 취소/댓글 작성/프로젝트 생성) 후에는 관련 캐시를 명시적으로 무효화한다.
+
+### 4) Implementation Notes
+- `src/lib/api.ts`
+  - 공개 영역 캐시 저장소와 SWR 헬퍼 추가:
+    - `publicDataCache`
+    - `fetchWithPublicSWR`
+    - `createPublicCacheKey`
+  - 공개 API에 SWR 옵션 적용:
+    - `getProjects(params, options?)`
+    - `getProject(id, options?)`
+    - `getComments(projectId, sort, options?)`
+  - 무효화 규칙 구현:
+    - `invalidateProjectRelatedCaches(projectId)`
+    - 트리거: `createProject`, `likeProject`, `unlikeProject`, `createComment`
+  - 화면 로딩 최적화를 위한 캐시 조회 유틸 추가:
+    - `hasProjectsCache`, `hasProjectDetailCache`, `hasCommentsCache`
+- `src/components/screens/HomeScreen.tsx`
+  - 목록 로드 시 캐시 존재 여부를 먼저 확인하고, 캐시가 없을 때만 블로킹 로딩 표시
+  - `onRevalidate`를 통해 백그라운드 최신화 결과를 UI에 반영
+- `src/components/screens/ExploreScreen.tsx`
+  - Home과 동일한 캐시 우선 + 비차단 재검증 패턴 적용
+- `src/components/screens/ProjectDetailScreen.tsx`
+  - 상세/댓글을 병렬로 로드하고 캐시가 있을 경우 즉시 렌더
+  - 댓글 작성 후에는 `getComments(..., { force: true })`로 최신 댓글 강제 동기화
+
+### 5) Validation
+- `pnpm build` (`tsc -b && vite build`) -> 통과
+- `uv run python -m py_compile server/db.py server/main.py` -> 통과
+- `uv run python -c "import main; print('backend import ok')"` (workdir=`server`) -> 통과
+
+### 6) Outcome
+#### 잘된 점
+- 홈/탐색/상세에서 재방문 시 즉시 렌더되는 구간이 늘어 체감 반응성이 좋아졌다.
+- 사용자 상호작용 직후 캐시 무효화로 데이터 일관성을 유지할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재는 메모리 캐시 기반이라 탭/세션 경계 정책(예: 로그아웃 시 클리어)을 추가로 명확히 다듬을 여지가 있다.
+
+#### 다음 액션
+1. cache hit/miss 및 revalidate 성공률 로그를 추가해 TTL 튜닝 근거 확보
+2. 프로젝트 카드 좋아요 수에 낙관적 업데이트(optimistic update) 적용 검토
+
+## Session 2026-03-01-01
+
+### 1) Goal
+- 카드 상세를 실사용 흐름에 맞게 고도화한다: 작성자/관리자 수정 권한, 공유 기능, 딥링크 진입을 한 사이클로 완성한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - 업로드 후 본인 카드 수정 불가
+  - 관리자 전면 수정 권한 필요
+  - 상세 공유 버튼 실사용 기능 필요(대표 소셜 채널)
+- 제약 조건:
+  - 기존 Submit 화면을 재사용해 편집 모드로 전환
+  - 권한 검사는 백엔드에서 최종 보장
+
+### 3) Design Decisions
+- 편집 UX는 별도 화면 신설 대신 Submit 화면의 `editingProjectId` 모드로 통일했다.
+- 권한 모델은 `owner or admin`으로 고정해, 작성자와 관리자가 동일 PATCH 엔드포인트를 사용하도록 단순화했다.
+- 공유 URL은 `?project=<id>` 쿼리 딥링크를 채택해, 링크 클릭 시 앱이 바로 해당 상세를 열도록 했다.
+- 웹 intent가 제한된 채널(Instagram/Kakao)은 링크 복사 fallback을 기본으로 제공한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `PATCH /api/projects/{project_id}` 추가
+    - 권한 검사: 작성자 본인 또는 admin만 수정 허용
+    - 수정 본문 금칙어 검증 + 목록 캐시 무효화 유지
+  - `server/db.py`
+    - `update_project_owner_fields` 추가 (owner/admin 공용 수정 필드 처리)
+- 프론트
+  - `src/App.tsx`
+    - `submitEditingProjectId` 상태 추가
+    - 상세 -> Submit 편집 진입 핸들러(`openProjectEdit`) 연결
+    - `?project=` 딥링크 초기 진입/동기화 처리
+  - `src/components/screens/ProjectDetailScreen.tsx`
+    - 권한 충족 시 `수정` 버튼 노출
+    - 공유 메뉴 구현: 기기 공유, 링크 복사, X, Threads, Facebook, LinkedIn, Instagram, KakaoTalk
+  - `src/components/screens/SubmitScreen.tsx`
+    - `editingProjectId`가 있으면 기존 프로젝트 로드 후 프리필
+    - 제출 시 생성/수정 API 분기 처리
+  - `src/lib/api.ts`
+    - `api.updateProject` 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` (workdir=`server`) 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- 작성자/관리자 수정 플로우가 상세 -> Submit 편집으로 자연스럽게 연결됐다.
+- 공유 기능이 단순 버튼에서 실제 소셜 전파 가능한 구조로 확장됐다.
+- 딥링크(`?project`)로 외부 공유 후 상세 재진입이 가능해졌다.
+
+#### 아쉬운 점
+- Instagram/Kakao는 웹 표준 intent 제약으로 SDK 없는 완전 자동 공유 한계가 있다.
+
+#### 다음 액션
+1. 카카오 JavaScript SDK 적용으로 친구 공유 UX 고도화
+2. 공유 메뉴 outside-click 닫힘/키보드 접근성 강화
+3. `/api/admin/perf/projects` 기반으로 TTL/DB pool 수치 튜닝
+
+## Session 2026-03-01-02
+
+### 1) Goal
+- 가입 실패를 성공처럼 처리하던 인증 버그를 우선 수정하고, 승인형 가입(`pending`) + 관리자 승인/반려 흐름의 첫 실행 버전을 구축한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - 가입 후 계정이 정상 동작하지 않음
+  - Admin에서 신규 가입자 확인/승인 필요
+- 제약 조건:
+  - 기존 FastAPI + React 구조를 유지
+  - 당일 검증 가능한 최소 기능으로 단계별 적용
+
+### 3) Design Decisions
+- 인증 실패 처리 표준을 `authFetch` 패턴에 맞춰 `register/login`에도 동일 적용했다.
+- 사용자 계정 상태를 `pending/active/rejected`로 분리해 승인 정책을 명시화했다.
+- 승인 액션은 기존 관리자 액션 로그 체계를 재사용해 감사 추적을 유지했다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `users.status` 컬럼 도입(기본 `active` + NULL 보정)
+    - 신규 가입 `create_user(..., status="pending")` 지원
+    - `approve_user`, `reject_user` 함수 추가
+  - `server/main.py`
+    - 로그인 시 `pending/rejected` 계정 차단(403)
+    - `get_current_user`에서 `active` 상태만 통과
+    - 관리자 승인/반려 엔드포인트 추가
+      - `POST /api/admin/users/{user_id}/approve`
+      - `POST /api/admin/users/{user_id}/reject`
+- 프론트
+  - `src/lib/api.ts`
+    - `register/login`에 `res.ok` 실패 처리 추가
+    - `VITE_API_BASE` 환경변수 기반 API 베이스 전환
+    - `approveUser`, `rejectUser` 관리자 API 메서드 추가
+  - `src/components/screens/RegisterScreen.tsx`
+    - 응답 유효성 가드 추가
+    - `pending` 가입 시 자동 로그인 중단 + 안내 메시지
+  - `src/components/screens/LoginScreen.tsx`
+    - 응답 유효성 가드 추가
+  - `src/components/screens/AdminScreen.tsx`
+    - 사용자 상태 배지(`승인 대기/활성/반려`) 추가
+    - 승인/반려 버튼과 후속 refresh/action-log 연동
+  - `src/lib/auth-types.ts`
+    - `User.status` 타입 반영
+  - `.env.example`
+    - `VITE_API_BASE` 샘플 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- 가입 실패/성공 상태가 UI에서 명확히 분리되어 가짜 성공 케이스가 제거됐다.
+- 승인형 가입 정책의 핵심 흐름(가입 대기 -> 관리자 승인/반려 -> 로그인 제어)이 동작 가능한 상태가 됐다.
+
+#### 아쉬운 점
+- 반려 사유 사용자 통지(메일/알림)와 OAuth 연동은 아직 미구현이다.
+
+#### 다음 액션
+1. Google OAuth 가입 경로를 `pending` 상태와 연결
+2. 승인/반려 이벤트 메일 발송 파이프라인 추가
+3. Admin users 탭 캐시 TTL/강제 갱신 정책 세분화
+
+## Session 2026-03-01-03
+
+### 1) Goal
+- Google OAuth를 실제 운영 가능한 흐름으로 연결하고, 시크릿은 서버 환경변수에만 두면서 Admin에서 런타임 제어(활성화/URI) 가능한 구조를 구축한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - Google OAuth 클라이언트 생성 후 실제 연결 가이드 필요
+  - 시크릿을 UI/코드에 직접 저장하지 않는 운영 방식 요구
+- 제약 조건:
+  - 비밀값(`GOOGLE_CLIENT_SECRET`)은 절대 Git/프론트에 노출 금지
+  - 기존 Admin 정책 화면 흐름을 크게 깨지 않고 통합
+
+### 3) Design Decisions
+- OAuth 시크릿은 환경변수(`GOOGLE_CLIENT_ID/SECRET`)로만 유지하고, Admin 화면에는 비민감 런타임 설정만 노출했다.
+- Google OAuth 실행 전 조건을 `enabled + redirect URI 존재 + client id/secret 존재`로 통합 검증했다.
+- OAuth 준비 상태는 별도 health endpoint로 시각화해 운영자가 즉시 상태를 확인할 수 있게 했다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `users`에 OAuth 필드 추가: `provider`, `provider_user_id`, `email_verified`
+    - `oauth_runtime_settings` 테이블 추가
+    - Google 계정 upsert 함수 추가: `create_or_update_google_user`, `get_user_by_provider`
+  - `server/main.py`
+    - Google OAuth 엔드포인트
+      - `GET /api/auth/google/start`
+      - `GET /api/auth/google/callback`
+    - Admin OAuth 설정/상태 엔드포인트
+      - `GET /api/admin/integrations/oauth`
+      - `PATCH /api/admin/integrations/oauth`
+      - `GET /api/admin/integrations/oauth/health`
+    - 런타임 설정 + 시크릿 존재 여부를 합친 가용성 검증 로직 추가
+- 프론트
+  - `src/lib/api.ts`
+    - `getGoogleAuthUrl`, `getMeWithToken` 추가
+    - Admin OAuth 설정 API 메서드 3종 추가
+  - `src/App.tsx`
+    - `oauth_token`/`oauth_status` 쿼리 복원 처리
+  - `src/components/screens/LoginScreen.tsx`
+    - Google 로그인 버튼 추가
+  - `src/components/screens/RegisterScreen.tsx`
+    - Google 가입 버튼 추가
+  - `src/components/screens/AdminScreen.tsx`
+    - 정책 탭에 OAuth 운영 카드 추가
+    - 활성화 토글, Redirect URI 입력/저장, health 배지 및 client id/secret 존재 여부 표시
+  - `server/.env.example`
+    - OAuth 환경변수 샘플 항목 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- OAuth 시크릿 비노출 원칙(서버 env only)을 지키면서 운영 제어 UI를 분리했다.
+- 로컬 환경에서 Google OAuth 시작/콜백/토큰 복원까지 E2E 흐름을 점검 가능한 상태가 됐다.
+
+#### 아쉬운 점
+- 아직 메일 발송 파이프라인(승인/반려 통지)은 미구현이다.
+
+#### 다음 액션
+1. 승인/반려 메일 템플릿 + 발송 채널(Resend/Postmark) 연결
+2. Admin OAuth 카드에 URI 유효성 프리검증(https/http, path) 추가
+3. Google OAuth 오류 코드별 사용자 메시지 세분화
+
+## Session 2026-03-01-04
+
+### 1) Goal
+- Google OAuth 로그인 안정성을 보강하고, 프로젝트 Submit 작성자 표기(`by ...`)가 실제 로그인 사용자로 저장되도록 수정한다.
+
+### 2) Inputs
+- 사용자 피드백/이슈:
+  - Google 로그인 후 다시 로그인 화면으로 돌아가는 현상
+  - 사용자 계정으로 작품 등록해도 카드 하단 작성자가 `jongjatdon`으로 표시되는 현상
+- 제약 조건:
+  - `SECRET` 값은 Git에 절대 포함하지 않음 (`server/.env` 제외)
+
+### 3) Design Decisions
+- OAuth 콜백 처리에서는 쿼리 토큰을 즉시 삭제하지 않고 세션 복원 성공/실패 시점에 정리하도록 변경했다.
+- 프로젝트 생성은 인증 사용자 컨텍스트를 강제하고, DB 레벨 기본 작성자 fallback을 제거했다.
+
+### 4) Implementation Notes
+- OAuth 로그인 안정화
+  - `src/App.tsx`
+    - `oauth_token/oauth_status` 쿼리 제거 타이밍을 세션 복원 후로 조정
+  - `src/lib/auth-context.tsx`
+    - 초기 세션 복원 race condition 방어(토큰 변경 시 이전 비동기 결과 무시)
+  - `server/main.py`
+    - Google 계정의 비밀번호 로그인 시 provider 안내 메시지 반환
+- 프로젝트 작성자 매핑 수정
+  - `server/main.py`
+    - `POST /api/projects`에 `Depends(get_current_user)` 적용
+    - 생성 payload에 `author_id=current_user.id` 주입
+  - `server/db.py`
+    - `create_project`의 하드코딩 기본 `author_id` 제거
+    - `author_id` 필수 검증 추가
+
+### 5) Validation
+- 백엔드
+  - `uv run python -m compileall .` (workdir=`server`) 통과
+  - `uv run python -c "from main import app; print('app-import-ok')"` 통과
+- 프론트
+  - `pnpm build` 통과
+  - `pnpm lint` 에러 0 (기존 경고 2건 유지)
+
+### 6) Outcome
+#### 잘된 점
+- Google 로그인 후 세션이 끊기던 재로그인 루프가 안정적으로 해소됐다.
+- 신규 Submit 카드 작성자가 실제 로그인 사용자로 저장/표시되도록 바로잡았다.
+
+#### 아쉬운 점
+- AdminScreen의 기존 hooks 의존성 경고 2건은 이번 작업 범위 밖으로 유지했다.
+
+#### 다음 액션
+1. 승인/반려 메일 발송 파이프라인 구현
+2. OAuth 설정 저장 시 URI 형식 검증 강화
+3. Admin users 탭 캐시 TTL 최적화
+
+## Session 2026-03-02-01
+
+### 1) Goal
+- 학습용으로 "이번 CI 연결 + OAuth state 1회성 소비"가 왜 필요한지, 하지 않으면 어떤 문제가 실제로 생기는지 명확히 정리한다.
+
+### 2) Inputs
+- 이번 구현 변경:
+  - `.github/workflows/ci.yml`
+  - `server/main.py`
+  - `server/db.py`
+  - `server/tests/test_oauth_regression.py`
+- 참고 가이드:
+  - OWASP OAuth2 Cheat Sheet (state/CSRF 권장)
+  - Auth0 state parameter guidance
+  - RFC 6819 (OAuth 2.0 Threat Model)
+- 저장소 문서:
+  - `docs/UV_WORKFLOW.md`
+  - `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`
+
+### 3) Design Decisions
+- OAuth `state`는 JWT 서명 검증만으로는 "재사용(replay)"을 완전히 막을 수 없으므로, 서버 DB에서 1회성으로 소비하도록 설계했다.
+- CI는 "사람이 수동 확인"을 대체하는 자동 안전장치로 두고, PR/Push마다 테스트와 빌드를 강제 실행하도록 구성했다.
+
+### 4) Implementation Notes
+- CI 자동 검증 연결
+  - `.github/workflows/ci.yml`
+    - frontend: `pnpm install --frozen-lockfile` -> `pnpm test` -> `pnpm build`
+    - backend: `uv sync --frozen --extra dev --group dev` -> `uv run pytest` -> import/py_compile 검증
+- OAuth state 1회성 소비
+  - `server/db.py`
+    - `oauth_state_tokens` 테이블 추가 (`state_hash`, `expires_at`, `consumed_at`)
+    - `create_oauth_state_token`, `consume_oauth_state_token`, `cleanup_oauth_state_tokens` 추가
+  - `server/main.py`
+    - Google OAuth start 시 state TTL(10분)로 생성 + DB 저장
+    - callback 시 state를 원자적으로 1회 소비, 실패 시 400 반환
+  - `server/tests/test_oauth_regression.py`
+    - 동일 state 재사용 시 두 번째 요청이 차단되는 회귀 테스트 추가
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- CI가 없으면
+  - 테스트/빌드를 사람이 매번 수동으로 돌려야 해서 누락이 발생한다.
+  - "내 PC에서는 됨" 상태가 PR에 그대로 합쳐져 배포 직전 또는 배포 후 장애로 이어질 수 있다.
+  - 동일 실수가 반복되어 디버깅/롤백 시간이 커진다.
+- OAuth state 1회성 소비가 없으면
+  - 공격자/중간자가 획득한 state를 유효 시간 내 재사용하는 replay 공격 가능성이 남는다.
+  - 콜백 흐름 위조/재시도로 로그인 세션 연결 안정성이 약해진다.
+  - 결과적으로 인증 플로우 신뢰도가 떨어지고, 보안 이슈 대응 비용이 커진다.
+
+### 6) Outcome
+#### 잘된 점
+- "왜 필요한지"를 구현 단위(파일/로직/테스트)와 위험 시나리오로 연결해 학습 재사용성이 높아졌다.
+- 단순 권장사항이 아니라 "미적용 시 실제 장애/보안 문제" 중심으로 정리해 의사결정 근거가 명확해졌다.
+
+#### 아쉬운 점
+- CI 단계는 현재 smoke 성격(테스트+빌드) 위주라, 추후 lint/typecheck/security scan까지 확장 여지가 있다.
+
+#### 다음 액션
+1. CI에 `ruff`/`basedpyright`를 추가해 정적 분석 자동화 범위를 넓힌다.
+2. OAuth state 관련 실패 로그(재사용/만료)를 운영 대시보드에서 집계 가능하도록 이벤트화한다.
+3. 학습용 문서에 "실제 공격 시나리오 그림"(정상 흐름 vs replay 시도)을 추가한다.
+
+## Session 2026-03-02-02
+
+### 1) Goal
+- CI의 typecheck 게이트를 실사용 가능한 수준으로 안정화하고, 경고/에러를 줄여 "자동 검증이 실제 품질을 지키는 상태"를 만든다.
+
+### 2) Inputs
+- 변경 파일
+  - `.github/workflows/ci.yml`
+  - `server/main.py`
+  - `server/auth.py`
+  - `server/db.py`
+  - `server/pyproject.toml`
+  - `server/pyrightconfig.json`
+- 실행 검증
+  - `uv run basedpyright`
+  - `uv run ruff check .`
+  - `uv run pytest`
+
+### 3) Design Decisions
+- 기반 원칙: "타입체크는 CI에서 실패를 빨리 알려야 의미가 있다".
+- `basedpyright`를 무조건 넓게 돌리는 대신, 백엔드 핵심 파일(`auth.py`, `db.py`, `main.py`) 중심으로 스코프를 명확히 고정했다.
+- OAuth/권한 흐름은 런타임에서 자주 깨지는 구간이므로, `TypedDict`와 안전 캐스팅으로 타입 의도를 코드에 명시했다.
+
+### 4) Implementation Notes
+- CI 파이프라인 확장
+  - `.github/workflows/ci.yml`에 backend lint/typecheck를 고정 단계로 포함
+  - `uv run basedpyright`를 비차단 모드에서 실제 차단 게이트로 전환
+- 타입 안정화
+  - `server/main.py`: `UserContext` 도입, OAuth 응답 파싱/검증 시 타입 안전 처리
+  - `server/auth.py`: 토큰 타입 시그니처 정리, UTC 기준 시간 처리
+  - `server/db.py`: 시그니처 타입 정리 및 DB 레이어의 노이즈 규칙 범위 조정
+- typecheck 스코프 정리
+  - `server/pyrightconfig.json` 추가로 `.venv`/tests를 제외하고 핵심 앱 파일에 집중
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- 왜 필요한가
+  - 타입 경계가 애매하면 인증/권한/응답 파싱 같은 핵심 로직에서 사소한 수정이 런타임 버그로 이어지기 쉽다.
+  - CI에서 타입체크를 강제하면 "코드 리뷰 때 놓친 위험"을 자동으로 잡아준다.
+  - 스코프 없는 타입체크는 노이즈가 커서 팀이 결과를 무시하게 되므로, 운영 가능한 범위 설정이 필수다.
+- 안 하면 어떤 문제가 생기나
+  - PR마다 "통과/실패 기준"이 흔들려 배포 품질이 사람 숙련도에 의존하게 된다.
+  - OAuth/사용자 컨텍스트처럼 입력 타입이 다양한 구간에서 `None`/타입 불일치 버그가 재발한다.
+  - 타입체크 출력이 `.venv` 같은 외부 영역 잡음으로 오염되면, 실제 프로젝트 경고를 놓치게 된다.
+
+### 6) Validation
+- `uv run basedpyright`: 통과 (0 errors, 0 warnings, 0 notes)
+- `uv run ruff check .`: 통과
+- `uv run pytest`: 통과 (5 passed)
+
+### 7) Outcome
+#### 잘된 점
+- 타입체크를 "보여주기용"이 아니라 "실제 차단 게이트"로 운영 가능한 상태로 바꿨다.
+- 학습 관점에서 "스코프 설정 -> 타입 정리 -> CI 고정" 순서를 재사용 가능한 패턴으로 남겼다.
+
+#### 아쉬운 점
+- 아직 `main.py` 내부에는 동적 응답 처리 구간이 남아 있어, 더 엄격한 타입 모델링 여지가 있다.
+
+#### 다음 액션
+1. `main.py`의 OAuth/profile payload를 별도 Pydantic 모델로 분리해 캐스팅 의존도를 줄인다.
+2. `AdminScreen`의 React hook dependency 경고 2건을 정리해 프론트 lint 경고를 0으로 맞춘다.
+
+## Session 2026-03-02-03
+
+### 1) Goal
+- FastAPI 라이프사이클 처리를 `on_event`에서 `lifespan` 방식으로 전환해 deprecated 경고를 제거하고 운영 안정성을 높인다.
+
+### 2) Inputs
+- 변경 파일
+  - `server/main.py`
+- 관찰된 문제
+  - 테스트 실행 시 `@app.on_event("startup")`, `@app.on_event("shutdown")` deprecation 경고 반복 출력
+- 제약 조건
+  - 기존 startup/shutdown 동작(초기화, 로그 정리 루프 시작/종료)은 그대로 유지
+
+### 3) Design Decisions
+- FastAPI 앱 생성 시 `lifespan` 컨텍스트를 명시해 시작/종료 처리를 한 경로로 통합했다.
+- 기존 `startup_event()`/`shutdown_event()` 로직은 재사용하고, 데코레이터만 제거해 리스크를 최소화했다.
+
+### 4) Implementation Notes
+- `server/main.py`
+  - `asynccontextmanager`를 사용한 `lifespan(app)` 함수 추가
+  - `app = FastAPI(..., lifespan=lifespan)`으로 전환
+  - `@app.on_event("startup")`, `@app.on_event("shutdown")` 제거
+  - 종료 시 백그라운드 cleanup task를 안전하게 cancel/await 처리 유지
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- 왜 필요한가
+  - `on_event`는 이미 deprecated 경고가 나오는 구간이라, 시간이 지날수록 유지보수 부담이 커진다.
+  - `lifespan`은 최신 FastAPI 표준이라 시작/종료 자원 관리를 일관되게 유지하기 쉽다.
+  - 특히 백그라운드 작업(관리자 로그 정리 루프) 같은 리소스는 종료 정리가 누락되면 장애 원인이 되기 쉬워 통합 관리가 중요하다.
+- 안 하면 어떤 문제가 생기나
+  - 경고가 계속 누적되어 실제 오류 신호를 묻어버릴 수 있다.
+  - 프레임워크 업그레이드 시 호환성 이슈가 커져 한 번에 큰 수정이 필요해질 수 있다.
+  - 시작/종료 처리 코드가 분산되면 future 변경 시 정리 누락(메모리/태스크 누수) 가능성이 올라간다.
+
+### 6) Validation
+- `uv run basedpyright`: 통과 (0 errors, 0 warnings)
+- `uv run ruff check .`: 통과
+- `uv run pytest`: 통과 (5 passed)
+- 결과: 기존 startup/shutdown 동작은 유지되면서 deprecation 경고 제거 확인
+
+### 7) Outcome
+#### 잘된 점
+- 라이프사이클 처리 경로가 최신 표준(`lifespan`)으로 정리되어 향후 유지보수성이 좋아졌다.
+- 운영 핵심 루틴(초기화/cleanup loop)의 실행-종료 흐름이 더 명확해졌다.
+
+#### 아쉬운 점
+- 현재는 `startup_event`/`shutdown_event` 함수를 래핑해 전환했기 때문에, 후속 단계에서 라이프사이클 로직을 모듈 단위로 더 분리할 여지가 있다.
+
+#### 다음 액션
+1. lifespan 내부 초기화 항목을 함수별로 분리해 테스트 가능성을 높인다.
+2. 운영 로그(cleanup 실행 횟수/삭제 건수) 메트릭을 별도 관찰 포인트로 노출한다.
+
+## Session 2026-03-03-01
+
+### 1) Goal
+- 관리자 설정 페이지 개편 계획을 "동시 리팩토링"이 아닌 "안전 단계" 중심으로 재정의한다.
+
+### 2) Inputs
+- 변경 파일
+  - `docs/remaining-features.md`
+- 사용자 요구
+  - 파일 분리 -> 데이터 기반 정리 -> 모달화 -> 테이블 고도화 -> 레이아웃 교체 순서로 리스크를 낮춘다.
+
+### 3) Design Decisions
+- 레이아웃 선교체를 금지하고 내부 안정화 이후 마지막 단계에서 교체한다.
+- 현재 `src/lib/api.ts`의 커스텀 캐시/SWR 패턴을 즉시 폐기하지 않고, 데이터 접근 정리 단계를 별도로 둔다.
+- 단계별 검증 게이트(`pnpm lint`, `pnpm test`, `pnpm build`)를 문서에 명시한다.
+
+### 4) Implementation Notes
+- `docs/remaining-features.md`에 "관리자 설정 페이지 개편 계획 (안전 단계)" 섹션 추가
+  - Stage 1: 파일 분리만 (기능 변경 없음)
+  - Stage 2: 데이터 접근 레이어 정리
+  - Stage 3: `window.prompt/confirm` -> Modal/Form 교체
+  - Stage 4: TanStack Table 기반 고도화
+  - Stage 5: 레이아웃/사이드바 교체 (마지막)
+- 리스크 관리 체크리스트(레이아웃 선변경 금지, 단계별 PR 분리, 회귀 테스트 유지) 추가
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- 왜 필요한가
+  - 관리자 화면은 권한/운영 액션이 많아 대규모 동시 변경 시 회귀 위험이 크다.
+  - 단계 분리는 원인 추적과 롤백을 단순화해 운영 안정성을 높인다.
+- 안 하면 어떤 문제가 생기나
+  - 레이아웃과 내부 동작을 동시에 바꿀 경우, UI 깨짐과 비즈니스 로직 회귀가 섞여 디버깅 비용이 급증한다.
+
+### 6) Validation
+- 문서 반영 확인: `docs/remaining-features.md` 신규 섹션/체크리스트 추가 완료
+
+### 7) Outcome
+#### 잘된 점
+- 기술/UX 개선 순서를 리스크 중심으로 재정렬해 실행 가능성이 높아졌다.
+
+#### 아쉬운 점
+- 실제 구현 단계에서 React Query 전면 도입 여부는 PoC 결과를 보고 확정해야 한다.
+
+#### 다음 액션
+1. Stage 1 수행 전 분리 대상 컴포넌트 경계(탭/공통 유틸)를 확정한다.
+2. Stage 1 완료 직후 시각 회귀 체크리스트를 만들어 baseline 스크린샷을 확보한다.
+
+## Session 2026-03-03-02
+
+### 1) Goal
+- 관리자 화면 개편의 Stage 1 착수 순서대로, 구조 분리 전에 프론트 smoke test baseline을 고정하고 공통 섹션 분리를 시작한다.
+
+### 2) Inputs
+- 변경 파일
+  - `src/App.admin-guard.smoke.test.tsx`
+  - `src/components/screens/AdminScreen.report-action.smoke.test.tsx`
+  - `src/components/screens/admin/AdminStatsCards.tsx`
+  - `src/components/screens/admin/AdminTabHeader.tsx`
+  - `src/components/screens/AdminScreen.tsx`
+- 기준 문서
+  - `docs/remaining-features.md` (Stage 1: smoke test 선작성, 구조 분리)
+
+### 3) Design Decisions
+- Stage 1 리스크를 줄이기 위해 분리 작업 전에 smoke test를 먼저 추가했다.
+- 동작 변경 없이 분리 가능한 공통 섹션(요약 카드, 탭 헤더)부터 추출해 구조 리스크를 최소화했다.
+
+### 4) Implementation Notes
+- 프론트 smoke test 추가
+  - `App` 기준 `/admin` 접근 가드 smoke 추가 (익명/비관리자/관리자)
+  - `AdminScreen` 기준 신고 처리 액션 smoke 추가 (`처리` 버튼 -> `api.updateReport` 호출)
+- Stage 1 구조 분리 1차
+  - `AdminStatsCards` 컴포넌트로 상단 요약 카드 섹션 분리
+  - `AdminTabHeader` 컴포넌트로 탭 트리거+수동 새로고침 섹션 분리
+  - `AdminScreen`은 상태/핸들러/탭 본문 로직을 유지한 채 새 섹션 컴포넌트를 사용하도록 연결
+
+### 5) Why Needed / 하지 않으면 생기는 문제
+- 왜 필요한가
+  - 구조 분리 전에 baseline 테스트가 없으면 회귀가 발생해도 분리 전후 비교가 어렵다.
+  - 큰 파일은 공통 블록부터 나눠야 충돌 범위를 제한하면서 안전하게 진행할 수 있다.
+- 안 하면 어떤 문제가 생기나
+  - 리팩토링 도중 권한 가드/핵심 관리자 액션 회귀를 늦게 발견하게 된다.
+  - 한 번에 큰 분리를 시도하면 디버깅 포인트가 과도하게 늘어난다.
+
+### 6) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 7) Outcome
+#### 잘된 점
+- Stage 1 착수 순서를 테스트 선작성 -> 구조 분리로 고정해 계획과 실행 정합성을 맞췄다.
+- 공통 섹션 분리 후에도 빌드/테스트/린트가 모두 통과해 동작 안정성을 확인했다.
+
+#### 아쉬운 점
+- 탭 본문(`reports/users/content/pages/policies/actions`)은 아직 `AdminScreen` 내부에 있어 Stage 1 분리를 계속 진행해야 한다.
+
+#### 다음 액션
+1. 탭 본문을 manager 단위 컴포넌트로 분리하되, Stage 1 원칙대로 상태는 루트에 유지한다.
+2. 분리 완료 후 manager별 props 수(데이터/핸들러)를 기록해 Stage 2 판단 근거로 남긴다.
+
+## Session 2026-03-03-03
+
+### 1) Goal
+- Stage 1 구조 분리를 이어서 진행해 `AdminScreen` 탭 본문 일부를 manager 컴포넌트로 이동한다.
+
+### 2) Inputs
+- 변경 파일
+  - `src/components/screens/admin/AdminReportsTab.tsx`
+  - `src/components/screens/admin/AdminUsersTab.tsx`
+  - `src/components/screens/AdminScreen.tsx`
+
+### 3) Design Decisions
+- 상태/데이터 fetch는 `AdminScreen` 루트에 유지하고, 탭 렌더링만 분리했다.
+- 분리 순서는 영향 범위가 명확한 `reports` -> `users` 탭부터 적용했다.
+
+### 4) Implementation Notes
+- `reports` 탭을 `AdminReportsTab`으로 분리하고 기존 필터/목록/페이지네이션 동작을 props로 연결
+- `users` 탭을 `AdminUsersTab`으로 분리하고 승인/제재/삭제 예약 액션 핸들러를 props로 연결
+- `AdminScreen`에서 기존 JSX 블록을 새 manager 컴포넌트 호출로 교체
+
+### 5) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 6) Outcome
+#### 잘된 점
+- 동작 변경 없이 탭 본문 분리를 시작해 Stage 1 목표(구조 개선)를 지속적으로 달성 중이다.
+
+#### 아쉬운 점
+- `content/pages/policies/actions` 탭은 아직 루트 파일에 남아 있어 동일 패턴으로 추가 분리가 필요하다.
+
+#### 다음 액션
+1. 남은 4개 탭을 manager 컴포넌트로 분리한다.
+2. Stage 1 종료 시 manager별 props 수를 기록해 Stage 2 의사결정 근거를 정리한다.
+
+## Session 2026-03-03-04
+
+### 1) Goal
+- Stage 1 구조 분리를 완료하고 manager별 props 규모를 기록해 Stage 2 판단 근거를 남긴다.
+
+### 2) Inputs
+- 변경 파일
+  - `src/components/screens/admin/AdminContentTab.tsx`
+  - `src/components/screens/admin/AdminPagesTab.tsx`
+  - `src/components/screens/admin/AdminPoliciesTab.tsx`
+  - `src/components/screens/admin/AdminActionsTab.tsx`
+  - `src/components/screens/AdminScreen.tsx`
+
+### 3) Implementation Notes
+- `content/pages/policies/actions` 탭을 manager 컴포넌트로 분리하고, 상태/핸들러는 `AdminScreen` 루트에서 props로 주입했다.
+- `AdminScreen`은 탭 본문 JSX 대신 manager 호출부만 남기도록 정리했다.
+
+### 4) Props 규모 기록 (Stage 1 기준)
+- `AdminReportsTab`: 15 props
+- `AdminUsersTab`: 15 props
+- `AdminContentTab`: 28 props
+- `AdminPagesTab`: 19 props
+- `AdminPoliciesTab`: 41 props
+- `AdminActionsTab`: 16 props
+
+### 5) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 6) Outcome
+#### 잘된 점
+- Stage 1 목표(기능 변경 없이 구조 분리)를 manager 단위로 완료했다.
+- props 규모가 수치화되어 Stage 2(Context/Query/슬라이스화) 우선순위 근거가 확보됐다.
+
+#### 다음 액션
+1. Stage 2에서 `AdminPoliciesTab`/`AdminContentTab`부터 props 묶음(slice) 또는 context 도입 후보로 우선 검토한다.
+
+## Session 2026-03-03-05
+
+### 1) Goal
+- Stage 2 시작 작업으로 `content`/`policies` 탭의 과도한 props surface를 slice 기반으로 축소한다.
+
+### 2) Inputs
+- 변경 파일
+  - `src/components/screens/admin/AdminContentTab.tsx`
+  - `src/components/screens/admin/AdminPoliciesTab.tsx`
+  - `src/components/screens/AdminScreen.tsx`
+
+### 3) Design Decisions
+- 기능/데이터 흐름은 유지하고, 전달 방식만 "flat props" -> "grouped slice props"로 변경했다.
+- 가장 무거운 탭 2개(`content`, `policies`)를 우선 적용해 Stage 2 리스크를 제한했다.
+
+### 4) Implementation Notes
+- `AdminContentTab`
+  - 분리: `filters`, `bulk`, `editing`, `loading` + 기존 개별 props 일부
+  - `AdminScreen`에서 동일 상태/핸들러를 slice 객체로 묶어 전달
+- `AdminPoliciesTab`
+  - 분리: `loading`, `oauth`, `policyMeta`, `policyCategories`, `policyForms`, `csvActions`
+  - 기존 정책/폼/CSV/OAuth 동작은 그대로 유지
+
+### 5) PoC 지표 (props surface)
+- `AdminContentTab` top-level props: 28 -> 8
+- `AdminPoliciesTab` top-level props: 41 -> 6
+
+### 6) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 7) Outcome
+#### 잘된 점
+- Stage 2의 핵심 목표(유지보수성 개선)를 동작 변화 없이 달성했다.
+- 상위 컴포넌트 호출부 가독성이 개선되어 이후 Context/Query 도입 지점이 명확해졌다.
+
+#### 다음 액션
+1. `pages/actions` 탭도 동일 패턴의 slice 묶음으로 통일할지 결정한다.
+2. React Query PoC 범위(신고 탭 1개) 착수 전에 로딩/에러/재요청 코드량 baseline을 캡처한다.
+
+## Session 2026-03-03-06
+
+### 1) Goal
+- Stage 2 정렬 작업으로 `pages/actions`도 slice 패턴으로 통일하고, 신고 탭 React Query PoC baseline을 기록한다.
+
+### 2) Inputs
+- 변경 파일
+  - `src/components/screens/admin/AdminPagesTab.tsx`
+  - `src/components/screens/admin/AdminActionsTab.tsx`
+  - `src/components/screens/AdminScreen.tsx`
+
+### 3) Implementation Notes
+- `AdminPagesTab`
+  - top-level props를 `loading`, `fields`, `actions`로 그룹화
+- `AdminActionsTab`
+  - top-level props를 `summary`, `filters`, `data`, `actions` + `actionToText`로 그룹화
+- `AdminScreen` 호출부를 새 slice 구조에 맞게 갱신
+
+### 4) React Query PoC Baseline (reports 탭)
+- root state (report 관련)
+  - `reports`, `loadingReports`, `activeStatus`, `reportPage`, `reportTotal`, `searchQuery`
+  - 위치: `src/components/screens/AdminScreen.tsx:300`, `src/components/screens/AdminScreen.tsx:304`, `src/components/screens/AdminScreen.tsx:312`, `src/components/screens/AdminScreen.tsx:313`, `src/components/screens/AdminScreen.tsx:314`, `src/components/screens/AdminScreen.tsx:317`
+- 핵심 코드 블록
+  - `loadReports`: 약 41 lines (`src/components/screens/AdminScreen.tsx:365` 기준)
+  - `filteredReports` derivation: 약 20 lines (`src/components/screens/AdminScreen.tsx:664` 기준)
+  - `handleUpdateReport` mutation flow: 약 12 lines (`src/components/screens/AdminScreen.tsx:919` 기준)
+- 탭 컴포넌트 전달 인자(현재)
+  - `AdminReportsTab` top-level props: 15
+
+### 5) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 6) Outcome
+#### 잘된 점
+- Stage 2 slice 패턴을 `content/policies/pages/actions`까지 통일해 유지보수 규칙이 일관화됐다.
+- 신고 탭 baseline이 수치/위치 기반으로 기록되어 React Query PoC 전후 비교가 가능해졌다.
+
+#### 다음 액션
+1. 신고 탭 1개에 React Query PoC를 적용하고 동일 지표(코드량/상태 수/재검증 경로)로 전후 비교한다.
+
+## Session 2026-03-03-07
+
+### 1) Goal
+- 신고 탭 1개에 React Query PoC를 적용하고 baseline 대비 코드 구조 변화를 검증한다.
+
+### 2) Inputs
+- 변경 파일
+  - `package.json`
+  - `src/main.tsx`
+  - `src/lib/query-client.ts`
+  - `src/components/screens/AdminScreen.tsx`
+  - `src/components/screens/AdminScreen.report-action.smoke.test.tsx`
+
+### 3) Implementation Notes
+- 의존성 추가: `@tanstack/react-query`
+- 앱 루트에 `QueryClientProvider` 연결 (`src/main.tsx`)
+- 신고 탭 데이터 흐름을 query 기반으로 전환 (`useQuery`, `useMutation`, `useQueryClient`)
+  - 기존 `reports`, `loadingReports`, `reportTotal` 상태 제거
+  - 기존 `loadReports(force)` 네트워크 호출 로직 제거
+  - 수동 새로고침/신고 처리 후 `invalidateQueries(["admin-reports"])`로 재검증
+- `AdminScreen` 단독 렌더 테스트가 provider를 가지도록 smoke test 래핑
+
+### 4) PoC 전후 비교 (reports 탭)
+- 상태 수 (report 전용)
+  - Before: `reports`, `loadingReports`, `activeStatus`, `reportPage`, `reportTotal`, `searchQuery` (6)
+  - After: `activeStatus`, `reportPage`, `searchQuery` (3)
+- 핵심 fetch 코드
+  - Before: `loadReports` 약 41 lines + force/onRevalidate 분기
+  - After: `useQuery` 선언 1개 + `queryFn` 중심으로 단순화
+- 재검증 경로
+  - Before: 액션마다 `loadReports(reportPage, true)` 직접 호출
+  - After: `invalidateQueries(["admin-reports"])` 일관화
+
+### 5) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 6) Outcome
+#### 잘된 점
+- Stage 2 PoC 범위를 신고 탭 1개로 제한하면서도 데이터/재검증 복잡도를 줄였다.
+- 이후 탭 확장 여부를 판단할 수 있는 실측 비교 기준을 확보했다.
+
+#### 다음 액션
+1. PoC 판단 기준(로딩/에러/재요청 코드량 30%+) 충족 여부를 문서에서 확정하고 전면 도입/부분 유지 결정을 내린다.
+
+## Session 2026-03-03-08
+
+### 1) Goal
+- React Query PoC 판단을 확정하고, 동일 패턴을 `users` 탭으로 확장 적용한다.
+
+### 2) Decision (PoC 기준 충족 여부)
+- 결론: **충족 (채택 진행)**
+- 근거
+  - 신고 탭 전용 상태 수 6 -> 3 (50% 감소)
+  - 수동 fetch/force 호출 경로 제거 및 `invalidateQueries`로 재검증 경로 단일화
+  - 기준(30% 이상 감소)을 초과하므로 단계 확장 진행
+
+### 3) Inputs
+- 변경 파일
+  - `src/components/screens/AdminScreen.tsx`
+
+### 4) Implementation Notes
+- `users` 탭 조회를 query 기반으로 전환
+  - `useQuery(["admin-users"])`로 목록 조회
+  - `users`, `loadingUsers`를 query 결과 기반 파생값으로 변경
+  - 기존 `loadUsers` 함수 및 관련 로컬 상태 제거
+- 사용자 액션 후 갱신 경로 통일
+  - 공통 `refreshUsersAndLogs` 추가
+  - 각 사용자 액션 완료 후 `invalidateQueries(["admin-users"]) + loadActionLogs(true)` 실행
+- 수동 새로고침(users 탭)도 query invalidate 기반으로 변경
+
+### 5) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 6) Outcome
+#### 잘된 점
+- PoC 기준을 만족하는 방향으로 확장을 시작했고, users 탭도 동일한 데이터 갱신 규칙을 갖게 됐다.
+
+#### 다음 액션
+1. `content` 탭 조회도 query 기반으로 전환할지 범위를 결정한다.
+2. mutation side-effect 패턴(`invalidate + 로그 갱신`)을 공통 헬퍼로 통합할지 검토한다.
+
+## Session 2026-03-03-09
+
+### 1) Goal
+- React Query 확장을 `content` 탭까지 적용해 fetch/refresh 경로를 통일한다.
+
+### 2) Inputs
+- 변경 파일
+  - `src/components/screens/AdminScreen.tsx`
+
+### 3) Implementation Notes
+- `content` 탭 조회를 `useQuery(["admin-projects"])`로 전환
+  - 기존 `projects`, `loadingProjects` 로컬 fetch 상태 제거
+  - `projects`, `loadingProjects`는 query 파생값으로 대체
+- 프로젝트 액션 후 갱신 경로 통일
+  - `refreshProjectsAndLogs` 추가
+  - 프로젝트 수정/단건 액션/벌크 액션 후 `invalidateQueries(["admin-projects"]) + loadActionLogs(true)` 적용
+- 수동 새로고침(content)도 `invalidateQueries(["admin-projects"])` 기반으로 변경
+
+### 4) Validation
+- `pnpm test`: 통과 (4 files, 7 tests)
+- `pnpm lint`: 통과
+- `pnpm build`: 통과
+
+### 5) Outcome
+#### 잘된 점
+- reports/users/content 3개 탭이 동일한 query/invalidate 패턴을 사용하게 되어 데이터 갱신 규칙이 단순해졌다.
+
+#### 다음 액션
+1. 남은 `policies/pages/actions` 중 조회 경로를 query로 전환할지, 현재 구조 유지할지 범위를 확정한다.
