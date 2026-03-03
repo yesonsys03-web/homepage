@@ -1027,7 +1027,7 @@ def unsuspend_user(user_id: str):
                     suspended_at = NULL,
                     suspended_by = NULL,
                     updated_at = NOW()
-                WHERE id = %s AND role != 'admin' AND status = 'suspended'
+                WHERE id = %s AND role != 'super_admin' AND status = 'suspended'
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,

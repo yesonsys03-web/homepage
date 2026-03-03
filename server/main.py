@@ -578,6 +578,7 @@ def validate_enforcement_target(
     current_user: UserContext,
     *,
     allow_super_admin_target: bool = False,
+    allow_admin_target: bool = False,
 ) -> None:
     if current_user["id"] == target_user_id:
         raise HTTPException(status_code=400, detail="본인 계정에는 적용할 수 없습니다")
@@ -587,7 +588,7 @@ def validate_enforcement_target(
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
 
     target_role = target_user.get("role")
-    if target_role == "admin":
+    if target_role == "admin" and not allow_admin_target:
         raise HTTPException(
             status_code=403, detail="관리자 계정에는 적용할 수 없습니다"
         )
@@ -1748,7 +1749,11 @@ def unsuspend_user_endpoint(
     user_id: str,
     current_user: UserContext = Depends(require_admin),
 ):
-    validate_enforcement_target(user_id, current_user)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     released_user = unsuspend_user(user_id=user_id)
     if not released_user:
         raise HTTPException(

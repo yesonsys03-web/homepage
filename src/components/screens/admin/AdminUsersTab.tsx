@@ -307,7 +307,10 @@ export function AdminUsersTab({
               label: "정지 해제",
               className: `${ACTION_BUTTON_BASE} border-[#FFB547] text-[#FFB547] hover:bg-[#FFB547]/10`,
               variant: "outline" as const,
-              disabled: user.role === "admin" || user.status !== "suspended",
+              disabled:
+                user.status !== "suspended" ||
+                user.role === "super_admin" ||
+                (user.role === "admin" && authUserRole !== "super_admin"),
               onClick: () => handleUnsuspendUser(user.id),
             },
             {
