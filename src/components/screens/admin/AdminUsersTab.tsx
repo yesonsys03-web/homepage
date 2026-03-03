@@ -38,6 +38,9 @@ interface AdminUsersTabProps {
 
 type UserActionModalType = "limit" | "suspend" | "revoke" | "schedule_delete" | "delete_now" | "reject"
 
+const ACTION_BUTTON_BASE =
+  "h-8 w-full justify-center px-2 text-xs whitespace-nowrap"
+
 export function AdminUsersTab({
   loadingUsers,
   users,
@@ -61,6 +64,7 @@ export function AdminUsersTab({
   const [modalDays, setModalDays] = useState("30")
   const [confirmDangerousAction, setConfirmDangerousAction] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [openActionMenuUserId, setOpenActionMenuUserId] = useState<string | null>(null)
 
   const openActionModal = (type: UserActionModalType, userId: string) => {
     setActiveModal({ type, userId })
@@ -252,94 +256,159 @@ export function AdminUsersTab({
           const user = row.original
           const limitState = getUserLimitState(user)
           const canHardDelete = authUserRole === "super_admin"
+          const isActionMenuOpen = openActionMenuUserId === user.id
+
+          const actions = [
+            {
+              id: "approve",
+              label: "승인",
+              className: `${ACTION_BUTTON_BASE} bg-[#23D5AB] text-[#0B1020] hover:bg-[#23D5AB]/90`,
+              disabled: user.role === "admin" || user.status !== "pending",
+              onClick: () => handleApproveUser(user.id),
+            },
+            {
+              id: "reject",
+              label: "반려",
+              className: `${ACTION_BUTTON_BASE} border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10`,
+              variant: "outline" as const,
+              disabled: user.role === "admin" || user.status !== "pending",
+              onClick: () => openActionModal("reject", user.id),
+            },
+            {
+              id: "limit",
+              label: "24h 제한",
+              className: `${ACTION_BUTTON_BASE} bg-[#FF6B6B] text-white hover:bg-[#FF6B6B]/90`,
+              disabled: user.role === "admin" || limitState.isLimited || user.status !== "active",
+              onClick: () => openActionModal("limit", user.id),
+            },
+            {
+              id: "unlimit",
+              label: "제한 해제",
+              className: `${ACTION_BUTTON_BASE} border-[#111936] text-[#B8C3E6] hover:bg-[#111936]`,
+              variant: "outline" as const,
+              disabled: user.role === "admin" || !limitState.isLimited,
+              onClick: () => handleUnlimitUser(user.id),
+            },
+            {
+              id: "suspend",
+              label: "계정 정지",
+              className: `${ACTION_BUTTON_BASE} bg-[#FFB547] text-[#0B1020] hover:bg-[#FFB547]/90`,
+              disabled: user.role === "admin" || user.status === "suspended" || user.status === "deleted",
+              onClick: () => openActionModal("suspend", user.id),
+            },
+            {
+              id: "unsuspend",
+              label: "정지 해제",
+              className: `${ACTION_BUTTON_BASE} border-[#FFB547] text-[#FFB547] hover:bg-[#FFB547]/10`,
+              variant: "outline" as const,
+              disabled: user.role === "admin" || user.status !== "suspended",
+              onClick: () => handleUnsuspendUser(user.id),
+            },
+            {
+              id: "revoke",
+              label: "세션 무효화",
+              className: `${ACTION_BUTTON_BASE} border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10`,
+              variant: "outline" as const,
+              disabled: user.role === "admin" || user.status === "deleted",
+              onClick: () => openActionModal("revoke", user.id),
+            },
+            {
+              id: "schedule_delete",
+              label: "삭제 예약",
+              className: `${ACTION_BUTTON_BASE} bg-[#6B8BFF] text-white hover:bg-[#6B8BFF]/90`,
+              disabled: user.role === "admin" || user.status === "pending_delete" || user.status === "deleted",
+              onClick: () => openActionModal("schedule_delete", user.id),
+            },
+            {
+              id: "cancel_delete_schedule",
+              label: "예약 취소",
+              className: `${ACTION_BUTTON_BASE} border-[#6B8BFF] text-[#6B8BFF] hover:bg-[#6B8BFF]/10`,
+              variant: "outline" as const,
+              disabled: user.status !== "pending_delete",
+              onClick: () => handleCancelUserDeleteSchedule(user.id),
+            },
+            {
+              id: "delete_now",
+              label: "즉시 삭제",
+              className: `${ACTION_BUTTON_BASE} border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10`,
+              variant: "outline" as const,
+              disabled: !canHardDelete || user.role === "admin" || user.status === "deleted",
+              onClick: () => openActionModal("delete_now", user.id),
+            },
+          ]
+
+          const primaryActionIds =
+            user.status === "pending"
+              ? ["approve", "reject"]
+              : user.status === "suspended"
+                ? ["unsuspend"]
+                : user.status === "pending_delete"
+                  ? ["cancel_delete_schedule"]
+                  : user.status === "deleted"
+                    ? []
+                    : limitState.isLimited
+                      ? ["unlimit", "suspend"]
+                      : ["limit", "suspend"]
+
+          const primaryActions = actions.filter((action) => primaryActionIds.includes(action.id))
+          const secondaryActions = actions.filter((action) => !primaryActionIds.includes(action.id))
+
           return (
-            <div className="flex max-w-[640px] flex-wrap gap-1">
-              <Button
-                size="sm"
-                className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || user.status !== "pending"}
-                onClick={() => handleApproveUser(user.id)}
-              >
-                승인
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || user.status !== "pending"}
-                onClick={() => openActionModal("reject", user.id)}
-              >
-                반려
-              </Button>
-              <Button
-                size="sm"
-                className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || limitState.isLimited || user.status !== "active"}
-                onClick={() => openActionModal("limit", user.id)}
-              >
-                24h 제한
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || !limitState.isLimited}
-                onClick={() => handleUnlimitUser(user.id)}
-              >
-                제한 해제
-              </Button>
-              <Button
-                size="sm"
-                className="bg-[#FFB547] hover:bg-[#FFB547]/90 text-[#0B1020] text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || user.status === "suspended" || user.status === "deleted"}
-                onClick={() => openActionModal("suspend", user.id)}
-              >
-                계정 정지
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-[#FFB547] text-[#FFB547] hover:bg-[#FFB547]/10 text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || user.status !== "suspended"}
-                onClick={() => handleUnsuspendUser(user.id)}
-              >
-                정지 해제
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10 text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || user.status === "deleted"}
-                onClick={() => openActionModal("revoke", user.id)}
-              >
-                세션 무효화
-              </Button>
-              <Button
-                size="sm"
-                className="bg-[#6B8BFF] hover:bg-[#6B8BFF]/90 text-white text-xs whitespace-nowrap"
-                disabled={user.role === "admin" || user.status === "pending_delete" || user.status === "deleted"}
-                onClick={() => openActionModal("schedule_delete", user.id)}
-              >
-                삭제 예약
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-[#6B8BFF] text-[#6B8BFF] hover:bg-[#6B8BFF]/10 text-xs whitespace-nowrap"
-                disabled={user.status !== "pending_delete"}
-                onClick={() => handleCancelUserDeleteSchedule(user.id)}
-              >
-                예약 취소
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs whitespace-nowrap"
-                disabled={!canHardDelete || user.role === "admin" || user.status === "deleted"}
-                onClick={() => openActionModal("delete_now", user.id)}
-              >
-                즉시 삭제
-              </Button>
+            <div className="relative w-[260px]">
+              <div className="grid grid-cols-2 gap-1">
+                {primaryActions.map((action) => (
+                  <Button
+                    key={action.id}
+                    size="sm"
+                    variant={action.variant}
+                    className={action.className}
+                    disabled={action.disabled}
+                    onClick={action.onClick}
+                  >
+                    {action.label}
+                  </Button>
+                ))}
+                {primaryActions.length % 2 === 1 ? <div className="h-8" /> : null}
+                {primaryActions.length === 0 ? <div className="col-span-2 h-8 rounded border border-[#111936] bg-[#111936]/30" /> : null}
+                <div className="col-span-2 flex justify-end">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-8 w-8 border-[#111936] px-0 text-base leading-none text-[#B8C3E6] hover:bg-[#111936]"
+                    onClick={() =>
+                      setOpenActionMenuUserId((prev) => (prev === user.id ? null : user.id))
+                    }
+                    disabled={secondaryActions.length === 0}
+                    aria-label={isActionMenuOpen ? "추가 작업 메뉴 닫기" : "추가 작업 메뉴 열기"}
+                    title={secondaryActions.length === 0 ? "추가 작업 없음" : "추가 작업"}
+                    >
+                    ⋮
+                  </Button>
+                </div>
+              </div>
+
+              {isActionMenuOpen && secondaryActions.length > 0 ? (
+                <div className="absolute right-0 top-full z-20 mt-1 w-full rounded-lg border border-[#111936] bg-[#0B1020] p-2 shadow-xl">
+                  <div className="grid grid-cols-2 gap-1">
+                    {secondaryActions.map((action) => (
+                      <Button
+                        key={action.id}
+                        size="sm"
+                        variant={action.variant}
+                        className={action.className}
+                        disabled={action.disabled}
+                        onClick={() => {
+                          action.onClick()
+                          setOpenActionMenuUserId(null)
+                        }}
+                      >
+                        {action.label}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
           )
         },
@@ -353,6 +422,7 @@ export function AdminUsersTab({
       handleUnlimitUser,
       handleUnsuspendUser,
       handleCancelUserDeleteSchedule,
+      openActionMenuUserId,
     ],
   )
 
