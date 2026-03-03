@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Helmet } from 'react-helmet-async'
 import {
   BrowserRouter,
@@ -202,6 +202,7 @@ function AppContent() {
   const navigate = useNavigate()
   const { user, login, logout, isLoading } = useAuth()
   const [lastProjectId, setLastProjectId] = useState<string | null>(null)
+  const oauthInFlightCodeRef = useRef<string | null>(null)
 
   const routeState = useMemo(() => parseRoute(location.pathname), [location.pathname])
   const currentScreen = routeState.screen
@@ -282,40 +283,53 @@ function AppContent() {
       return
     }
 
-    let cancelled = false
     const restoreOAuthSession = async () => {
       try {
         if (oauthCode) {
-          const result = await api.exchangeGoogleOAuthCode(oauthCode)
-          if (cancelled) return
-          login(result.access_token, result.user)
+          const oauthStorageKey = 'oauth_exchange_inflight_code'
+          if (oauthInFlightCodeRef.current === oauthCode) {
+            clearOAuthQuery()
+            return
+          }
+
+          const storageInFlightCode = window.sessionStorage.getItem(oauthStorageKey)
+          if (storageInFlightCode === oauthCode) {
+            clearOAuthQuery()
+            return
+          }
+
+          oauthInFlightCodeRef.current = oauthCode
+          window.sessionStorage.setItem(oauthStorageKey, oauthCode)
           clearOAuthQuery()
-          navigate('/', { replace: true })
-          return
+          try {
+            const result = await api.exchangeGoogleOAuthCode(oauthCode)
+            login(result.access_token, result.user)
+            navigate('/', { replace: true })
+            return
+          } finally {
+            oauthInFlightCodeRef.current = null
+            if (window.sessionStorage.getItem(oauthStorageKey) === oauthCode) {
+              window.sessionStorage.removeItem(oauthStorageKey)
+            }
+          }
         }
 
         if (!oauthToken) {
           throw new Error('OAuth 토큰이 누락되었습니다')
         }
         const me = await api.getMeWithToken(oauthToken)
-        if (cancelled) return
         login(oauthToken, me)
         clearOAuthQuery()
         navigate('/', { replace: true })
       } catch (error) {
         console.error('Google OAuth session restore failed:', error)
-        if (!cancelled) {
-          clearOAuthQuery()
-          navigate('/login', { replace: true })
-          window.alert(error instanceof Error ? error.message : 'Google 로그인에 실패했습니다.')
-        }
+        clearOAuthQuery()
+        navigate('/login', { replace: true })
+        window.alert(error instanceof Error ? error.message : 'Google 로그인에 실패했습니다.')
       }
     }
 
     void restoreOAuthSession()
-    return () => {
-      cancelled = true
-    }
   }, [location.pathname, location.search, login, navigate])
 
   useEffect(() => {
