@@ -329,6 +329,11 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const { logout, user: authUser } = useAuth()
   const queryClient = useQueryClient()
 
+  const handleLogoutClick = () => {
+    logout()
+    onNavigate?.("home")
+  }
+
   const [actionLogs, setActionLogs] = useState<AdminActionLog[]>([])
   const [loadingLogs, setLoadingLogs] = useState(true)
   const [loadingPolicies, setLoadingPolicies] = useState(true)
@@ -1338,9 +1343,15 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         onNavigate={onNavigate}
         titleSuffix={<span className="text-[#FF5D8F]">Admin</span>}
         rightSlot={
-          <Button onClick={logout} className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
-            로그아웃
-          </Button>
+          authUser ? (
+            <Button onClick={handleLogoutClick} className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white font-semibold">
+              로그아웃
+            </Button>
+          ) : (
+            <Button onClick={() => onNavigate?.("login")} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold">
+              로그인
+            </Button>
+          )
         }
       />
 

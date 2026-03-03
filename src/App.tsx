@@ -85,6 +85,22 @@ function AppContent() {
     }
   }, [login])
 
+  useEffect(() => {
+    if (isLoading) {
+      return
+    }
+
+    if (currentScreen === 'admin' && !isAdminRole(user?.role)) {
+      setCurrentScreen('home')
+    }
+  }, [currentScreen, isLoading, user])
+
+  const handleLogout = () => {
+    logout()
+    syncProjectQuery(null)
+    setCurrentScreen('home')
+  }
+
   const handleLoginSwitch = () => setCurrentScreen('login')
   const handleRegisterSwitch = () => setCurrentScreen('register')
   const handleAuthSuccess = () => setCurrentScreen('home')
@@ -210,17 +226,17 @@ function AppContent() {
         
         {user ? (
           <button
-            onClick={logout}
+            onClick={handleLogout}
             className="px-3 py-1 rounded text-sm bg-[#FF6B6B] text-white"
           >
-            Logout ({user.nickname})
+            로그아웃 ({user.nickname})
           </button>
         ) : (
           <button
             onClick={() => setCurrentScreen('login')}
             className="px-3 py-1 rounded text-sm bg-[#23D5AB] text-[#0B1020]"
           >
-            Login
+            로그인
           </button>
         )}
       </div>
