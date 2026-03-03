@@ -404,7 +404,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
         {/* Media Area */}
         <div className="aspect-video bg-gradient-to-br from-[#161F42] to-[#0B1020] rounded-xl mb-8 flex items-center justify-center">
           {project.thumbnail_url ? (
-            <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover rounded-xl" />
+            <img src={project.thumbnail_url} alt={project.title} loading="lazy" decoding="async" className="w-full h-full object-cover rounded-xl" />
           ) : (
             <ProjectCoverPlaceholder
               seedKey={project.id}

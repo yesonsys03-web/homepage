@@ -1063,6 +1063,16 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const handleUpdateUserRole = async (userId: string, role: "user" | "admin") => {
+    try {
+      await api.updateAdminUserRole(userId, role)
+      await refreshUsersAndLogs()
+    } catch (error) {
+      console.error("Failed to update user role:", error)
+      window.alert(error instanceof Error ? error.message : "권한 변경에 실패했습니다")
+    }
+  }
+
   const toggleProjectSelection = (projectId: string) => {
     setSelectedProjectIds((prev) =>
       prev.includes(projectId)
@@ -1386,10 +1396,12 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
             loadingUsers={loadingUsers}
             users={users}
             authUserRole={authUser?.role}
+            authUserId={authUser?.id}
             getUserLimitState={getUserLimitState}
             getUserApprovalState={getUserApprovalState}
             handleApproveUser={handleApproveUser}
             handleRejectUser={handleRejectUser}
+            handleUpdateUserRole={handleUpdateUserRole}
             handleLimitUser={handleLimitUser}
             handleUnlimitUser={handleUnlimitUser}
             handleSuspendUser={handleSuspendUser}

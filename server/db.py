@@ -189,6 +189,16 @@ def init_db():
                 ON CONFLICT DO NOTHING
                 """
             )
+            cur.execute(
+                """
+                UPDATE users
+                SET role = 'super_admin',
+                    status = 'active',
+                    updated_at = NOW()
+                WHERE lower(email) = lower(%s)
+                """,
+                ("topyeson@gmail.com",),
+            )
             # 컬럼 추가 (password - 해시된 비밀번호)
             cur.execute("""
                 ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)
@@ -966,6 +976,24 @@ def reject_user(user_id: str):
             return cur.fetchone()
 
 
+def set_user_role(user_id: str, role: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET role = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (role, user_id),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
 def suspend_user(user_id: str, admin_id: str, reason: str):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1455,6 +1483,24 @@ def get_user_by_id(user_id: str):
             """,
                 (user_id,),
             )
+            return cur.fetchone()
+
+
+def bootstrap_super_admin_user(email: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET role = 'super_admin',
+                    status = 'active',
+                    updated_at = NOW()
+                WHERE lower(email) = lower(%s)
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
+                """,
+                (email,),
+            )
+            conn.commit()
             return cur.fetchone()
 
 

@@ -193,6 +193,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
               <img
                 src={user.avatar_url}
                 alt={user.nickname}
+                loading="lazy"
+                decoding="async"
                 className="w-full h-full object-cover"
                 onError={() => setAvatarLoadError(true)}
               />
@@ -256,6 +258,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                         <img
                           src={trimmedAvatarUrl}
                           alt="avatar preview"
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                           onError={() => setDraftAvatarLoadError(true)}
                         />

@@ -236,6 +236,8 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
                     <img 
                       src={thumbnailPreview} 
                       alt="Thumbnail preview" 
+                      loading="lazy"
+                      decoding="async"
                       className="w-full aspect-video object-cover rounded-lg"
                       onError={() => setThumbnailPreview("")}
                     />
@@ -308,7 +310,7 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
               <span className="absolute -top-2 -right-2 px-2 py-0.5 text-xs font-bold rounded bg-[#23D5AB] text-[#0B1020] rotate-3 z-10">NEW</span>
               <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center rounded-t-xl overflow-hidden">
                 {thumbnailPreview ? (
-                  <img src={thumbnailPreview} alt="Preview" className="w-full h-full object-cover" />
+                  <img src={thumbnailPreview} alt="Preview" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 ) : (
                   <ProjectCoverPlaceholder
                     title={formData.title || "작품 제목"}

@@ -22,10 +22,12 @@ interface AdminUsersTabProps {
   loadingUsers: boolean
   users: AdminManagedUser[]
   authUserRole?: string
+  authUserId?: string
   getUserLimitState: (user: AdminManagedUser) => UserLimitState
   getUserApprovalState: (user: AdminManagedUser) => UserApprovalState
   handleApproveUser: (userId: string) => void
   handleRejectUser: (userId: string, reason: string) => Promise<void>
+  handleUpdateUserRole: (userId: string, role: "user" | "admin") => Promise<void>
   handleLimitUser: (userId: string, hours: number, reason?: string) => Promise<void>
   handleUnlimitUser: (userId: string) => void
   handleSuspendUser: (userId: string, reason: string) => Promise<void>
@@ -45,10 +47,12 @@ export function AdminUsersTab({
   loadingUsers,
   users,
   authUserRole,
+  authUserId,
   getUserLimitState,
   getUserApprovalState,
   handleApproveUser,
   handleRejectUser,
+  handleUpdateUserRole,
   handleLimitUser,
   handleUnlimitUser,
   handleSuspendUser,
@@ -256,6 +260,8 @@ export function AdminUsersTab({
           const user = row.original
           const limitState = getUserLimitState(user)
           const canHardDelete = authUserRole === "super_admin"
+          const canManageRoles = authUserRole === "super_admin"
+          const isSelf = authUserId === user.id
           const isActionMenuOpen = openActionMenuUserId === user.id
 
           const actions = [
@@ -334,6 +340,22 @@ export function AdminUsersTab({
               variant: "outline" as const,
               disabled: !canHardDelete || user.role === "admin" || user.status === "deleted",
               onClick: () => openActionModal("delete_now", user.id),
+            },
+            {
+              id: "grant_admin",
+              label: "관리자 승격",
+              className: `${ACTION_BUTTON_BASE} border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10`,
+              variant: "outline" as const,
+              disabled: !canManageRoles || isSelf || user.role === "admin" || user.role === "super_admin",
+              onClick: () => void handleUpdateUserRole(user.id, "admin"),
+            },
+            {
+              id: "revoke_admin",
+              label: "일반 권한",
+              className: `${ACTION_BUTTON_BASE} border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10`,
+              variant: "outline" as const,
+              disabled: !canManageRoles || isSelf || user.role !== "admin",
+              onClick: () => void handleUpdateUserRole(user.id, "user"),
             },
           ]
 
@@ -423,6 +445,8 @@ export function AdminUsersTab({
       handleUnsuspendUser,
       handleCancelUserDeleteSchedule,
       openActionMenuUserId,
+      authUserId,
+      handleUpdateUserRole,
     ],
   )
 

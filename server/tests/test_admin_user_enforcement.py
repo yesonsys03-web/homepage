@@ -102,6 +102,48 @@ def test_require_admin_allows_super_admin() -> None:
     assert context["role"] == "super_admin"
 
 
+def test_update_user_role_requires_super_admin(client: TestClient) -> None:
+    main.app.dependency_overrides[main.require_super_admin] = lambda: (
+        _ for _ in ()
+    ).throw(HTTPException(status_code=403, detail="슈퍼 관리자 권한이 필요합니다"))
+
+    response = client.patch(
+        "/api/admin/users/target-1/role",
+        json={"role": "admin"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_update_user_role_flow(client: TestClient, monkeypatch: Any) -> None:
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-1",
+            "role": "user",
+            "email": "target@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "set_user_role",
+        lambda user_id, role: {"id": user_id, "role": role, "status": "active"},
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.patch(
+        "/api/admin/users/target-1/role",
+        json={"role": "admin"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "admin"
+
+
 def test_revoked_token_version_blocks_me_endpoint(
     client: TestClient, monkeypatch: Any
 ) -> None:

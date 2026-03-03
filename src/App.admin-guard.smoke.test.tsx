@@ -25,6 +25,38 @@ vi.mock("./components/screens", () => ({
   AboutScreen: () => <div>about</div>,
 }))
 
+vi.mock("./components/screens/HomeScreen", () => ({
+  HomeScreen: () => <div>home</div>,
+}))
+
+vi.mock("./components/screens/ProjectDetailScreen", () => ({
+  ProjectDetailScreen: () => <div>detail</div>,
+}))
+
+vi.mock("./components/screens/SubmitScreen", () => ({
+  SubmitScreen: () => <div>submit</div>,
+}))
+
+vi.mock("./components/screens/ProfileScreen", () => ({
+  ProfileScreen: () => <div>profile</div>,
+}))
+
+vi.mock("./components/screens/AdminScreen", () => ({
+  AdminScreen: () => <div>admin</div>,
+}))
+
+vi.mock("./components/screens/ExploreScreen", () => ({
+  ExploreScreen: () => <div>explore</div>,
+}))
+
+vi.mock("./components/screens/ChallengesScreen", () => ({
+  ChallengesScreen: () => <div>challenges</div>,
+}))
+
+vi.mock("./components/screens/AboutScreen", () => ({
+  AboutScreen: () => <div>about</div>,
+}))
+
 vi.mock("./components/screens/LoginScreen", () => ({
   LoginScreen: () => <div>login</div>,
 }))
@@ -64,13 +96,13 @@ describe("App admin guard smoke", () => {
     cleanup()
   })
 
-  it("redirects anonymous user to login when admin navigation is clicked", () => {
+  it("redirects anonymous user to login when admin navigation is clicked", async () => {
     render(<App />)
     fireEvent.click(screen.getByRole("button", { name: "Admin" }))
-    expect(screen.getByText("login")).toBeInTheDocument()
+    expect(await screen.findByText("login")).toBeInTheDocument()
   })
 
-  it("keeps non-admin user out of admin screen", () => {
+  it("keeps non-admin user out of admin screen", async () => {
     state.user = {
       id: "u-1",
       email: "user@example.com",
@@ -81,10 +113,10 @@ describe("App admin guard smoke", () => {
 
     render(<App />)
     fireEvent.click(screen.getByRole("button", { name: "Admin" }))
-    expect(screen.getByText("home")).toBeInTheDocument()
+    expect(await screen.findByText("home")).toBeInTheDocument()
   })
 
-  it("allows admin user to open admin screen", () => {
+  it("allows admin user to open admin screen", async () => {
     state.user = {
       id: "a-1",
       email: "admin@example.com",
@@ -95,10 +127,10 @@ describe("App admin guard smoke", () => {
 
     render(<App />)
     fireEvent.click(screen.getByRole("button", { name: "Admin" }))
-    expect(screen.getByText("admin")).toBeInTheDocument()
+    expect(await screen.findByText("admin")).toBeInTheDocument()
   })
 
-  it("allows super admin user to open admin screen", () => {
+  it("allows super admin user to open admin screen", async () => {
     state.user = {
       id: "sa-1",
       email: "superadmin@example.com",
@@ -109,6 +141,6 @@ describe("App admin guard smoke", () => {
 
     render(<App />)
     fireEvent.click(screen.getByRole("button", { name: "Admin" }))
-    expect(screen.getByText("admin")).toBeInTheDocument()
+    expect(await screen.findByText("admin")).toBeInTheDocument()
   })
 })

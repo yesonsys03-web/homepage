@@ -492,6 +492,20 @@ export const api = {
     return { ...data, user: data.user } as { access_token: string; user: User }
   },
 
+  exchangeGoogleOAuthCode: async (oauthCode: string) => {
+    const res = await fetch(`${API_BASE}/api/auth/google/exchange`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ oauth_code: oauthCode }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "Google OAuth 코드 교환에 실패했습니다" }))
+      throw new Error(error.detail || "Google OAuth 코드 교환에 실패했습니다")
+    }
+    const data = await res.json()
+    return { ...data, user: data.user } as { access_token: string; user: User }
+  },
+
   getMe: async () => {
     const res = await authFetch(`${API_BASE}/api/me`)
     return res.json() as Promise<User>
@@ -881,6 +895,15 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<AdminManagedUser>
+  },
+
+  updateAdminUserRole: async (userId: string, role: "user" | "admin", reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/users/${userId}/role`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, reason }),
     })
     return res.json() as Promise<AdminManagedUser>
   },

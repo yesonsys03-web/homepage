@@ -1,12 +1,12 @@
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownMemberType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false, reportCallInDefaultInitializer=false, reportDeprecated=false
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Optional, Mapping, Protocol, Sequence, TypedDict, cast
+from typing import Literal, Optional, Mapping, Protocol, Sequence, TypedDict, cast
 from datetime import timedelta
 import asyncio
 import re
@@ -16,7 +16,7 @@ import os
 import json
 import secrets
 from urllib.parse import urlparse, urlencode, quote
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 from threading import Lock
 from contextlib import asynccontextmanager, suppress
 from collections import deque
@@ -41,6 +41,7 @@ from db import (
     get_user_by_nickname,
     get_user_by_id,
     update_user_profile,
+    bootstrap_super_admin_user,
     get_user_projects,
     get_user_comments,
     get_user_liked_projects,
@@ -64,6 +65,7 @@ from db import (
     purge_due_user_deletions,
     approve_user,
     reject_user,
+    set_user_role,
     get_moderation_settings,
     update_moderation_settings,
     get_oauth_runtime_settings,
@@ -93,6 +95,35 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="VibeCoder Playground API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def enforce_https_and_security_headers(request, call_next):
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    request_scheme = str(request.scope.get("scheme") or "http")
+    request_is_https = request_scheme == "https" or forwarded_proto == "https"
+
+    if ENFORCE_HTTPS and not request_is_https:
+        host = request.headers.get("host", "localhost")
+        secure_url = f"https://{host}{request.url.path}"
+        if request.url.query:
+            secure_url = f"{secure_url}?{request.url.query}"
+        return RedirectResponse(url=secure_url, status_code=307)
+
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' http://localhost:5173 http://127.0.0.1:5173",
+    )
+    if ENFORCE_HTTPS or request_is_https:
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=31536000; includeSubDomains"
+        )
+    return response
+
 
 PROJECT_LIST_CACHE_TTL_SECONDS = 12.0
 PROJECT_PERF_WINDOW_SIZE = 300
@@ -300,10 +331,21 @@ ABOUT_CONTENT_DEFAULT = {
     ],
 }
 
+
 # CORS 설정
+def parse_allowed_origins(raw: str) -> list[str]:
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return origins or ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+
+ALLOWED_ORIGINS = parse_allowed_origins(
+    os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -373,6 +415,7 @@ DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS = 30
 ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
 SYSTEM_ADMIN_USER_ID = "11111111-1111-1111-1111-111111111111"
 ADMIN_ALLOWED_ROLES = {"admin", "super_admin"}
+SUPER_ADMIN_BOOTSTRAP_EMAIL = "topyeson@gmail.com"
 _admin_log_cleanup_task: Optional[asyncio.Task[None]] = None
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -383,12 +426,28 @@ GOOGLE_REDIRECT_URI = os.getenv(
 GOOGLE_FRONTEND_REDIRECT_URI = os.getenv(
     "GOOGLE_FRONTEND_REDIRECT_URI", "http://localhost:5173"
 )
+ENFORCE_HTTPS = os.getenv("ENFORCE_HTTPS", "false").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+LOGIN_IP_LIMIT_PER_MINUTE = 10
+LOGIN_ACCOUNT_LIMIT_PER_HOUR = 20
+REGISTER_IP_LIMIT_PER_HOUR = 5
+_RATE_LIMIT_BUCKETS: dict[str, deque[float]] = {}
+_RATE_LIMIT_LOCK = Lock()
 
 
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: "UserContext"
+
+
+class OAuthCodeExchangeRequest(BaseModel):
+    oauth_code: str
 
 
 class UserContext(TypedDict):
@@ -399,6 +458,18 @@ class UserContext(TypedDict):
     status: str
     avatar_url: str | None
     bio: str | None
+
+
+def build_user_context(user: Mapping[str, object]) -> UserContext:
+    return {
+        "id": str(user["id"]),
+        "email": str(user["email"]),
+        "nickname": str(user["nickname"]),
+        "role": str(user["role"]),
+        "status": str(user.get("status", "pending")),
+        "avatar_url": cast(Optional[str], user.get("avatar_url")),
+        "bio": cast(Optional[str], user.get("bio")),
+    }
 
 
 class _ReadableResponse(Protocol):
@@ -460,6 +531,11 @@ class AdminActionReasonRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class AdminUserRoleUpdateRequest(BaseModel):
+    role: Literal["user", "admin"]
+    reason: Optional[str] = None
+
+
 class AboutValueItem(BaseModel):
     emoji: str
     title: str
@@ -518,6 +594,23 @@ def validate_enforcement_target(
             status_code=403,
             detail="슈퍼 관리자 계정에는 적용할 수 없습니다",
         )
+
+
+def ensure_bootstrap_super_admin(user: dict[str, object]) -> dict[str, object]:
+    email_raw = user.get("email")
+    email = email_raw.strip().lower() if isinstance(email_raw, str) else ""
+    if email != SUPER_ADMIN_BOOTSTRAP_EMAIL:
+        return user
+
+    role = user.get("role")
+    status = user.get("status")
+    if role == "super_admin" and status == "active":
+        return user
+
+    upgraded = bootstrap_super_admin_user(email)
+    if upgraded:
+        return cast(dict[str, object], upgraded)
+    return user
 
 
 def get_effective_oauth_settings() -> dict[str, object]:
@@ -648,6 +741,36 @@ def get_blocked_user_message(user_status: str) -> str:
     if user_status == "deleted":
         return "삭제된 계정입니다"
     return "활성화되지 않은 계정입니다"
+
+
+def _extract_client_ip(request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if forwarded_for:
+        return forwarded_for
+
+    client = getattr(request, "client", None)
+    client_host = getattr(client, "host", "") if client else ""
+    return client_host or "unknown"
+
+
+def enforce_rate_limit(
+    bucket: str,
+    key: str,
+    *,
+    limit: int,
+    window_seconds: float,
+    detail: str,
+) -> None:
+    now = time.monotonic()
+    bucket_key = f"{bucket}:{key}"
+
+    with _RATE_LIMIT_LOCK:
+        samples = _RATE_LIMIT_BUCKETS.setdefault(bucket_key, deque())
+        while samples and now - samples[0] >= window_seconds:
+            samples.popleft()
+        if len(samples) >= limit:
+            raise HTTPException(status_code=429, detail=detail)
+        samples.append(now)
 
 
 def normalize_filter_tabs(
@@ -1071,8 +1194,10 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     user = get_user_by_id(user_id)
     if not user:
         raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    user = ensure_bootstrap_super_admin(user)
 
-    user_status = user.get("status") or "active"
+    status_raw = user.get("status")
+    user_status = status_raw if isinstance(status_raw, str) and status_raw else "active"
     if user_status != "active":
         raise HTTPException(
             status_code=403, detail=get_blocked_user_message(user_status)
@@ -1093,12 +1218,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
     return {
         "id": str(user["id"]),
-        "email": user["email"],
-        "nickname": user["nickname"],
-        "role": user["role"],
+        "email": str(user["email"]),
+        "nickname": str(user["nickname"]),
+        "role": str(user["role"]),
         "status": user_status,
-        "avatar_url": user.get("avatar_url"),
-        "bio": user.get("bio"),
+        "avatar_url": cast(Optional[str], user.get("avatar_url")),
+        "bio": cast(Optional[str], user.get("bio")),
     }
 
 
@@ -1309,6 +1434,53 @@ def list_admin_users(
         if user.get("deleted_by"):
             user["deleted_by"] = str(user["deleted_by"])
     return {"items": users, "next_cursor": None}
+
+
+@app.patch("/api/admin/users/{user_id}/role")
+def update_admin_user_role(
+    user_id: str,
+    payload: AdminUserRoleUpdateRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    if current_user["id"] == user_id:
+        raise HTTPException(
+            status_code=400, detail="본인 계정 권한은 변경할 수 없습니다"
+        )
+
+    target_user = get_user_by_id(user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    target_role = target_user.get("role")
+    if target_role == "super_admin":
+        raise HTTPException(
+            status_code=403, detail="슈퍼 관리자 권한은 변경할 수 없습니다"
+        )
+
+    if target_role == payload.role:
+        target_user["id"] = str(target_user["id"])
+        return target_user
+
+    updated_user = set_user_role(user_id=user_id, role=payload.role)
+    if not updated_user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    change_reason = (payload.reason or "").strip()
+    from_role = str(target_role) if target_role is not None else "unknown"
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="user_role_updated",
+        target_type="user",
+        target_id=user_id,
+        reason=change_reason or f"role:{from_role}->{payload.role}",
+    )
+
+    updated_user["id"] = str(updated_user["id"])
+    if updated_user.get("suspended_by"):
+        updated_user["suspended_by"] = str(updated_user["suspended_by"])
+    if updated_user.get("deleted_by"):
+        updated_user["deleted_by"] = str(updated_user["deleted_by"])
+    return updated_user
 
 
 @app.get("/api/admin/projects")
@@ -1887,7 +2059,7 @@ def google_auth_callback(code: str, state: str):
 
     token_payload: dict[str, object] = {}
     try:
-        token_request = Request(
+        token_request = UrlRequest(
             "https://oauth2.googleapis.com/token",
             data=token_request_body,
             headers={"Content-Type": "application/x-www-form-urlencoded"},
@@ -1912,7 +2084,7 @@ def google_auth_callback(code: str, state: str):
 
     profile_payload: dict[str, object] = {}
     try:
-        profile_request = Request(
+        profile_request = UrlRequest(
             f"https://oauth2.googleapis.com/tokeninfo?id_token={quote(id_token)}",
             method="GET",
         )
@@ -1957,6 +2129,7 @@ def google_auth_callback(code: str, state: str):
         raise HTTPException(
             status_code=500, detail="Google 로그인 계정 생성에 실패했습니다"
         )
+    user = ensure_bootstrap_super_admin(user)
 
     frontend_base = str(oauth_settings["google_frontend_redirect_uri"]).rstrip("/")
     user_status = user.get("status") or "active"
@@ -1966,34 +2139,94 @@ def google_auth_callback(code: str, state: str):
             status_code=302,
         )
 
+    exchange_code = create_access_token(
+        data={
+            "type": "google_oauth_code",
+            "sub": str(user["id"]),
+            "email": str(user["email"]),
+            "nonce": secrets.token_hex(10),
+        },
+        expires_delta=timedelta(seconds=120),
+    )
+    create_oauth_state_token(exchange_code, ttl_seconds=120)
+    cleanup_oauth_state_tokens()
+    return RedirectResponse(
+        url=f"{frontend_base}/?oauth_code={quote(exchange_code)}",
+        status_code=302,
+    )
+
+
+@app.post("/api/auth/google/exchange", response_model=TokenResponse)
+def exchange_google_oauth_code(payload: OAuthCodeExchangeRequest):
+    oauth_code = payload.oauth_code.strip()
+    if not oauth_code:
+        raise HTTPException(status_code=400, detail="oauth_code가 필요합니다")
+
+    if not consume_oauth_state_token(oauth_code):
+        raise HTTPException(
+            status_code=400,
+            detail="만료되었거나 이미 사용된 OAuth 코드입니다",
+        )
+    cleanup_oauth_state_tokens()
+
+    decoded = decode_token(oauth_code)
+    if not decoded or decoded.get("type") != "google_oauth_code":
+        raise HTTPException(status_code=400, detail="유효하지 않은 OAuth 코드입니다")
+
+    user_id = decoded.get("sub")
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(
+            status_code=400, detail="OAuth 코드 사용자 정보가 올바르지 않습니다"
+        )
+
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+
+    user = ensure_bootstrap_super_admin(cast(dict[str, object], user))
+    status_raw = user.get("status")
+    user_status = status_raw if isinstance(status_raw, str) and status_raw else "active"
+    if user_status != "active":
+        raise HTTPException(
+            status_code=403, detail=get_blocked_user_message(user_status)
+        )
+
     token_version = user.get("token_version")
     token_version_value = token_version if isinstance(token_version, int) else 0
     access_token = create_access_token(
         data={
             "sub": str(user["id"]),
-            "email": user["email"],
+            "email": str(user["email"]),
             "sv": token_version_value,
         }
     )
-    return RedirectResponse(
-        url=f"{frontend_base}/?oauth_token={quote(access_token)}",
-        status_code=302,
-    )
+
+    return TokenResponse(access_token=access_token, user=build_user_context(user))
 
 
 @app.post("/api/auth/register", response_model=TokenResponse)
-def register(request: RegisterRequest):
+def register(payload: RegisterRequest, request: Request):
     """회원가입"""
+    client_ip = _extract_client_ip(request)
+    enforce_rate_limit(
+        "register_ip",
+        client_ip,
+        limit=REGISTER_IP_LIMIT_PER_HOUR,
+        window_seconds=60.0 * 60.0,
+        detail="회원가입 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+
     # 이메일 중복 확인
-    existing = get_user_by_email(request.email)
+    existing = get_user_by_email(payload.email)
     if existing:
         raise HTTPException(status_code=400, detail="이미 사용 중인 이메일입니다")
 
     # 사용자 생성
-    password_hash = get_password_hash(request.password)
-    user = create_user(request.email, request.nickname, password_hash, status="pending")
+    password_hash = get_password_hash(payload.password)
+    user = create_user(payload.email, payload.nickname, password_hash, status="pending")
     if not user:
         raise HTTPException(status_code=500, detail="회원가입 처리에 실패했습니다")
+    user = ensure_bootstrap_super_admin(user)
 
     # 토큰 생성
     token_version = user.get("token_version")
@@ -2008,40 +2241,53 @@ def register(request: RegisterRequest):
 
     return TokenResponse(
         access_token=access_token,
-        user={
-            "id": str(user["id"]),
-            "email": user["email"],
-            "nickname": user["nickname"],
-            "role": user["role"],
-            "status": user.get("status", "pending"),
-            "avatar_url": user.get("avatar_url"),
-            "bio": user.get("bio"),
-        },
+        user=build_user_context(user),
     )
 
 
 @app.post("/api/auth/login", response_model=TokenResponse)
-def login(request: LoginRequest):
+def login(payload: LoginRequest, request: Request):
     """로그인"""
-    user = get_user_by_email(request.email)
+    client_ip = _extract_client_ip(request)
+    normalized_email = payload.email.strip().lower()
+    enforce_rate_limit(
+        "login_ip",
+        client_ip,
+        limit=LOGIN_IP_LIMIT_PER_MINUTE,
+        window_seconds=60.0,
+        detail="로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+    enforce_rate_limit(
+        "login_account",
+        normalized_email,
+        limit=LOGIN_ACCOUNT_LIMIT_PER_HOUR,
+        window_seconds=60.0 * 60.0,
+        detail="해당 계정의 로그인 시도가 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+
+    user = get_user_by_email(payload.email)
     if not user:
         raise HTTPException(
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
         )
 
-    password_hash = user.get("password_hash")
+    user = ensure_bootstrap_super_admin(user)
+
+    password_hash_raw = user.get("password_hash")
+    password_hash = password_hash_raw if isinstance(password_hash_raw, str) else None
     if not password_hash and (user.get("provider") == "google"):
         raise HTTPException(
             status_code=400,
             detail="Google로 가입한 계정입니다. 비밀번호 대신 Google 로그인 버튼을 사용해 주세요",
         )
 
-    if not password_hash or not verify_password(request.password, password_hash):
+    if not password_hash or not verify_password(payload.password, password_hash):
         raise HTTPException(
             status_code=401, detail="이메일 또는 비밀번호가 올바르지 않습니다"
         )
 
-    user_status = user.get("status") or "active"
+    status_raw = user.get("status")
+    user_status = status_raw if isinstance(status_raw, str) and status_raw else "active"
     if user_status != "active":
         raise HTTPException(
             status_code=403, detail=get_blocked_user_message(user_status)
@@ -2060,15 +2306,7 @@ def login(request: LoginRequest):
 
     return TokenResponse(
         access_token=access_token,
-        user={
-            "id": str(user["id"]),
-            "email": user["email"],
-            "nickname": user["nickname"],
-            "role": user["role"],
-            "status": user_status,
-            "avatar_url": user.get("avatar_url"),
-            "bio": user.get("bio"),
-        },
+        user=build_user_context(user),
     )
 
 
