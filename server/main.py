@@ -3,7 +3,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Literal, Optional, Mapping, Protocol, Sequence, TypedDict, cast
@@ -15,6 +15,7 @@ import time
 import os
 import json
 import secrets
+from xml.sax.saxutils import escape as xml_escape
 from urllib.parse import urlparse, urlencode, quote
 from urllib.request import Request as UrlRequest, urlopen
 from threading import Lock
@@ -432,6 +433,7 @@ ENFORCE_HTTPS = os.getenv("ENFORCE_HTTPS", "false").strip().lower() in {
     "yes",
     "on",
 }
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 LOGIN_IP_LIMIT_PER_MINUTE = 10
 LOGIN_ACCOUNT_LIMIT_PER_HOUR = 20
@@ -1066,6 +1068,63 @@ async def shutdown_event() -> None:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def get_public_base_url(request: Request) -> str:
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL
+
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    forwarded_host = request.headers.get("x-forwarded-host", "").split(",")[0].strip()
+    scheme = forwarded_proto or str(
+        request.scope.get("scheme") or request.url.scheme or "http"
+    )
+    host = forwarded_host or request.headers.get("host") or request.url.netloc
+    return f"{scheme}://{host}".rstrip("/")
+
+
+@app.get("/sitemap.xml", include_in_schema=False)
+def sitemap_xml(request: Request) -> Response:
+    base_url = get_public_base_url(request)
+    static_urls: list[tuple[str, str, str]] = [
+        ("/", "daily", "1.0"),
+        ("/explore", "daily", "0.9"),
+        ("/about", "monthly", "0.7"),
+        ("/challenges", "weekly", "0.8"),
+    ]
+    projects = get_projects(sort="latest")
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+    ]
+
+    for path, changefreq, priority in static_urls:
+        lines.extend(
+            [
+                "  <url>",
+                f"    <loc>{xml_escape(f'{base_url}{path}')}</loc>",
+                f"    <changefreq>{changefreq}</changefreq>",
+                f"    <priority>{priority}</priority>",
+                "  </url>",
+            ]
+        )
+
+    for project in projects:
+        project_id = str(project["id"])
+        project_url = f"{base_url}/project/{quote(project_id, safe='')}"
+        lines.extend(
+            [
+                "  <url>",
+                f"    <loc>{xml_escape(project_url)}</loc>",
+                "    <changefreq>weekly</changefreq>",
+                "    <priority>0.8</priority>",
+                "  </url>",
+            ]
+        )
+
+    lines.append("</urlset>")
+    return Response(content="\n".join(lines), media_type="application/xml")
 
 
 @app.get("/api/content/about")
