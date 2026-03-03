@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { TopNav } from "@/components/TopNav"
 import { api, type Project } from "@/lib/api"
+import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
@@ -64,7 +65,7 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
       try {
         const project = await api.getProject(editingProjectId, { force: true })
         if (cancelled) return
-        if (!user || (user.role !== "admin" && user.id !== project.author_id)) {
+        if (!user || (!isAdminRole(user.role) && user.id !== project.author_id)) {
           alert("수정 권한이 없습니다.")
           onNavigate?.("detail")
           return

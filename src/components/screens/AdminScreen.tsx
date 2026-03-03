@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from "react"
+import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query"
 
 import { Button } from "@/components/ui/button"
-import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs } from "@/components/ui/tabs"
 import { TopNav } from "@/components/TopNav"
+import { AdminStatsCards } from "@/components/screens/admin/AdminStatsCards"
+import { AdminSidebarNav } from "@/components/screens/admin/AdminSidebarNav"
+import { AdminReportsTab } from "@/components/screens/admin/AdminReportsTab"
+import { AdminUsersTab } from "@/components/screens/admin/AdminUsersTab"
+import { AdminContentTab } from "@/components/screens/admin/AdminContentTab"
+import { AdminPagesTab } from "@/components/screens/admin/AdminPagesTab"
+import { AdminPoliciesTab } from "@/components/screens/admin/AdminPoliciesTab"
+import { AdminActionsTab } from "@/components/screens/admin/AdminActionsTab"
 import {
   api,
   type AdminActionLog,
@@ -35,6 +42,36 @@ type ProjectStatus = "all" | "published" | "hidden" | "deleted"
 type ActionLogFilter = "all" | "project" | "report" | "user" | "moderation_settings"
 type ActionLogPeriod = 0 | 7 | 30 | 90
 type AdminTabKey = "reports" | "users" | "content" | "pages" | "policies" | "actions"
+
+const ADMIN_QUERY_KEYS = {
+  reportsBase: ["admin-reports"] as const,
+  reports: (status: ReportStatus, page: number, pageSize: number) =>
+    ["admin-reports", status, page, pageSize] as const,
+  users: ["admin-users"] as const,
+  projects: ["admin-projects"] as const,
+  pages: ["admin-about-content"] as const,
+  policies: ["admin-policies"] as const,
+  actions: (limit: number) => ["admin-actions", limit] as const,
+  oauthSettings: ["admin-oauth-settings"] as const,
+  oauthHealth: ["admin-oauth-health"] as const,
+}
+
+function getAdminTabQueryKey(tab: AdminTabKey): QueryKey {
+  switch (tab) {
+    case "reports":
+      return ADMIN_QUERY_KEYS.reportsBase
+    case "users":
+      return ADMIN_QUERY_KEYS.users
+    case "content":
+      return ADMIN_QUERY_KEYS.projects
+    case "pages":
+      return ADMIN_QUERY_KEYS.pages
+    case "policies":
+      return ADMIN_QUERY_KEYS.policies
+    case "actions":
+      return ADMIN_QUERY_KEYS.actions(100)
+  }
+}
 
 const ABOUT_CONTENT_FALLBACK: AboutContent = {
   hero_title: "완성도보다 바이브.",
@@ -290,22 +327,15 @@ function getUserApprovalState(user: AdminManagedUser): {
 
 export function AdminScreen({ onNavigate }: ScreenProps) {
   const { logout, user: authUser } = useAuth()
+  const queryClient = useQueryClient()
 
-  const [reports, setReports] = useState<AdminReportRow[]>([])
   const [actionLogs, setActionLogs] = useState<AdminActionLog[]>([])
-  const [users, setUsers] = useState<AdminManagedUser[]>([])
-  const [projects, setProjects] = useState<AdminManagedProject[]>([])
-  const [loadingReports, setLoadingReports] = useState(true)
   const [loadingLogs, setLoadingLogs] = useState(true)
-  const [loadingUsers, setLoadingUsers] = useState(true)
-  const [loadingProjects, setLoadingProjects] = useState(true)
   const [loadingPolicies, setLoadingPolicies] = useState(true)
   const [savingPolicies, setSavingPolicies] = useState(false)
   const [loadingOAuthSettings, setLoadingOAuthSettings] = useState(true)
   const [savingOAuthSettings, setSavingOAuthSettings] = useState(false)
   const [activeStatus, setActiveStatus] = useState<ReportStatus>("all")
-  const [reportPage, setReportPage] = useState(0)
-  const [reportTotal, setReportTotal] = useState(0)
   const REPORT_PAGE_SIZE = 50
   const [activeTab, setActiveTab] = useState<AdminTabKey>("reports")
   const [searchQuery, setSearchQuery] = useState("")
@@ -355,48 +385,69 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const [aboutTeamInput, setAboutTeamInput] = useState("")
   const [aboutFaqInput, setAboutFaqInput] = useState("")
   const prefetchedTabsRef = useRef<Set<AdminTabKey>>(new Set())
+  const reportsQueryKey = useMemo(
+    () => ADMIN_QUERY_KEYS.reports(activeStatus, 0, REPORT_PAGE_SIZE),
+    [activeStatus],
+  )
 
-  const loadReports = useCallback(async (page: number = 0, force: boolean = false) => {
-    const status = activeStatus === "all" ? undefined : activeStatus
-    const offset = page * REPORT_PAGE_SIZE
-    const hasCache = !force && api.hasAdminTabCache("reports", {
-      status: status ?? "all",
-      limit: REPORT_PAGE_SIZE,
-      offset,
-    })
-    if (!hasCache) {
-      setLoadingReports(true)
-    }
-
-    const applyReports = (data: { items: Array<{ id: string; target_type: string; target_id: string; reason: string; status: string; reporter_id?: string; created_at: string }>; total?: number }) => {
+  const reportsQuery = useQuery({
+    queryKey: reportsQueryKey,
+    queryFn: async (): Promise<{ items: AdminReportRow[]; total: number }> => {
+      const status = activeStatus === "all" ? undefined : activeStatus
+      const offset = 0
+      const data = await api.getReports(status, REPORT_PAGE_SIZE, offset)
       const items = Array.isArray(data.items) ? data.items : []
-      const mapped: AdminReportRow[] = items.map((item) => ({
-        id: item.id,
-        targetType: item.target_type,
-        targetContent: item.target_id,
-        reason: item.reason,
-        status: item.status,
-        reporter: item.reporter_id || "unknown",
-        createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
-      }))
-      setReports(mapped)
-      setReportTotal(data.total || 0)
-      setReportPage(page)
-    }
+      return {
+        items: items.map((item) => ({
+          id: item.id,
+          targetType: item.target_type,
+          targetContent: item.target_id,
+          reason: item.reason,
+          status: item.status,
+          reporter: item.reporter_id || "unknown",
+          createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
+        })),
+        total: data.total || 0,
+      }
+    },
+    enabled: activeTab === "reports",
+    placeholderData: (previous) => previous,
+  })
 
-    try {
-      const data = await api.getReports(status, REPORT_PAGE_SIZE, offset, {
-        force,
-        onRevalidate: applyReports,
-      })
-      applyReports(data)
-    } catch (error) {
-      console.error("Failed to fetch reports:", error)
-      setReports([])
-    } finally {
-      setLoadingReports(false)
-    }
-  }, [activeStatus])
+  const reports = useMemo(() => reportsQuery.data?.items ?? [], [reportsQuery.data])
+  const loadingReports = reportsQuery.isPending
+
+  const usersQuery = useQuery({
+    queryKey: ADMIN_QUERY_KEYS.users,
+    queryFn: async (): Promise<AdminManagedUser[]> => {
+      const data = await api.getAdminUsers(200)
+      return Array.isArray(data.items) ? data.items : []
+    },
+    enabled: activeTab === "users",
+    placeholderData: (previous) => previous,
+  })
+
+  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data])
+  const loadingUsers = usersQuery.isPending
+
+  const projectsQuery = useQuery({
+    queryKey: ADMIN_QUERY_KEYS.projects,
+    queryFn: async (): Promise<AdminManagedProject[]> => {
+      const data = await api.getAdminProjects(undefined, 300)
+      return Array.isArray(data.items) ? data.items : []
+    },
+    enabled: activeTab === "content",
+    placeholderData: (previous) => previous,
+  })
+
+  const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data])
+  const loadingProjects = projectsQuery.isPending
+
+  const updateReportMutation = useMutation({
+    mutationFn: async ({ reportId, status, reason }: { reportId: string; status: Exclude<ReportStatus, "all">; reason?: string }) => {
+      await api.updateReport(reportId, status, reason)
+    },
+  })
 
   const loadActionLogs = async (force: boolean = false) => {
     const hasCache = !force && api.hasAdminTabCache("actions", { limit: 100 })
@@ -416,48 +467,6 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       setActionLogs([])
     } finally {
       setLoadingLogs(false)
-    }
-  }
-
-  const loadUsers = async (force: boolean = false) => {
-    const hasCache = !force && api.hasAdminTabCache("users", { limit: 200 })
-    if (!hasCache) {
-      setLoadingUsers(true)
-    }
-
-    const applyUsers = (data: { items: AdminManagedUser[] }) => {
-      setUsers(Array.isArray(data.items) ? data.items : [])
-    }
-
-    try {
-      const data = await api.getAdminUsers(200, { force, onRevalidate: applyUsers })
-      applyUsers(data)
-    } catch (error) {
-      console.error("Failed to fetch users:", error)
-      setUsers([])
-    } finally {
-      setLoadingUsers(false)
-    }
-  }
-
-  const loadProjects = async (force: boolean = false) => {
-    const hasCache = !force && api.hasAdminTabCache("content", { status: "all", limit: 300 })
-    if (!hasCache) {
-      setLoadingProjects(true)
-    }
-
-    const applyProjects = (data: { items: AdminManagedProject[] }) => {
-      setProjects(Array.isArray(data.items) ? data.items : [])
-    }
-
-    try {
-      const data = await api.getAdminProjects(undefined, 300, { force, onRevalidate: applyProjects })
-      applyProjects(data)
-    } catch (error) {
-      console.error("Failed to fetch projects:", error)
-      setProjects([])
-    } finally {
-      setLoadingProjects(false)
     }
   }
 
@@ -600,16 +609,21 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
+  const prefetchAdminTab = useCallback((tab: AdminTabKey) => {
+    if (prefetchedTabsRef.current.has(tab)) {
+      return
+    }
+    prefetchedTabsRef.current.add(tab)
+    void api.prefetchAdminTabData(tab)
+  }, [])
+
   useEffect(() => {
     switch (activeTab) {
       case "reports":
-        loadReports(0)
         break
       case "users":
-        loadUsers()
         break
       case "content":
-        loadProjects()
         break
       case "pages":
         loadAboutContent()
@@ -623,30 +637,23 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         loadPolicies()
         break
     }
-  }, [activeTab, loadReports])
-
-  useEffect(() => {
-    if (activeTab === "reports") {
-      loadReports(0)
-    }
-  }, [activeStatus, activeTab, loadReports])
+  }, [activeTab])
 
   useEffect(() => {
     const nextTabs: AdminTabKey[] = ["users", "content", "actions", "policies", "pages"]
     const prefetchTimer = window.setTimeout(() => {
       nextTabs.forEach((tab) => {
-        if (tab === activeTab || prefetchedTabsRef.current.has(tab)) {
+        if (tab === activeTab) {
           return
         }
-        prefetchedTabsRef.current.add(tab)
-        void api.prefetchAdminTabData(tab)
+        prefetchAdminTab(tab)
       })
     }, 300)
 
     return () => {
       window.clearTimeout(prefetchTimer)
     }
-  }, [activeTab])
+  }, [activeTab, prefetchAdminTab])
 
   useEffect(() => {
     setSelectedProjectIds((prev) => prev.filter((id) => projects.some((project) => project.id === id)))
@@ -762,9 +769,6 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   }, [filteredActionLogs])
 
   const isProjectActionReasonValid = projectActionReason.trim().length > 0
-  const areAllFilteredProjectsSelected =
-    filteredProjects.length > 0
-    && filteredProjects.every((project) => selectedProjectIds.includes(project.id))
 
   const filteredBaselineKeywordCategories = useMemo(() => {
     const query = policyPreviewQuery.trim().toLowerCase()
@@ -913,30 +917,41 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const handleUpdateReport = async (
     reportId: string,
     status: Exclude<ReportStatus, "all">,
+    reason?: string,
   ) => {
-    const reason = window.prompt("처리 사유를 입력하세요 (선택)", "")
     try {
-      await api.updateReport(reportId, status, reason || undefined)
-      await Promise.all([loadReports(reportPage, true), loadActionLogs(true)])
+      await updateReportMutation.mutateAsync({ reportId, status, reason: reason || undefined })
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ADMIN_QUERY_KEYS.reportsBase }),
+        loadActionLogs(true),
+      ])
     } catch (error) {
       console.error("Failed to update report:", error)
     }
   }
 
-  const handleLimitUser = async (userId: string) => {
-    const hoursText = window.prompt("제한 시간을 입력하세요 (시간)", "24")
-    if (!hoursText) return
+  const refreshUsersAndLogs = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ADMIN_QUERY_KEYS.users }),
+      loadActionLogs(true),
+    ])
+  }
 
-    const hours = Number(hoursText)
+  const refreshProjectsAndLogs = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ADMIN_QUERY_KEYS.projects }),
+      loadActionLogs(true),
+    ])
+  }
+
+  const handleLimitUser = async (userId: string, hours: number, reason?: string) => {
     if (!Number.isFinite(hours) || hours <= 0) {
       window.alert("유효한 시간(1 이상)을 입력해주세요")
       return
     }
-
-    const reason = window.prompt("제한 사유를 입력하세요", "운영 정책 위반")
     try {
       await api.limitUser(userId, hours, reason || undefined)
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to limit user:", error)
     }
@@ -945,21 +960,20 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const handleUnlimitUser = async (userId: string) => {
     try {
       await api.unlimitUser(userId)
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to unlimit user:", error)
     }
   }
 
-  const handleSuspendUser = async (userId: string) => {
-    const reason = window.prompt("정지 사유를 입력하세요", "보안 정책 위반")
+  const handleSuspendUser = async (userId: string, reason: string) => {
     if (!reason || !reason.trim()) {
       return
     }
 
     try {
       await api.suspendUser(userId, reason.trim())
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to suspend user:", error)
     }
@@ -968,41 +982,33 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const handleUnsuspendUser = async (userId: string) => {
     try {
       await api.unsuspendUser(userId)
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to unsuspend user:", error)
     }
   }
 
-  const handleRevokeUserTokens = async (userId: string) => {
-    const reason = window.prompt("세션 무효화 사유를 입력하세요", "보안 점검")
+  const handleRevokeUserTokens = async (userId: string, reason?: string) => {
     try {
       await api.revokeUserTokens(userId, reason || undefined)
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to revoke user tokens:", error)
     }
   }
 
-  const handleScheduleUserDelete = async (userId: string) => {
-    const daysText = window.prompt("삭제 예약 기간(일)을 입력하세요", "30")
-    if (!daysText) {
-      return
-    }
-    const days = Number(daysText)
+  const handleScheduleUserDelete = async (userId: string, days: number, reason: string) => {
     if (!Number.isFinite(days) || days < 1) {
       window.alert("유효한 기간(1일 이상)을 입력해주세요")
       return
     }
-
-    const reason = window.prompt("삭제 예약 사유를 입력하세요", "보안 위협 계정 조사")
     if (!reason || !reason.trim()) {
       return
     }
 
     try {
       await api.scheduleUserDelete(userId, days, reason.trim())
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to schedule user deletion:", error)
     }
@@ -1011,24 +1017,20 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const handleCancelUserDeleteSchedule = async (userId: string) => {
     try {
       await api.cancelUserDeleteSchedule(userId)
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to cancel user deletion schedule:", error)
     }
   }
 
-  const handleDeleteUserNow = async (userId: string) => {
-    const reason = window.prompt("즉시 삭제 사유를 입력하세요", "중대한 보안 위협")
+  const handleDeleteUserNow = async (userId: string, reason: string) => {
     if (!reason || !reason.trim()) {
-      return
-    }
-    if (!window.confirm("정말로 즉시 삭제 처리하시겠습니까? 이 작업은 되돌릴 수 없습니다.")) {
       return
     }
 
     try {
       await api.deleteUserNow(userId, reason.trim())
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to delete user now:", error)
     }
@@ -1037,21 +1039,20 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
   const handleApproveUser = async (userId: string) => {
     try {
       await api.approveUser(userId)
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to approve user:", error)
     }
   }
 
-  const handleRejectUser = async (userId: string) => {
-    const reason = window.prompt("반려 사유를 입력하세요", "가입 정보 확인 필요")
+  const handleRejectUser = async (userId: string, reason: string) => {
     if (!reason || !reason.trim()) {
       return
     }
 
     try {
       await api.rejectUser(userId, reason.trim())
-      await Promise.all([loadUsers(true), loadActionLogs(true)])
+      await refreshUsersAndLogs()
     } catch (error) {
       console.error("Failed to reject user:", error)
     }
@@ -1063,21 +1064,6 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         ? prev.filter((id) => id !== projectId)
         : [...prev, projectId]
     )
-  }
-
-  const toggleSelectAllFilteredProjects = () => {
-    if (areAllFilteredProjectsSelected) {
-      setSelectedProjectIds((prev) =>
-        prev.filter((id) => !filteredProjects.some((project) => project.id === id))
-      )
-      return
-    }
-
-    setSelectedProjectIds((prev) => {
-      const merged = new Set(prev)
-      filteredProjects.forEach((project) => merged.add(project.id))
-      return Array.from(merged)
-    })
   }
 
   const startEditingProject = (project: AdminManagedProject) => {
@@ -1129,7 +1115,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         tags: editingProjectTags,
         reason,
       })
-      await Promise.all([loadProjects(true), loadActionLogs(true)])
+      await refreshProjectsAndLogs()
       cancelEditingProject()
     } catch (error) {
       console.error("Failed to update project:", error)
@@ -1146,11 +1132,6 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       return
     }
 
-    if (action === "delete") {
-      const confirmed = window.confirm("정말 삭제(소프트 삭제) 처리하시겠습니까?")
-      if (!confirmed) return
-    }
-
     try {
       if (action === "hide") {
         await api.hideAdminProject(projectId, reason)
@@ -1159,7 +1140,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
       } else {
         await api.deleteAdminProject(projectId, reason)
       }
-      await Promise.all([loadProjects(true), loadActionLogs(true)])
+      await refreshProjectsAndLogs()
       setSelectedProjectIds((prev) => prev.filter((id) => id !== projectId))
     } catch (error) {
       console.error(`Failed to ${action} project:`, error)
@@ -1186,7 +1167,7 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
             : api.restoreAdminProject(projectId, reason)
         )
       )
-      await Promise.all([loadProjects(true), loadActionLogs(true)])
+      await refreshProjectsAndLogs()
       setSelectedProjectIds([])
     } catch (error) {
       console.error(`Failed to bulk-${action} projects:`, error)
@@ -1323,35 +1304,31 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
     }
   }
 
-  const handleManualRefresh = async () => {
-    switch (activeTab) {
-      case "reports":
-        await loadReports(reportPage, true)
-        break
-      case "users":
-        await loadUsers(true)
-        break
-      case "content":
-        await loadProjects(true)
-        break
-      case "pages":
-        await loadAboutContent(true)
-        break
-      case "policies":
-        await Promise.all([loadPolicies(true), loadOAuthSettings()])
-        break
-      case "actions":
-        await loadActionLogs(true)
-        break
+  const invalidateAdminTab = async (tab: AdminTabKey) => {
+    if (tab === "pages") {
+      await loadAboutContent(true)
+      return
     }
+
+    if (tab === "policies") {
+      await Promise.all([loadPolicies(true), loadOAuthSettings()])
+      return
+    }
+
+    if (tab === "actions") {
+      await loadActionLogs(true)
+      return
+    }
+
+    await queryClient.invalidateQueries({ queryKey: getAdminTabQueryKey(tab) })
+  }
+
+  const handleManualRefresh = async () => {
+    await invalidateAdminTab(activeTab)
   }
 
   const handleTabHoverPrefetch = (tab: AdminTabKey) => {
-    if (prefetchedTabsRef.current.has(tab)) {
-      return
-    }
-    prefetchedTabsRef.current.add(tab)
-    void api.prefetchAdminTabData(tab)
+    prefetchAdminTab(tab)
   }
 
   return (
@@ -1367,1022 +1344,200 @@ export function AdminScreen({ onNavigate }: ScreenProps) {
         }
       />
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          {stats.map((stat) => (
-            <Card key={stat.label} className="bg-[#161F42] border-0">
-              <CardContent className="p-4 text-center">
-                <div className={`text-3xl font-bold ${stat.color}`}>{stat.value}</div>
-                <div className="text-sm text-[#B8C3E6]">{stat.label}</div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+      <main className="mx-auto w-full max-w-[1400px] px-4 py-6 lg:px-6">
+        <AdminStatsCards stats={stats} />
 
-        <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as AdminTabKey)}>
-          <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <TabsList className="bg-[#161F42] border-0">
-              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("reports")} value="reports" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📋 신고 큐</TabsTrigger>
-              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("users")} value="users" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">👤 사용자 관리</TabsTrigger>
-              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("content")} value="content" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">🧩 콘텐츠 관리</TabsTrigger>
-              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("pages")} value="pages" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 페이지 관리</TabsTrigger>
-              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("policies")} value="policies" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">⚙️ 정책/룰</TabsTrigger>
-              <TabsTrigger onMouseEnter={() => handleTabHoverPrefetch("actions")} value="actions" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-white">📝 관리자 로그</TabsTrigger>
-            </TabsList>
-            <Button
-              type="button"
-              variant="outline"
-              className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-              onClick={handleManualRefresh}
-            >
-              데이터 새로고침
-            </Button>
-          </div>
+        <Tabs
+          orientation="vertical"
+          value={activeTab}
+          onValueChange={(value) => setActiveTab(value as AdminTabKey)}
+          className="mt-6 grid grid-cols-1 gap-4 md:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]"
+        >
+          <AdminSidebarNav
+            onTabHoverPrefetch={handleTabHoverPrefetch}
+            onManualRefresh={handleManualRefresh}
+          />
 
-          <TabsContent value="reports">
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex gap-2 flex-wrap">
-                {STATUS_TABS.map((tab) => (
-                  <button
-                    key={tab.value}
-                    type="button"
-                    onClick={() => setActiveStatus(tab.value)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                      activeStatus === tab.value
-                        ? "bg-[#FF5D8F] text-white"
-                        : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
-                    }`}
-                  >
-                    {tab.label}
-                  </button>
-                ))}
-              </div>
-              <input
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="사유/대상/신고자 검색"
-                className="w-full md:w-72 bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-              />
-            </div>
+          <section className="min-w-0 rounded-xl border border-[#111936] bg-[#161F42]/60 p-3 md:p-4">
+            <AdminReportsTab
+            statusTabs={STATUS_TABS}
+            activeStatus={activeStatus}
+            setActiveStatus={setActiveStatus}
+            searchQuery={searchQuery}
+            setSearchQuery={setSearchQuery}
+            loadingReports={loadingReports}
+            filteredReports={filteredReports}
+            statusToText={statusToText}
+            handleUpdateReport={handleUpdateReport}
+          />
 
-            <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-0">
-                {loadingReports ? (
-                  <div className="p-6 text-[#B8C3E6]">로딩 중...</div>
-                ) : (
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-[#111936]">
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">
-                          <input
-                            type="checkbox"
-                            checked={areAllFilteredProjectsSelected}
-                            onChange={toggleSelectAllFilteredProjects}
-                          />
-                        </th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">유형</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">내용</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">사유</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">신고자</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">시간</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredReports.map((report) => (
-                        <tr key={report.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
-                          <td className="p-4">
-                            <Badge variant={
-                              report.status === "open"
-                                ? "destructive"
-                                : report.status === "reviewing"
-                                  ? "secondary"
-                                  : report.status === "resolved"
-                                    ? "default"
-                                    : "outline"
-                            }>
-                              {statusToText(report.status)}
-                            </Badge>
-                          </td>
-                          <td className="p-4 text-[#F4F7FF]">{report.targetType}</td>
-                          <td className="p-4 text-[#F4F7FF] max-w-xs truncate">{report.targetContent}</td>
-                          <td className="p-4 text-[#B8C3E6]">{report.reason}</td>
-                          <td className="p-4 text-[#B8C3E6]">{report.reporter}</td>
-                          <td className="p-4 text-[#B8C3E6]">{report.createdAt}</td>
-                          <td className="p-4">
-                            <div className="flex gap-1">
-                              <Button
-                                size="sm"
-                                className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
-                                disabled={report.status === "resolved"}
-                                onClick={() => handleUpdateReport(report.id, "resolved")}
-                              >
-                                처리
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                                onClick={() => handleUpdateReport(report.id, "reviewing")}
-                              >
-                                검토
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                                onClick={() => handleUpdateReport(report.id, "rejected")}
-                              >
-                                거절
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-                {!loadingReports && reportTotal > REPORT_PAGE_SIZE ? (
-                  <div className="flex items-center justify-between border-t border-[#111936] p-4">
-                    <p className="text-xs text-[#B8C3E6]">
-                      총 {reportTotal}건 | 페이지 {reportPage + 1} / {Math.max(1, Math.ceil(reportTotal / REPORT_PAGE_SIZE))}
-                    </p>
-                    <div className="flex gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                        disabled={reportPage === 0}
-                        onClick={() => loadReports(reportPage - 1)}
-                      >
-                        이전
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                        disabled={(reportPage + 1) * REPORT_PAGE_SIZE >= reportTotal}
-                        onClick={() => loadReports(reportPage + 1)}
-                      >
-                        다음
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-              </CardContent>
-            </Card>
-          </TabsContent>
+            <AdminUsersTab
+            loadingUsers={loadingUsers}
+            users={users}
+            authUserRole={authUser?.role}
+            getUserLimitState={getUserLimitState}
+            getUserApprovalState={getUserApprovalState}
+            handleApproveUser={handleApproveUser}
+            handleRejectUser={handleRejectUser}
+            handleLimitUser={handleLimitUser}
+            handleUnlimitUser={handleUnlimitUser}
+            handleSuspendUser={handleSuspendUser}
+            handleUnsuspendUser={handleUnsuspendUser}
+            handleRevokeUserTokens={handleRevokeUserTokens}
+            handleScheduleUserDelete={handleScheduleUserDelete}
+            handleCancelUserDeleteSchedule={handleCancelUserDeleteSchedule}
+            handleDeleteUserNow={handleDeleteUserNow}
+          />
 
-          <TabsContent value="users">
-            <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-0">
-                {loadingUsers ? (
-                  <div className="p-6 text-[#B8C3E6]">사용자 로딩 중...</div>
-                ) : (
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-[#111936]">
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">닉네임</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">이메일</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">권한</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">제한 종료</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {users.map((user) => {
-                        const limitState = getUserLimitState(user)
-                        const approvalState = getUserApprovalState(user)
-                        const canHardDelete = (authUser?.role ?? "") === "super_admin"
-                        return (
-                          <tr key={user.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
-                            <td className="p-4 text-[#F4F7FF]">{user.nickname}</td>
-                            <td className="p-4 text-[#B8C3E6]">{user.email || "-"}</td>
-                            <td className="p-4 text-[#B8C3E6]">{user.role}</td>
-                            <td className="p-4">
-                              <Badge variant={approvalState.tone}>
-                                {approvalState.label}
-                              </Badge>
-                              <p className="text-xs text-[#B8C3E6] mt-2">제재: {limitState.label}</p>
-                            </td>
-                            <td className="p-4 text-[#B8C3E6]">
-                              {user.limited_until ? new Date(user.limited_until).toLocaleString("ko-KR") : "-"}
-                            </td>
-                            <td className="p-4 align-top">
-                              <div className="flex flex-wrap gap-1 max-w-[640px]">
-                                <Button
-                                  size="sm"
-                                  className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || user.status !== "pending"}
-                                  onClick={() => handleApproveUser(user.id)}
-                                >
-                                  승인
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || user.status !== "pending"}
-                                  onClick={() => handleRejectUser(user.id)}
-                                >
-                                  반려
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || limitState.isLimited || user.status !== "active"}
-                                  onClick={() => handleLimitUser(user.id)}
-                                >
-                                  24h 제한
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || !limitState.isLimited}
-                                  onClick={() => handleUnlimitUser(user.id)}
-                                >
-                                  제한 해제
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  className="bg-[#FFB547] hover:bg-[#FFB547]/90 text-[#0B1020] text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || user.status === "suspended" || user.status === "deleted"}
-                                  onClick={() => handleSuspendUser(user.id)}
-                                >
-                                  계정 정지
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-[#FFB547] text-[#FFB547] hover:bg-[#FFB547]/10 text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || user.status !== "suspended"}
-                                  onClick={() => handleUnsuspendUser(user.id)}
-                                >
-                                  정지 해제
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10 text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || user.status === "deleted"}
-                                  onClick={() => handleRevokeUserTokens(user.id)}
-                                >
-                                  세션 무효화
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  className="bg-[#6B8BFF] hover:bg-[#6B8BFF]/90 text-white text-xs whitespace-nowrap"
-                                  disabled={user.role === "admin" || user.status === "pending_delete" || user.status === "deleted"}
-                                  onClick={() => handleScheduleUserDelete(user.id)}
-                                >
-                                  삭제 예약
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-[#6B8BFF] text-[#6B8BFF] hover:bg-[#6B8BFF]/10 text-xs whitespace-nowrap"
-                                  disabled={user.status !== "pending_delete"}
-                                  onClick={() => handleCancelUserDeleteSchedule(user.id)}
-                                >
-                                  예약 취소
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  className="border-[#FF6B6B] text-[#FF6B6B] hover:bg-[#FF6B6B]/10 text-xs whitespace-nowrap"
-                                  disabled={!canHardDelete || user.role === "admin" || user.status === "deleted"}
-                                  onClick={() => handleDeleteUserNow(user.id)}
-                                >
-                                  즉시 삭제
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
+            <AdminContentTab
+            filters={{
+              projectStatusFilter,
+              setProjectStatusFilter,
+              projectSearchQuery,
+              setProjectSearchQuery,
+            }}
+            bulk={{
+              projectActionReason,
+              setProjectActionReason,
+              handleProjectBulkAction,
+              isProjectActionReasonValid,
+              selectedProjectIds,
+            }}
+            editing={{
+              editingProjectId,
+              editingProjectTitle,
+              setEditingProjectTitle,
+              editingProjectSummary,
+              setEditingProjectSummary,
+              editingProjectTagInput,
+              setEditingProjectTagInput,
+              editingProjectTags,
+              editingProjectReason,
+              setEditingProjectReason,
+              handleAddEditingProjectTag,
+              handleRemoveEditingProjectTag,
+              handleSaveProjectEdit,
+              cancelEditingProject,
+            }}
+            loading={{
+              loadingProjects,
+            }}
+            filteredProjects={filteredProjects}
+            toggleProjectSelection={toggleProjectSelection}
+            startEditingProject={startEditingProject}
+            handleProjectSingleAction={handleProjectSingleAction}
+          />
 
-          <TabsContent value="content">
-            <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div className="flex gap-2 flex-wrap">
-                {(["all", "published", "hidden", "deleted"] as const).map((status) => (
-                  <button
-                    key={status}
-                    type="button"
-                    onClick={() => setProjectStatusFilter(status)}
-                    className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                      projectStatusFilter === status
-                        ? "bg-[#FF5D8F] text-white"
-                        : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
-                    }`}
-                  >
-                    {status === "all" ? "전체" : status}
-                  </button>
-                ))}
-              </div>
-              <input
-                value={projectSearchQuery}
-                onChange={(event) => setProjectSearchQuery(event.target.value)}
-                placeholder="제목/요약/작성자/플랫폼 검색"
-                className="w-full md:w-72 bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-              />
-            </div>
+            <AdminPagesTab
+            loading={{
+              loadingAboutContent,
+              savingAboutContent,
+            }}
+            fields={{
+              aboutHeroTitle,
+              setAboutHeroTitle,
+              aboutHeroHighlight,
+              setAboutHeroHighlight,
+              aboutHeroDescription,
+              setAboutHeroDescription,
+              aboutContactEmail,
+              setAboutContactEmail,
+              aboutValuesInput,
+              setAboutValuesInput,
+              aboutTeamInput,
+              setAboutTeamInput,
+              aboutFaqInput,
+              setAboutFaqInput,
+              aboutReason,
+              setAboutReason,
+            }}
+            actions={{
+              handleSaveAboutContent,
+            }}
+          />
 
-            <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-[1fr_auto]">
-              <input
-                value={projectActionReason}
-                onChange={(event) => setProjectActionReason(event.target.value)}
-                placeholder="콘텐츠 작업 사유 (필수)"
-                className="w-full bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-              />
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                  onClick={() => handleProjectBulkAction("hide")}
-                  disabled={!isProjectActionReasonValid || selectedProjectIds.length === 0}
-                >
-                  선택 숨김
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                  onClick={() => handleProjectBulkAction("restore")}
-                  disabled={!isProjectActionReasonValid || selectedProjectIds.length === 0}
-                >
-                  선택 복구
-                </Button>
-              </div>
-            </div>
+            <AdminPoliciesTab
+            loading={{
+              loadingPolicies,
+              loadingOAuthSettings,
+              savingOAuthSettings,
+              savingPolicies,
+            }}
+            oauth={{
+              oauthHealth,
+              oauthEnabled,
+              setOauthEnabled,
+              oauthGoogleRedirectUri,
+              setOauthGoogleRedirectUri,
+              oauthFrontendRedirectUri,
+              setOauthFrontendRedirectUri,
+              handleSaveOAuthSettings,
+            }}
+            policyMeta={{
+              policyUpdatedBy,
+              policyUpdatedAt,
+              policyPreviewQuery,
+              setPolicyPreviewQuery,
+            }}
+            policyCategories={{
+              filteredBaselineKeywordCategories,
+              collapsedPolicyCategories,
+              handleTogglePolicyCategory,
+              handleExpandAllPolicyCategories,
+              handleCollapseAllPolicyCategories,
+            }}
+            policyForms={{
+              blockedKeywordsInput,
+              setBlockedKeywordsInput,
+              autoHideThreshold,
+              setAutoHideThreshold,
+              adminLogRetentionDays,
+              setAdminLogRetentionDays,
+              adminLogViewWindowDays,
+              setAdminLogViewWindowDays,
+              adminLogMaskReasons,
+              setAdminLogMaskReasons,
+              homeFilterTabsInput,
+              setHomeFilterTabsInput,
+              exploreFilterTabsInput,
+              setExploreFilterTabsInput,
+              handleSavePolicies,
+            }}
+            csvActions={{
+              handleExportPoliciesCsv,
+              handleImportPoliciesCsvClick,
+              csvImportInputRef,
+              handleImportPoliciesCsvFile,
+            }}
+          />
 
-            {editingProjectId && (
-              <Card className="bg-[#161F42] border border-[#FF5D8F]/40 mb-4">
-                <CardContent className="p-4 space-y-3">
-                  <p className="text-sm font-semibold text-[#F4F7FF]">프로젝트 수정</p>
-                  <input
-                    value={editingProjectTitle}
-                    onChange={(event) => setEditingProjectTitle(event.target.value)}
-                    placeholder="제목"
-                    className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                  />
-                  <textarea
-                    value={editingProjectSummary}
-                    onChange={(event) => setEditingProjectSummary(event.target.value)}
-                    placeholder="요약"
-                    rows={3}
-                    className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                  />
-                  <div className="space-y-2">
-                    <p className="text-xs text-[#B8C3E6]">태그 수정 (추가/제거)</p>
-                    <div className="flex gap-2">
-                      <input
-                        value={editingProjectTagInput}
-                        onChange={(event) => setEditingProjectTagInput(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault()
-                            handleAddEditingProjectTag()
-                          }
-                        }}
-                        placeholder="태그 입력 후 Enter"
-                        className="flex-1 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                        onClick={handleAddEditingProjectTag}
-                      >
-                        태그 추가
-                      </Button>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {editingProjectTags.map((tag) => (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => handleRemoveEditingProjectTag(tag)}
-                          className="rounded-full bg-[#111936] px-3 py-1 text-xs text-[#B8C3E6] hover:bg-[#FF5D8F]/20 hover:text-[#F4F7FF]"
-                          title="클릭해서 제거"
-                        >
-                          {tag} ×
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <input
-                    value={editingProjectReason}
-                    onChange={(event) => setEditingProjectReason(event.target.value)}
-                    placeholder="수정 사유 (필수)"
-                    className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                  />
-                  <div className="flex gap-2">
-                    <Button
-                      type="button"
-                      className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white"
-                      onClick={handleSaveProjectEdit}
-                    >
-                      수정 저장
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                      onClick={cancelEditingProject}
-                    >
-                      취소
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-
-            <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-0">
-                {loadingProjects ? (
-                  <div className="p-6 text-[#B8C3E6]">프로젝트 로딩 중...</div>
-                ) : (
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-[#111936]">
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">상태</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">제목</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작성자</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">플랫폼</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">반응</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredProjects.map((project) => (
-                        <tr key={project.id} className="border-b border-[#111936]/50 hover:bg-[#111936]/30">
-                          <td className="p-4">
-                            <input
-                              type="checkbox"
-                              checked={selectedProjectIds.includes(project.id)}
-                              onChange={() => toggleProjectSelection(project.id)}
-                            />
-                          </td>
-                          <td className="p-4">
-                            <Badge
-                              variant={
-                                project.status === "published"
-                                  ? "default"
-                                  : project.status === "hidden"
-                                    ? "secondary"
-                                    : "destructive"
-                              }
-                            >
-                              {project.status}
-                            </Badge>
-                          </td>
-                          <td className="p-4 text-[#F4F7FF] max-w-xs truncate">{project.title}</td>
-                          <td className="p-4 text-[#B8C3E6]">{project.author_nickname}</td>
-                          <td className="p-4 text-[#B8C3E6]">{project.platform}</td>
-                          <td className="p-4 text-[#B8C3E6]">❤️ {project.like_count} · 💬 {project.comment_count}</td>
-                          <td className="p-4">
-                            <div className="flex gap-1 flex-wrap">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                                onClick={() => startEditingProject(project)}
-                              >
-                                수정
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                                onClick={() => handleProjectSingleAction("hide", project.id)}
-                                disabled={project.status === "hidden" || project.status === "deleted"}
-                              >
-                                숨김
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936] text-xs"
-                                onClick={() => handleProjectSingleAction("restore", project.id)}
-                                disabled={project.status === "published"}
-                              >
-                                복구
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="bg-[#FF6B6B] hover:bg-[#FF6B6B]/90 text-white text-xs"
-                                onClick={() => handleProjectSingleAction("delete", project.id)}
-                                disabled={project.status === "deleted"}
-                              >
-                                삭제
-                              </Button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="pages">
-            <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-6 space-y-4">
-                {loadingAboutContent ? (
-                  <div className="text-[#B8C3E6]">About 콘텐츠 로딩 중...</div>
-                ) : (
-                  <>
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">About Hero</h3>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <input
-                          value={aboutHeroTitle}
-                          onChange={(event) => setAboutHeroTitle(event.target.value)}
-                          placeholder="Hero title"
-                          className="bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                        />
-                        <input
-                          value={aboutHeroHighlight}
-                          onChange={(event) => setAboutHeroHighlight(event.target.value)}
-                          placeholder="Hero highlight"
-                          className="bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                        />
-                      </div>
-                      <textarea
-                        value={aboutHeroDescription}
-                        onChange={(event) => setAboutHeroDescription(event.target.value)}
-                        rows={3}
-                        placeholder="Hero description"
-                        className="mt-3 w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                      <input
-                        value={aboutContactEmail}
-                        onChange={(event) => setAboutContactEmail(event.target.value)}
-                        placeholder="Contact email"
-                        className="mt-3 w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Values (emoji|title|description)</h3>
-                      <textarea
-                        value={aboutValuesInput}
-                        onChange={(event) => setAboutValuesInput(event.target.value)}
-                        rows={4}
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Team (name|role|description)</h3>
-                      <textarea
-                        value={aboutTeamInput}
-                        onChange={(event) => setAboutTeamInput(event.target.value)}
-                        rows={4}
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">FAQ (question|answer)</h3>
-                      <textarea
-                        value={aboutFaqInput}
-                        onChange={(event) => setAboutFaqInput(event.target.value)}
-                        rows={5}
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                    </div>
-
-                    <div>
-                      <input
-                        value={aboutReason}
-                        onChange={(event) => setAboutReason(event.target.value)}
-                        placeholder="수정 사유 (필수)"
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                      />
-                    </div>
-
-                    <div>
-                      <Button
-                        onClick={handleSaveAboutContent}
-                        disabled={savingAboutContent}
-                        className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white"
-                      >
-                        {savingAboutContent ? "저장 중..." : "About 페이지 저장"}
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="policies">
-            <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-6 space-y-6">
-                {loadingPolicies ? (
-                  <div className="text-[#B8C3E6]">정책 로딩 중...</div>
-                ) : (
-                  <>
-                    <div className="rounded-lg border border-[#111936] bg-[#0B1020] p-4 space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <h3 className="text-[#F4F7FF] font-semibold">Google OAuth 운영 설정</h3>
-                          <p className="text-xs text-[#B8C3E6] mt-1">비밀키는 서버 환경변수로 관리하고, 이 화면에서는 런타임 토글/리다이렉트만 관리합니다.</p>
-                        </div>
-                        <Badge variant={oauthHealth?.is_ready ? "secondary" : "destructive"}>
-                          {oauthHealth?.is_ready ? "준비됨" : "미완료"}
-                        </Badge>
-                      </div>
-                      {loadingOAuthSettings ? (
-                        <p className="text-xs text-[#B8C3E6]">OAuth 설정을 불러오는 중...</p>
-                      ) : (
-                        <>
-                          <label className="flex items-center gap-2 text-sm text-[#F4F7FF]">
-                            <input
-                              type="checkbox"
-                              checked={oauthEnabled}
-                              onChange={(event) => setOauthEnabled(event.target.checked)}
-                            />
-                            Google OAuth 활성화
-                          </label>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            <div>
-                              <p className="text-xs text-[#B8C3E6] mb-1">Google Redirect URI</p>
-                              <input
-                                value={oauthGoogleRedirectUri}
-                                onChange={(event) => setOauthGoogleRedirectUri(event.target.value)}
-                                placeholder="https://api.your-domain.com/api/auth/google/callback"
-                                className="w-full bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                              />
-                            </div>
-                            <div>
-                              <p className="text-xs text-[#B8C3E6] mb-1">Frontend Redirect URI</p>
-                              <input
-                                value={oauthFrontendRedirectUri}
-                                onChange={(event) => setOauthFrontendRedirectUri(event.target.value)}
-                                placeholder="https://app.your-domain.com"
-                                className="w-full bg-[#161F42] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF]"
-                              />
-                            </div>
-                          </div>
-                          <div className="text-xs text-[#B8C3E6] space-y-1">
-                            <p>Client ID: {oauthHealth?.has_client_id ? "설정됨" : "누락"}</p>
-                            <p>Client Secret: {oauthHealth?.has_client_secret ? "설정됨" : "누락"}</p>
-                          </div>
-                          <div>
-                            <Button
-                              onClick={handleSaveOAuthSettings}
-                              disabled={savingOAuthSettings}
-                              className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020]"
-                            >
-                              {savingOAuthSettings ? "저장 중..." : "OAuth 설정 저장"}
-                            </Button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">기본 금칙 카테고리 (자동 적용)</h3>
-                      <p className="text-xs text-[#B8C3E6] mb-3">아래 목록은 시스템 기본 규칙으로 항상 적용됩니다.</p>
-                      <div className="mb-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                        <div className="text-xs text-[#B8C3E6]">
-                          최근 수정자: <span className="text-[#F4F7FF]">{policyUpdatedBy || "시스템"}</span>
-                          {policyUpdatedAt ? ` · ${new Date(policyUpdatedAt).toLocaleString("ko-KR")}` : ""}
-                        </div>
-                        <input
-                          value={policyPreviewQuery}
-                          onChange={(event) => setPolicyPreviewQuery(event.target.value)}
-                          placeholder="카테고리/금칙어 미리보기 검색"
-                          className="w-full md:w-72 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                        />
-                      </div>
-                      <div className="mb-3 flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                          onClick={handleExpandAllPolicyCategories}
-                        >
-                          전체 펼치기
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                          onClick={handleCollapseAllPolicyCategories}
-                        >
-                          전체 접기
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                          onClick={handleExportPoliciesCsv}
-                        >
-                          CSV 내보내기
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                          onClick={handleImportPoliciesCsvClick}
-                        >
-                          CSV 가져오기
-                        </Button>
-                        <input
-                          ref={csvImportInputRef}
-                          type="file"
-                          accept=".csv,text/csv"
-                          className="hidden"
-                          onChange={handleImportPoliciesCsvFile}
-                        />
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                        {Object.entries(filteredBaselineKeywordCategories).map(([category, keywords]) => (
-                          <div key={category} className="rounded-lg border border-[#111936] bg-[#0B1020] p-3">
-                            <div className="mb-2 flex items-center justify-between gap-2">
-                              <p className="text-sm font-semibold text-[#F4F7FF]">
-                                {category} <span className="text-[#B8C3E6] text-xs">({keywords.length})</span>
-                              </p>
-                              <button
-                                type="button"
-                                className="text-xs text-[#B8C3E6] hover:text-[#F4F7FF]"
-                                onClick={() => handleTogglePolicyCategory(category)}
-                              >
-                                {collapsedPolicyCategories[category] ? "펼치기" : "접기"}
-                              </button>
-                            </div>
-                            {!collapsedPolicyCategories[category] ? (
-                              <p className="text-xs text-[#B8C3E6] leading-relaxed">
-                                {keywords.length > 0 ? keywords.join(", ") : "-"}
-                              </p>
-                            ) : (
-                              <p className="text-xs text-[#B8C3E6]/70">접힘</p>
-                            )}
-                          </div>
-                        ))}
-                        {Object.keys(filteredBaselineKeywordCategories).length === 0 && (
-                          <div className="rounded-lg border border-[#111936] bg-[#0B1020] p-3 text-xs text-[#B8C3E6]">
-                            검색 결과가 없습니다.
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">추가 금칙어 목록 (관리자 커스텀)</h3>
-                      <p className="text-xs text-[#B8C3E6] mb-2">쉼표(,)로 구분해서 입력하세요. 입력 항목은 기본 카테고리와 합쳐서 적용됩니다.</p>
-                      <textarea
-                        value={blockedKeywordsInput}
-                        onChange={(event) => setBlockedKeywordsInput(event.target.value)}
-                        rows={4}
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                      />
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">자동 임시 숨김 임계치</h3>
-                      <p className="text-xs text-[#B8C3E6] mb-2">동일 대상 신고 누적 건수 기준</p>
-                      <input
-                        type="number"
-                        min={1}
-                        value={autoHideThreshold}
-                        onChange={(event) => setAutoHideThreshold(Number(event.target.value) || 1)}
-                        className="w-32 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <h3 className="text-[#F4F7FF] font-semibold mb-2">관리자 로그 보존 기간(일)</h3>
-                        <p className="text-xs text-[#B8C3E6] mb-2">만료된 로그는 서버 시작 시 정리됩니다 (최소 30일)</p>
-                        <input
-                          type="number"
-                          min={30}
-                          value={adminLogRetentionDays}
-                          onChange={(event) => setAdminLogRetentionDays(Number(event.target.value) || 30)}
-                          className="w-32 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                        />
-                      </div>
-                      <div>
-                        <h3 className="text-[#F4F7FF] font-semibold mb-2">관리자 로그 기본 조회 기간(일)</h3>
-                        <p className="text-xs text-[#B8C3E6] mb-2">로그 탭 기본 목록 조회 범위 (최소 1일)</p>
-                        <input
-                          type="number"
-                          min={1}
-                          value={adminLogViewWindowDays}
-                          onChange={(event) => setAdminLogViewWindowDays(Number(event.target.value) || 1)}
-                          className="w-32 bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                        />
-                      </div>
-                    </div>
-
-                    <label className="inline-flex items-center gap-2 text-sm text-[#F4F7FF]">
-                      <input
-                        type="checkbox"
-                        checked={adminLogMaskReasons}
-                        onChange={(event) => setAdminLogMaskReasons(event.target.checked)}
-                        className="rounded border-[#111936] bg-[#0B1020]"
-                      />
-                      로그 사유(reason) 민감정보 마스킹 사용
-                    </label>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Home 탭 구성</h3>
-                      <p className="text-xs text-[#B8C3E6] mb-2">한 줄에 `id|label` 형식으로 입력 (예: web|Web)</p>
-                      <textarea
-                        value={homeFilterTabsInput}
-                        onChange={(event) => setHomeFilterTabsInput(event.target.value)}
-                        rows={6}
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                      />
-                    </div>
-
-                    <div>
-                      <h3 className="text-[#F4F7FF] font-semibold mb-2">Explore 탭 구성</h3>
-                      <p className="text-xs text-[#B8C3E6] mb-2">한 줄에 `id|label` 형식으로 입력 (예: mobile|Mobile)</p>
-                      <textarea
-                        value={exploreFilterTabsInput}
-                        onChange={(event) => setExploreFilterTabsInput(event.target.value)}
-                        rows={6}
-                        className="w-full bg-[#0B1020] border border-[#111936] rounded-lg px-3 py-2 text-sm text-[#F4F7FF] placeholder:text-[#B8C3E6]/60 focus:outline-none focus:ring-2 focus:ring-[#FF5D8F]/40"
-                      />
-                    </div>
-
-                    <div className="pt-2">
-                      <Button
-                        onClick={handleSavePolicies}
-                        disabled={savingPolicies}
-                        className="bg-[#FF5D8F] hover:bg-[#FF5D8F]/90 text-white"
-                      >
-                        {savingPolicies ? "저장 중..." : "정책 저장"}
-                      </Button>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-          </TabsContent>
-
-          <TabsContent value="actions">
-            <div className="mb-3 flex flex-wrap gap-2">
-              <Badge className="bg-[#111936] text-[#F4F7FF] border border-[#2A3669]">
-                보존 {adminLogRetentionDays}일
-              </Badge>
-              <Badge className="bg-[#111936] text-[#F4F7FF] border border-[#2A3669]">
-                조회 {adminLogViewWindowDays}일
-              </Badge>
-              <Badge className="bg-[#111936] text-[#F4F7FF] border border-[#2A3669]">
-                사유 마스킹 {adminLogMaskReasons ? "ON" : "OFF"}
-              </Badge>
-            </div>
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setPolicyOnlyLogs((prev) => !prev)}
-                className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                  policyOnlyLogs
-                    ? "bg-[#FF5D8F] text-white"
-                    : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
-                }`}
-              >
-                정책 로그만 보기 {policyOnlyLogs ? "ON" : "OFF"}
-              </button>
-              {([
-                { value: 7 as const, label: "7일" },
-                { value: 30 as const, label: "30일" },
-                { value: 90 as const, label: "90일" },
-                { value: 0 as const, label: "전체" },
-              ] as const).map((period) => (
-                <button
-                  key={period.value}
-                  type="button"
-                  onClick={() => setActionLogPeriodDays(period.value)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                    actionLogPeriodDays === period.value
-                      ? "bg-[#23D5AB] text-[#0B1020]"
-                      : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
-                  }`}
-                >
-                  {period.label}
-                </button>
-              ))}
-            </div>
-            <div className="mb-3 flex gap-2 flex-wrap">
-              {([
-                { value: "all", label: "전체" },
-                { value: "project", label: "프로젝트" },
-                { value: "report", label: "신고" },
-                { value: "user", label: "사용자" },
-                { value: "moderation_settings", label: "정책" },
-              ] as const).map((tab) => (
-                <button
-                  key={tab.value}
-                  type="button"
-                  onClick={() => setActionLogFilter(tab.value)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                    actionLogFilter === tab.value
-                      ? "bg-[#FF5D8F] text-white"
-                      : "bg-[#161F42] text-[#B8C3E6] hover:bg-[#1b2550]"
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-            <Card className="bg-[#161F42] border-0">
-              <CardContent className="p-0">
-                {loadingLogs ? (
-                  <div className="p-6 text-[#B8C3E6]">로그 로딩 중...</div>
-                ) : (
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-[#111936]">
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">작업</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">대상</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">사유</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">관리자</th>
-                        <th className="text-left p-4 text-[#B8C3E6] font-medium">시간</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredActionLogs.map((log) => (
-                        <tr
-                          key={log.id}
-                          className={`border-b border-[#111936]/50 cursor-pointer ${selectedActionLogId === log.id ? "bg-[#111936]/60" : "hover:bg-[#111936]/30"}`}
-                          onClick={() => setSelectedActionLogId(log.id)}
-                        >
-                          <td className="p-4 text-[#F4F7FF]">{actionToText(log.action_type)}</td>
-                          <td className="p-4 text-[#FF5D8F]">{log.target_type}:{log.target_id}</td>
-                          <td className="p-4 text-[#B8C3E6]">{log.reason || "-"}</td>
-                          <td className="p-4 text-[#B8C3E6]">{log.admin_nickname || "admin"}</td>
-                          <td className="p-4 text-[#B8C3E6]">{new Date(log.created_at).toLocaleString("ko-KR")}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </CardContent>
-            </Card>
-            <Card className="mt-4 bg-[#161F42] border-0">
-              <CardContent className="p-4">
-                <h3 className="text-sm font-semibold text-[#F4F7FF] mb-3">정책 변경 이력(diff)</h3>
-                {policyChangeHistory.length === 0 ? (
-                  <p className="text-xs text-[#B8C3E6]">정책 변경 이력이 없습니다.</p>
-                ) : (
-                  <div className="space-y-3">
-                    {policyChangeHistory.slice(0, 8).map(({ log, diffs }) => (
-                      <div key={log.id} className="rounded-md border border-[#111936] bg-[#0B1020] p-3">
-                        <p className="text-xs text-[#F4F7FF]">
-                          {new Date(log.created_at).toLocaleString("ko-KR")} · {log.admin_nickname || "admin"}
-                        </p>
-                        <p className="text-xs text-[#B8C3E6] mt-1">{diffs.length > 0 ? diffs.join(" | ") : "변경값 차이 없음"}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-            {selectedActionLog ? (
-              <Card className="mt-4 bg-[#161F42] border border-[#FF5D8F]/30">
-                <CardContent className="p-4 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-[#F4F7FF]">선택한 로그 상세</h3>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="border-[#111936] text-[#B8C3E6] hover:bg-[#111936]"
-                      onClick={() => setSelectedActionLogId(null)}
-                    >
-                      닫기
-                    </Button>
-                  </div>
-                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">작업:</span> {actionToText(selectedActionLog.action_type)}</p>
-                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">대상:</span> {selectedActionLog.target_type}:{selectedActionLog.target_id}</p>
-                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">관리자:</span> {selectedActionLog.admin_nickname || "admin"}</p>
-                  <p className="text-xs text-[#B8C3E6]"><span className="text-[#F4F7FF]">시간:</span> {new Date(selectedActionLog.created_at).toLocaleString("ko-KR")}</p>
-                  <div className="rounded-md border border-[#111936] bg-[#0B1020] p-3">
-                    <p className="text-xs text-[#F4F7FF] mb-1">사유 / 내용</p>
-                    <p className="text-xs text-[#B8C3E6] whitespace-pre-wrap break-words">{selectedActionLog.reason || "기록된 사유가 없습니다."}</p>
-                  </div>
-                </CardContent>
-              </Card>
-            ) : null}
-          </TabsContent>
+            <AdminActionsTab
+            summary={{
+              adminLogRetentionDays,
+              adminLogViewWindowDays,
+              adminLogMaskReasons,
+            }}
+            filters={{
+              policyOnlyLogs,
+              setPolicyOnlyLogs,
+              actionLogPeriodDays,
+              setActionLogPeriodDays,
+              actionLogFilter,
+              setActionLogFilter,
+            }}
+            data={{
+              loadingLogs,
+              filteredActionLogs,
+              selectedActionLogId,
+              selectedActionLog,
+              policyChangeHistory,
+            }}
+            actions={{
+              setSelectedActionLogId,
+            }}
+            actionToText={actionToText}
+            />
+          </section>
         </Tabs>
       </main>
     </div>

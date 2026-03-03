@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { TopNav } from "@/components/TopNav"
 import { ProjectMeta } from "@/components/ProjectMeta"
 import { api } from "@/lib/api"
+import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -310,7 +311,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             <TabsTrigger value="projects" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">작품</TabsTrigger>
             <TabsTrigger value="comments" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">댓글</TabsTrigger>
             <TabsTrigger value="liked" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">좋아요</TabsTrigger>
-            {user?.role === "admin" && (
+            {isAdminRole(user?.role) && (
               <TabsTrigger value="admin" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-[#0B1020]">⚠️ 관리자</TabsTrigger>
             )}
           </TabsList>
@@ -348,7 +349,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             </div>
           </TabsContent>
 
-          {user?.role === "admin" && (
+          {isAdminRole(user?.role) && (
             <TabsContent value="admin">
               <AdminPanel />
             </TabsContent>

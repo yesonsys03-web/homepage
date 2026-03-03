@@ -370,6 +370,7 @@ DEFAULT_ADMIN_LOG_RETENTION_DAYS = 365
 DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS = 30
 ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
 SYSTEM_ADMIN_USER_ID = "11111111-1111-1111-1111-111111111111"
+ADMIN_ALLOWED_ROLES = {"admin", "super_admin"}
 _admin_log_cleanup_task: Optional[asyncio.Task[None]] = None
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
@@ -1122,7 +1123,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
 
 
 async def require_admin(current_user: UserContext = Depends(get_current_user)):
-    if current_user.get("role") not in {"admin", "super_admin"}:
+    if current_user.get("role") not in ADMIN_ALLOWED_ROLES:
         raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
     return current_user
 
@@ -1143,7 +1144,7 @@ def update_project_endpoint(
     if not existing:
         raise HTTPException(status_code=404, detail="프로젝트를 찾을 수 없습니다")
 
-    is_admin = current_user.get("role") == "admin"
+    is_admin = current_user.get("role") in ADMIN_ALLOWED_ROLES
     is_owner = str(existing.get("author_id")) == current_user.get("id")
     if not is_admin and not is_owner:
         raise HTTPException(status_code=403, detail="수정 권한이 없습니다")

@@ -97,6 +97,11 @@ def test_require_super_admin_guard() -> None:
     assert exc.value.status_code == 403
 
 
+def test_require_admin_allows_super_admin() -> None:
+    context = asyncio.run(main.require_admin(_admin_context(role="super_admin")))
+    assert context["role"] == "super_admin"
+
+
 def test_revoked_token_version_blocks_me_endpoint(
     client: TestClient, monkeypatch: Any
 ) -> None:

@@ -5,6 +5,7 @@ import { RegisterScreen } from './components/screens/RegisterScreen'
 import { AuthProvider } from './lib/auth-context'
 import { useAuth } from './lib/use-auth'
 import { api } from './lib/api'
+import { isAdminRole } from './lib/roles'
 
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -94,7 +95,7 @@ function AppContent() {
       return
     }
 
-    if (screen === 'admin' && user?.role !== 'admin') {
+    if (screen === 'admin' && !isAdminRole(user?.role)) {
       setCurrentScreen(user ? 'home' : 'login')
       return
     }

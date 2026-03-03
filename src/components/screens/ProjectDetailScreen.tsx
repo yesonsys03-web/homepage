@@ -10,6 +10,7 @@ import { CommentList } from "@/components/CommentList"
 import { ReportModal } from "@/components/ReportModal"
 import { Toast } from "@/components/Toast"
 import { api, type Project, type Comment } from "@/lib/api"
+import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
 type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
 
@@ -217,7 +218,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     })
   }
 
-  const canEditProject = !!user && (user.role === "admin" || user.id === project.author_id)
+  const canEditProject = !!user && (isAdminRole(user.role) || user.id === project.author_id)
 
   const shareUrl = `${window.location.origin}${window.location.pathname}?project=${targetProjectId}`
 
