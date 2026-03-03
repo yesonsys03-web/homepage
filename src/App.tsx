@@ -1,10 +1,35 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { Helmet } from 'react-helmet-async'
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from 'react-router-dom'
 import { AuthProvider } from './lib/auth-context'
 import { useAuth } from './lib/use-auth'
 import { api } from './lib/api'
 import { isAdminRole } from './lib/roles'
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen =
+  | 'home'
+  | 'detail'
+  | 'submit'
+  | 'profile'
+  | 'admin'
+  | 'login'
+  | 'register'
+  | 'explore'
+  | 'challenges'
+  | 'about'
+
+type RouteState = {
+  screen: Screen
+  projectId: string | null
+  editingProjectId: string | null
+}
 
 const HomeScreen = lazy(async () => {
   const module = await import('./components/screens/HomeScreen')
@@ -103,44 +128,143 @@ function getScreenMeta(screen: Screen, projectId: string | null): { title: strin
   return metaByScreen[screen]
 }
 
-function AppContent() {
-  const initialUrl = new URL(window.location.href)
-  const initialProjectId = initialUrl.searchParams.get('project')
-  const initialOauthCode = initialUrl.searchParams.get('oauth_code')
-  const initialOauthToken = initialUrl.searchParams.get('oauth_token')
-  const initialOauthStatus = initialUrl.searchParams.get('oauth_status')
-  const [currentScreen, setCurrentScreen] = useState<Screen>(
-    initialOauthCode || initialOauthToken || initialOauthStatus ? 'login' : initialProjectId ? 'detail' : 'home'
-  )
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(initialProjectId)
-  const [submitEditingProjectId, setSubmitEditingProjectId] = useState<string | null>(null)
-  const { user, login, logout, isLoading } = useAuth()
+function getCanonicalPath(pathname: string, screen: Screen): string {
+  if (screen === 'submit' && /^\/submit\/[^/]+\/edit$/.test(pathname)) {
+    return '/submit'
+  }
+  return pathname || '/'
+}
 
-  const syncProjectQuery = (projectId: string | null) => {
-    const url = new URL(window.location.href)
-    if (projectId) {
-      url.searchParams.set('project', projectId)
-    } else {
-      url.searchParams.delete('project')
+function parseRoute(pathname: string): RouteState {
+  const detailMatch = pathname.match(/^\/project\/([^/]+)$/)
+  if (detailMatch) {
+    return {
+      screen: 'detail',
+      projectId: decodeURIComponent(detailMatch[1]),
+      editingProjectId: null,
     }
-    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`)
   }
 
+  const submitEditMatch = pathname.match(/^\/submit\/([^/]+)\/edit$/)
+  if (submitEditMatch) {
+    return {
+      screen: 'submit',
+      projectId: null,
+      editingProjectId: decodeURIComponent(submitEditMatch[1]),
+    }
+  }
+
+  if (pathname === '/submit') return { screen: 'submit', projectId: null, editingProjectId: null }
+  if (pathname === '/profile') return { screen: 'profile', projectId: null, editingProjectId: null }
+  if (pathname === '/admin') return { screen: 'admin', projectId: null, editingProjectId: null }
+  if (pathname === '/login') return { screen: 'login', projectId: null, editingProjectId: null }
+  if (pathname === '/register') return { screen: 'register', projectId: null, editingProjectId: null }
+  if (pathname === '/explore') return { screen: 'explore', projectId: null, editingProjectId: null }
+  if (pathname === '/challenges') return { screen: 'challenges', projectId: null, editingProjectId: null }
+  if (pathname === '/about') return { screen: 'about', projectId: null, editingProjectId: null }
+  return { screen: 'home', projectId: null, editingProjectId: null }
+}
+
+function getPathForScreen(screen: Screen, projectId: string | null): string {
+  if (screen === 'home') return '/'
+  if (screen === 'explore') return '/explore'
+  if (screen === 'challenges') return '/challenges'
+  if (screen === 'about') return '/about'
+  if (screen === 'submit') return '/submit'
+  if (screen === 'profile') return '/profile'
+  if (screen === 'admin') return '/admin'
+  if (screen === 'login') return '/login'
+  if (screen === 'register') return '/register'
+  if (screen === 'detail' && projectId) return `/project/${encodeURIComponent(projectId)}`
+  return '/explore'
+}
+
+function isScreen(value: string | null): value is Screen {
+  if (!value) {
+    return false
+  }
+  return [
+    'home',
+    'detail',
+    'submit',
+    'profile',
+    'admin',
+    'login',
+    'register',
+    'explore',
+    'challenges',
+    'about',
+  ].includes(value)
+}
+
+function AppContent() {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const { user, login, logout, isLoading } = useAuth()
+  const [lastProjectId, setLastProjectId] = useState<string | null>(null)
+
+  const routeState = useMemo(() => parseRoute(location.pathname), [location.pathname])
+  const currentScreen = routeState.screen
+  const selectedProjectId = routeState.projectId ?? lastProjectId
+
   useEffect(() => {
-    const url = new URL(window.location.href)
-    const oauthCode = url.searchParams.get('oauth_code')
-    const oauthToken = url.searchParams.get('oauth_token')
-    const oauthStatus = url.searchParams.get('oauth_status')
+    if (location.pathname !== '/') {
+      return
+    }
+
+    const params = new URLSearchParams(location.search)
+    if (params.get('oauth_code') || params.get('oauth_token') || params.get('oauth_status')) {
+      return
+    }
+
+    const legacyProjectId = params.get('project')
+    if (legacyProjectId) {
+      navigate(`/project/${encodeURIComponent(legacyProjectId)}`, { replace: true })
+      return
+    }
+
+    const legacyScreen = params.get('screen')
+    if (!isScreen(legacyScreen) || legacyScreen === 'home' || legacyScreen === 'detail') {
+      return
+    }
+
+    navigate(getPathForScreen(legacyScreen, null), { replace: true })
+  }, [location.pathname, location.search, navigate])
+
+  useEffect(() => {
+    if (routeState.projectId) {
+      setLastProjectId(routeState.projectId)
+    }
+  }, [routeState.projectId])
+
+  useEffect(() => {
+    if (routeState.editingProjectId) {
+      setLastProjectId(routeState.editingProjectId)
+    }
+  }, [routeState.editingProjectId])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const oauthCode = params.get('oauth_code')
+    const oauthToken = params.get('oauth_token')
+    const oauthStatus = params.get('oauth_status')
     if (!oauthCode && !oauthToken && !oauthStatus) {
       return
     }
 
     const clearOAuthQuery = () => {
-      const currentUrl = new URL(window.location.href)
-      currentUrl.searchParams.delete('oauth_code')
-      currentUrl.searchParams.delete('oauth_token')
-      currentUrl.searchParams.delete('oauth_status')
-      window.history.replaceState({}, '', `${currentUrl.pathname}${currentUrl.search}${currentUrl.hash}`)
+      const currentParams = new URLSearchParams(location.search)
+      currentParams.delete('oauth_code')
+      currentParams.delete('oauth_token')
+      currentParams.delete('oauth_status')
+      const search = currentParams.toString()
+      navigate(
+        {
+          pathname: location.pathname,
+          search: search ? `?${search}` : '',
+        },
+        { replace: true },
+      )
     }
 
     if (oauthStatus === 'pending') {
@@ -166,7 +290,7 @@ function AppContent() {
           if (cancelled) return
           login(result.access_token, result.user)
           clearOAuthQuery()
-          setCurrentScreen('home')
+          navigate('/', { replace: true })
           return
         }
 
@@ -177,12 +301,12 @@ function AppContent() {
         if (cancelled) return
         login(oauthToken, me)
         clearOAuthQuery()
-        setCurrentScreen('home')
+        navigate('/', { replace: true })
       } catch (error) {
         console.error('Google OAuth session restore failed:', error)
         if (!cancelled) {
           clearOAuthQuery()
-          setCurrentScreen('login')
+          navigate('/login', { replace: true })
           window.alert(error instanceof Error ? error.message : 'Google 로그인에 실패했습니다.')
         }
       }
@@ -192,110 +316,65 @@ function AppContent() {
     return () => {
       cancelled = true
     }
-  }, [login])
+  }, [location.pathname, location.search, login, navigate])
 
   useEffect(() => {
     if (isLoading) {
       return
     }
-
     if (currentScreen === 'admin' && !isAdminRole(user?.role)) {
-      setCurrentScreen('home')
+      navigate(user ? '/' : '/login', { replace: true })
     }
-  }, [currentScreen, isLoading, user])
+  }, [currentScreen, isLoading, navigate, user])
 
   const handleLogout = () => {
     logout()
-    syncProjectQuery(null)
-    setCurrentScreen('home')
+    setLastProjectId(null)
+    navigate('/', { replace: true })
   }
 
-  const handleLoginSwitch = () => setCurrentScreen('login')
-  const handleRegisterSwitch = () => setCurrentScreen('register')
-  const handleAuthSuccess = () => setCurrentScreen('home')
+  const handleLoginSwitch = () => navigate('/login')
+  const handleRegisterSwitch = () => navigate('/register')
+  const handleAuthSuccess = () => navigate('/')
 
   const handleNavigate = (screen: Screen) => {
     if ((screen === 'submit' || screen === 'profile') && !user) {
-      setCurrentScreen('login')
+      navigate('/login')
       return
     }
 
     if (screen === 'admin' && !isAdminRole(user?.role)) {
-      setCurrentScreen(user ? 'home' : 'login')
+      navigate(user ? '/' : '/login')
       return
     }
 
-    if (screen === 'submit') {
-      setSubmitEditingProjectId(null)
-    }
-
-    if (screen === 'detail' && !selectedProjectId) {
-      setCurrentScreen('explore')
-      return
-    }
-
-    if (screen !== 'detail') {
-      syncProjectQuery(null)
-    }
-
-    setCurrentScreen(screen)
+    const targetPath = getPathForScreen(screen, selectedProjectId)
+    navigate(targetPath)
   }
 
   const openProjectDetail = (projectId: string) => {
-    setSelectedProjectId(projectId)
-    syncProjectQuery(projectId)
-    setCurrentScreen('detail')
+    setLastProjectId(projectId)
+    navigate(`/project/${encodeURIComponent(projectId)}`)
   }
 
   const openProjectEdit = (projectId: string) => {
     if (!user) {
-      setCurrentScreen('login')
+      navigate('/login')
       return
     }
-    setSubmitEditingProjectId(projectId)
-    syncProjectQuery(projectId)
-    setCurrentScreen('submit')
-  }
-
-  const screens = {
-    home: <HomeScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />,
-    detail: <ProjectDetailScreen onNavigate={handleNavigate} projectId={selectedProjectId ?? undefined} onEditProject={openProjectEdit} />,
-    submit: <SubmitScreen onNavigate={handleNavigate} editingProjectId={submitEditingProjectId ?? undefined} />,
-    profile: <ProfileScreen onNavigate={handleNavigate} />,
-    admin: <AdminScreen onNavigate={handleNavigate} />,
-    explore: <ExploreScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />,
-    challenges: <ChallengesScreen onNavigate={handleNavigate} />,
-    about: <AboutScreen onNavigate={handleNavigate} />,
-    login: <LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />,
-    register: <RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />,
+    setLastProjectId(projectId)
+    navigate(`/submit/${encodeURIComponent(projectId)}/edit`)
   }
 
   const screenMeta = useMemo(
     () => getScreenMeta(currentScreen, selectedProjectId),
-    [currentScreen, selectedProjectId]
+    [currentScreen, selectedProjectId],
   )
-
-  useEffect(() => {
-    document.title = screenMeta.title
-
-    const selector = 'meta[name="description"]'
-    const existing = document.head.querySelector(selector)
-    if (existing) {
-      existing.setAttribute('content', screenMeta.description)
-      return
-    }
-
-    const meta = document.createElement('meta')
-    meta.setAttribute('name', 'description')
-    meta.setAttribute('content', screenMeta.description)
-    document.head.appendChild(meta)
-  }, [screenMeta])
-
-  useEffect(() => {
-    if (currentScreen === 'detail' && !selectedProjectId) {
-      setCurrentScreen('explore')
-    }
-  }, [currentScreen, selectedProjectId])
+  const canonicalPath = useMemo(
+    () => getCanonicalPath(location.pathname, currentScreen),
+    [currentScreen, location.pathname],
+  )
+  const canonicalUrl = useMemo(() => `${window.location.origin}${canonicalPath}`, [canonicalPath])
 
   if (isLoading) {
     return (
@@ -307,6 +386,14 @@ function AppContent() {
 
   return (
     <>
+      <Helmet prioritizeSeoTags>
+        <title>{screenMeta.title}</title>
+        <meta name="description" content={screenMeta.description} />
+        <link rel="canonical" href={canonicalUrl} />
+        <meta property="og:title" content={screenMeta.title} />
+        <meta property="og:description" content={screenMeta.description} />
+        <meta property="og:url" content={canonicalUrl} />
+      </Helmet>
       <nav className="fixed bottom-4 right-4 z-[100] flex gap-2 bg-[#161F42] p-2 rounded-lg shadow-lg" aria-label="Quick navigation menu">
         <button
           onClick={() => handleNavigate('home')}
@@ -358,7 +445,7 @@ function AppContent() {
         >
           Admin
         </button>
-        
+
         {user ? (
           <button
             onClick={handleLogout}
@@ -368,14 +455,14 @@ function AppContent() {
           </button>
         ) : (
           <button
-            onClick={() => setCurrentScreen('login')}
+            onClick={() => navigate('/login')}
             className="px-3 py-1 rounded text-sm bg-[#23D5AB] text-[#0B1020]"
           >
             로그인
           </button>
         )}
       </nav>
-      
+
       <main id="main-content">
         <Suspense
           fallback={
@@ -384,7 +471,20 @@ function AppContent() {
             </div>
           }
         >
-          {screens[currentScreen]}
+          <Routes>
+            <Route path="/" element={<HomeScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
+            <Route path="/explore" element={<ExploreScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
+            <Route path="/challenges" element={<ChallengesScreen onNavigate={handleNavigate} />} />
+            <Route path="/about" element={<AboutScreen onNavigate={handleNavigate} />} />
+            <Route path="/submit" element={<SubmitScreen onNavigate={handleNavigate} />} />
+            <Route path="/submit/:projectId/edit" element={<SubmitScreen onNavigate={handleNavigate} editingProjectId={routeState.editingProjectId ?? undefined} />} />
+            <Route path="/profile" element={<ProfileScreen onNavigate={handleNavigate} />} />
+            <Route path="/admin" element={<AdminScreen onNavigate={handleNavigate} />} />
+            <Route path="/login" element={<LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />} />
+            <Route path="/register" element={<RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />} />
+            <Route path="/project/:projectId" element={<ProjectDetailScreen onNavigate={handleNavigate} projectId={routeState.projectId ?? undefined} onEditProject={openProjectEdit} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         </Suspense>
       </main>
     </>
@@ -393,9 +493,11 @@ function AppContent() {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <BrowserRouter>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </BrowserRouter>
   )
 }
 

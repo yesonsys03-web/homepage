@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { Helmet } from "react-helmet-async"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -229,7 +230,24 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
   const canEditProject = !!user && (isAdminRole(user.role) || user.id === project.author_id)
 
-  const shareUrl = `${window.location.origin}${window.location.pathname}?project=${project.id}`
+  const shareUrl = `${window.location.origin}/project/${encodeURIComponent(project.id)}`
+  const projectJsonLd = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: project.title,
+    description: project.summary,
+    applicationCategory: project.platform,
+    operatingSystem: "Web",
+    url: shareUrl,
+    image: project.thumbnail_url || undefined,
+    author: {
+      "@type": "Person",
+      name: project.author_nickname,
+    },
+    datePublished: project.created_at,
+    keywords: project.tags.join(", "),
+    sameAs: [project.demo_url, project.repo_url].filter((value): value is string => Boolean(value)),
+  })
 
   const copyShareUrl = async () => {
     if (navigator.clipboard?.writeText) {
@@ -306,6 +324,11 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
+      <Helmet>
+        <script id="project-detail-jsonld" type="application/ld+json">
+          {projectJsonLd}
+        </script>
+      </Helmet>
       <TopNav active="home" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">

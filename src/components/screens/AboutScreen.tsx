@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { Helmet } from "react-helmet-async"
 
 import { Button } from "@/components/ui/button"
 import { TopNav } from "@/components/TopNav"
@@ -64,6 +65,24 @@ const ABOUT_FALLBACK_CONTENT: AboutContent = {
 
 export function AboutScreen({ onNavigate }: ScreenProps) {
   const [content, setContent] = useState<AboutContent>(ABOUT_FALLBACK_CONTENT)
+  const faqJsonLd = useMemo(() => {
+    if (content.faqs.length === 0) {
+      return null
+    }
+
+    return JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: content.faqs.map((faq) => ({
+        "@type": "Question",
+        name: faq.question,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: faq.answer,
+        },
+      })),
+    })
+  }, [content.faqs])
 
   useEffect(() => {
     const loadAboutContent = async () => {
@@ -80,6 +99,13 @@ export function AboutScreen({ onNavigate }: ScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
+      {faqJsonLd ? (
+        <Helmet>
+          <script id="about-faq-jsonld" type="application/ld+json">
+            {faqJsonLd}
+          </script>
+        </Helmet>
+      ) : null}
       <TopNav active="about" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
