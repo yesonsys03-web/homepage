@@ -137,9 +137,21 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     setIsSubmittingComment(true)
 
     try {
-      await api.createComment(project.id, content)
-      const commentsData = await api.getComments(project.id, "latest", { force: true })
-      setComments(commentsData.items || [])
+      const createdComment = await api.createComment(project.id, content)
+      setComments((prev) =>
+        prev.map((existing) =>
+          existing.id === optimisticComment.id ? createdComment : existing
+        )
+      )
+
+      try {
+        const commentsData = await api.getComments(project.id, "latest", { force: true })
+        setComments(commentsData.items || [])
+      } catch (refreshError) {
+        console.error("Comment refresh failed after successful create:", refreshError)
+        setToastTone("info")
+        setToastMessage("댓글은 등록되었지만 목록 새로고침에 실패했습니다.")
+      }
     } catch (error) {
       console.error("Comment failed:", error)
       setComments((prev) => prev.filter((comment) => comment.id !== optimisticComment.id))
