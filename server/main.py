@@ -42,6 +42,8 @@ from db import (
     get_user_by_id,
     update_user_profile,
     get_user_projects,
+    get_user_comments,
+    get_user_liked_projects,
     get_admin_projects,
     update_project_admin,
     update_project_owner_fields,
@@ -1021,28 +1023,6 @@ def get_project_detail(project_id: str):
     return project
 
 
-@app.post("/api/projects/{project_id}/like")
-def like_project_endpoint(project_id: str):
-    """프로젝트 좋아요"""
-    try:
-        like_count = like_project(project_id)
-        _invalidate_projects_cache()
-        return {"like_count": like_count}
-    except Exception:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-
-@app.delete("/api/projects/{project_id}/like")
-def unlike_project_endpoint(project_id: str):
-    """프로젝트 좋아요 취소"""
-    try:
-        like_count = unlike_project(project_id)
-        _invalidate_projects_cache()
-        return {"like_count": like_count}
-    except Exception:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-
 # ============ Comments API ============
 
 
@@ -1120,6 +1100,32 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         "avatar_url": user.get("avatar_url"),
         "bio": user.get("bio"),
     }
+
+
+@app.post("/api/projects/{project_id}/like")
+def like_project_endpoint(
+    project_id: str,
+    current_user: UserContext = Depends(get_current_user),
+):
+    try:
+        like_count = like_project(project_id, current_user["id"])
+        _invalidate_projects_cache()
+        return {"like_count": like_count}
+    except Exception:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+
+@app.delete("/api/projects/{project_id}/like")
+def unlike_project_endpoint(
+    project_id: str,
+    current_user: UserContext = Depends(get_current_user),
+):
+    try:
+        like_count = unlike_project(project_id, current_user["id"])
+        _invalidate_projects_cache()
+        return {"like_count": like_count}
+    except Exception:
+        raise HTTPException(status_code=404, detail="Project not found")
 
 
 async def require_admin(current_user: UserContext = Depends(get_current_user)):
@@ -2199,6 +2205,33 @@ def create_comment_endpoint(
 def get_my_projects(current_user: UserContext = Depends(get_current_user)):
     """내 프로젝트 목록"""
     projects = get_user_projects(current_user["id"])
+    for p in projects:
+        p["id"] = str(p["id"])
+        p["author_id"] = str(p["author_id"])
+    return {"items": projects, "next_cursor": None}
+
+
+@app.get("/api/me/comments")
+def get_my_comments(
+    limit: int = 50,
+    current_user: UserContext = Depends(get_current_user),
+):
+    comments = get_user_comments(current_user["id"], limit)
+    for c in comments:
+        c["id"] = str(c["id"])
+        c["project_id"] = str(c["project_id"])
+        c["author_id"] = str(c["author_id"])
+        if c.get("parent_id"):
+            c["parent_id"] = str(c["parent_id"])
+    return {"items": comments, "next_cursor": None}
+
+
+@app.get("/api/me/liked-projects")
+def get_my_liked_projects(
+    limit: int = 50,
+    current_user: UserContext = Depends(get_current_user),
+):
+    projects = get_user_liked_projects(current_user["id"], limit)
     for p in projects:
         p["id"] = str(p["id"])
         p["author_id"] = str(p["author_id"])

@@ -108,6 +108,15 @@ def init_db():
                 )
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS project_likes (
+                    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+                    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (project_id, user_id)
+                )
+            """)
+
             # Reports 테이블
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
@@ -297,6 +306,10 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_projects_tags_gin
                 ON projects USING GIN (tags)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_project_likes_user_id_created_at
+                ON project_likes (user_id, created_at DESC)
             """)
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_provider_user_id
@@ -542,38 +555,116 @@ def create_project(data: dict[str, object]):
             return cur.fetchone()
 
 
-def like_project(project_id: str):
+def like_project(project_id: str, user_id: str):
     """프로젝트 좋아요 증가"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                UPDATE projects SET like_count = like_count + 1
-                WHERE id = %s
-                RETURNING like_count
-            """,
-                (project_id,),
+                INSERT INTO project_likes (project_id, user_id)
+                VALUES (%s, %s)
+                ON CONFLICT (project_id, user_id) DO NOTHING
+                RETURNING project_id
+                """,
+                (project_id, user_id),
             )
+
+            inserted = cur.fetchone()
+            if inserted:
+                cur.execute(
+                    """
+                    UPDATE projects SET like_count = like_count + 1
+                    WHERE id = %s
+                    RETURNING like_count
+                    """,
+                    (project_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT like_count
+                    FROM projects
+                    WHERE id = %s
+                    """,
+                    (project_id,),
+                )
+
             conn.commit()
             result = cur.fetchone()
             return result["like_count"] if result else 0
 
 
-def unlike_project(project_id: str):
+def unlike_project(project_id: str, user_id: str):
     """프로젝트 좋아요 취소"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                UPDATE projects SET like_count = GREATEST(0, like_count - 1)
-                WHERE id = %s
-                RETURNING like_count
-            """,
-                (project_id,),
+                DELETE FROM project_likes
+                WHERE project_id = %s AND user_id = %s
+                RETURNING project_id
+                """,
+                (project_id, user_id),
             )
+
+            deleted = cur.fetchone()
+            if deleted:
+                cur.execute(
+                    """
+                    UPDATE projects SET like_count = GREATEST(0, like_count - 1)
+                    WHERE id = %s
+                    RETURNING like_count
+                    """,
+                    (project_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT like_count
+                    FROM projects
+                    WHERE id = %s
+                    """,
+                    (project_id,),
+                )
+
             conn.commit()
             result = cur.fetchone()
             return result["like_count"] if result else 0
+
+
+def get_user_comments(user_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT c.*, p.title as project_title
+                FROM comments c
+                JOIN projects p ON p.id = c.project_id
+                WHERE c.author_id = %s
+                ORDER BY c.created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            return cur.fetchall()
+
+
+def get_user_liked_projects(user_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT p.*, u.nickname as author_nickname, pl.created_at as liked_at
+                FROM project_likes pl
+                JOIN projects p ON p.id = pl.project_id
+                JOIN users u ON u.id = p.author_id
+                WHERE pl.user_id = %s
+                ORDER BY pl.created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            return cur.fetchall()
 
 
 def get_comments(project_id: str, sort: str = "latest"):

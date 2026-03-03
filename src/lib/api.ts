@@ -38,6 +38,10 @@ export interface Comment {
   created_at: string
 }
 
+export interface ProfileComment extends Comment {
+  project_title: string
+}
+
 export interface Report {
   id: string
   target_type: string
@@ -168,6 +172,7 @@ type AdminReportsResponse = { items: Report[]; total: number }
 type AdminListResponse<T> = { items: T[] }
 type ProjectsResponse = { items: Project[] }
 type CommentsResponse = { items: Comment[] }
+type ProfileCommentsResponse = { items: ProfileComment[] }
 
 async function authFetch(url: string, options: RequestInit = {}) {
   const token = getToken()
@@ -997,6 +1002,18 @@ export const api = {
   // My Projects
   getMyProjects: async () => {
     const res = await authFetch(`${API_BASE}/api/me/projects`)
-    return res.json()
+    return res.json() as Promise<ProjectsResponse>
+  },
+
+  getMyComments: async (limit: number = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const res = await authFetch(`${API_BASE}/api/me/comments?${params.toString()}`)
+    return res.json() as Promise<ProfileCommentsResponse>
+  },
+
+  getMyLikedProjects: async (limit: number = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const res = await authFetch(`${API_BASE}/api/me/liked-projects?${params.toString()}`)
+    return res.json() as Promise<ProjectsResponse>
   },
 }
