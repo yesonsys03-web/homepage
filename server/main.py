@@ -15,6 +15,7 @@ import time
 import os
 import json
 import secrets
+import uuid
 from xml.sax.saxutils import escape as xml_escape
 from urllib.parse import urlparse, urlencode, quote
 from urllib.request import Request as UrlRequest, urlopen
@@ -77,6 +78,12 @@ from db import (
     cleanup_oauth_state_tokens,
     get_site_content,
     upsert_site_content,
+    get_page_document_draft,
+    save_page_document_draft,
+    publish_page_document,
+    list_page_document_versions,
+    get_page_document_version,
+    rollback_page_document,
 )
 from auth import (
     verify_password,
@@ -567,6 +574,57 @@ class AboutContentUpdateRequest(BaseModel):
     reason: Optional[str] = None
 
 
+class PageSeoPayload(BaseModel):
+    metaTitle: str
+    metaDescription: str
+    ogImage: Optional[str] = None
+
+
+class PageBlockPayload(BaseModel):
+    id: str
+    type: Literal[
+        "hero",
+        "rich_text",
+        "image",
+        "cta",
+        "faq",
+        "gallery",
+        "feature_list",
+    ]
+    order: int
+    visible: bool
+    content: dict[str, object]
+    style: Optional[dict[str, object]] = None
+
+
+class PageDocumentPayload(BaseModel):
+    pageId: str
+    status: Literal["draft", "published"]
+    version: int
+    title: str
+    seo: PageSeoPayload
+    blocks: list[PageBlockPayload]
+    updatedBy: str
+    updatedAt: str
+
+
+class AdminPageDraftUpdateRequest(BaseModel):
+    baseVersion: int
+    document: PageDocumentPayload
+    reason: Optional[str] = None
+
+
+class AdminPagePublishRequest(BaseModel):
+    reason: Optional[str] = None
+    draftVersion: Optional[int] = None
+
+
+class AdminPageRollbackRequest(BaseModel):
+    targetVersion: int
+    reason: Optional[str] = None
+    publishNow: bool = False
+
+
 def require_action_reason(reason: Optional[str]) -> str:
     normalized_reason = (reason or "").strip()
     if not normalized_reason:
@@ -700,6 +758,112 @@ def get_about_content_payload() -> dict[str, object]:
     content = seeded["content_json"]
     content["updated_at"] = seeded.get("updated_at")
     return content
+
+
+def build_page_document_from_about_content(
+    page_id: str,
+    about_content: Mapping[str, object],
+    version: int,
+) -> dict[str, object]:
+    updated_at = str(about_content.get("updated_at") or "")
+    hero_block = {
+        "id": "hero",
+        "type": "hero",
+        "order": 0,
+        "visible": True,
+        "content": {
+            "headline": str(about_content.get("hero_title", "")),
+            "highlight": str(about_content.get("hero_highlight", "")),
+            "description": str(about_content.get("hero_description", "")),
+            "contactEmail": str(about_content.get("contact_email", "")),
+        },
+    }
+    values_block = {
+        "id": "values",
+        "type": "feature_list",
+        "order": 1,
+        "visible": True,
+        "content": {
+            "items": cast(list[dict[str, object]], about_content.get("values", [])),
+        },
+    }
+    team_block = {
+        "id": "team",
+        "type": "feature_list",
+        "order": 2,
+        "visible": True,
+        "content": {
+            "items": cast(
+                list[dict[str, object]],
+                about_content.get("team_members", []),
+            ),
+        },
+    }
+    faq_block = {
+        "id": "faq",
+        "type": "faq",
+        "order": 3,
+        "visible": True,
+        "content": {
+            "items": cast(list[dict[str, object]], about_content.get("faqs", [])),
+        },
+    }
+
+    return {
+        "pageId": page_id,
+        "status": "draft",
+        "version": version,
+        "title": "About Page",
+        "seo": {
+            "metaTitle": str(about_content.get("hero_title", "About")),
+            "metaDescription": str(about_content.get("hero_description", "")),
+            "ogImage": None,
+        },
+        "blocks": [hero_block, values_block, team_block, faq_block],
+        "updatedBy": "system",
+        "updatedAt": updated_at,
+    }
+
+
+def extract_about_content_from_page_document(
+    document: Mapping[str, object],
+) -> dict[str, object]:
+    blocks_raw = document.get("blocks", [])
+    blocks = cast(list[dict[str, object]], blocks_raw)
+    hero = next(
+        (
+            block
+            for block in blocks
+            if block.get("id") == "hero" and block.get("type") == "hero"
+        ),
+        None,
+    )
+    values = next((block for block in blocks if block.get("id") == "values"), None)
+    team = next((block for block in blocks if block.get("id") == "team"), None)
+    faq = next((block for block in blocks if block.get("id") == "faq"), None)
+
+    hero_content = cast(dict[str, object], hero.get("content", {})) if hero else {}
+    values_content = (
+        cast(dict[str, object], values.get("content", {})) if values else {}
+    )
+    team_content = cast(dict[str, object], team.get("content", {})) if team else {}
+    faq_content = cast(dict[str, object], faq.get("content", {})) if faq else {}
+
+    return {
+        "hero_title": str(hero_content.get("headline", "")),
+        "hero_highlight": str(hero_content.get("highlight", "")),
+        "hero_description": str(hero_content.get("description", "")),
+        "contact_email": str(hero_content.get("contactEmail", "")),
+        "values": cast(list[dict[str, object]], values_content.get("items", [])),
+        "team_members": cast(list[dict[str, object]], team_content.get("items", [])),
+        "faqs": cast(list[dict[str, object]], faq_content.get("items", [])),
+    }
+
+
+def page_action_target_id(page_id: str) -> str:
+    if page_id == ABOUT_CONTENT_KEY:
+        return ABOUT_CONTENT_TARGET_ID
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"vibecoder:page:{page_id}"))
 
 
 def normalize_text_for_filter(text: str) -> str:
@@ -2070,6 +2234,218 @@ def update_admin_policies(
     )
 
     return get_effective_moderation_settings()
+
+
+@app.get("/api/admin/pages/{page_id}/draft")
+def get_admin_page_draft(
+    page_id: str,
+    current_user: UserContext = Depends(require_admin),
+):
+    _ = current_user
+    draft = get_page_document_draft(page_id)
+    if draft and draft.get("document_json"):
+        document = cast(dict[str, object], draft["document_json"])
+        document["version"] = int(draft.get("draft_version", 0))
+        document["updatedAt"] = str(draft.get("updated_at") or "")
+        document["updatedBy"] = str(draft.get("updated_by") or "system")
+        return {
+            "pageId": page_id,
+            "baseVersion": int(draft.get("draft_version", 0)),
+            "publishedVersion": int(draft.get("published_version", 0)),
+            "document": document,
+        }
+
+    if page_id == ABOUT_CONTENT_KEY:
+        about_payload = get_about_content_payload()
+        document = build_page_document_from_about_content(page_id, about_payload, 0)
+        return {
+            "pageId": page_id,
+            "baseVersion": 0,
+            "publishedVersion": 0,
+            "document": document,
+        }
+
+    return {
+        "pageId": page_id,
+        "baseVersion": 0,
+        "publishedVersion": 0,
+        "document": {
+            "pageId": page_id,
+            "status": "draft",
+            "version": 0,
+            "title": "Untitled Page",
+            "seo": {
+                "metaTitle": "",
+                "metaDescription": "",
+                "ogImage": None,
+            },
+            "blocks": [],
+            "updatedBy": "system",
+            "updatedAt": "",
+        },
+    }
+
+
+@app.put("/api/admin/pages/{page_id}/draft")
+def update_admin_page_draft(
+    page_id: str,
+    payload: AdminPageDraftUpdateRequest,
+    current_user: UserContext = Depends(require_admin),
+):
+    if payload.document.pageId != page_id:
+        raise HTTPException(status_code=400, detail="pageId가 경로와 일치하지 않습니다")
+
+    result = save_page_document_draft(
+        page_id=page_id,
+        base_version=payload.baseVersion,
+        document_json=payload.document.model_dump(),
+        actor_id=current_user["id"],
+        reason=payload.reason,
+    )
+    if cast(bool, result.get("conflict", False)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "page_version_conflict",
+                "message": "다른 편집 내용이 먼저 저장되었습니다",
+                "current_version": cast(int, result.get("current_version", 0)),
+                "field_errors": [],
+            },
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="page_draft_saved",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=(payload.reason or "draft save").strip(),
+    )
+
+    saved_version = cast(int, result.get("saved_version", 0))
+    response_doc = payload.document.model_dump()
+    response_doc["version"] = saved_version
+    response_doc["updatedBy"] = current_user["id"]
+
+    return {
+        "savedVersion": saved_version,
+        "document": response_doc,
+    }
+
+
+@app.post("/api/admin/pages/{page_id}/publish")
+def publish_admin_page(
+    page_id: str,
+    payload: AdminPagePublishRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    reason = require_action_reason(payload.reason)
+    published = publish_page_document(
+        page_id=page_id,
+        actor_id=current_user["id"],
+        reason=reason,
+        draft_version=payload.draftVersion,
+    )
+    if not published:
+        raise HTTPException(status_code=404, detail="게시할 draft를 찾을 수 없습니다")
+
+    published_version = cast(int, published["published_version"])
+    if page_id == ABOUT_CONTENT_KEY:
+        published_doc = get_page_document_version(page_id, published_version)
+        if published_doc and published_doc.get("document_json"):
+            about_payload = extract_about_content_from_page_document(
+                cast(dict[str, object], published_doc["document_json"])
+            )
+            _ = upsert_site_content(ABOUT_CONTENT_KEY, about_payload)
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="page_published",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=reason,
+    )
+
+    return {
+        "publishedVersion": published_version,
+    }
+
+
+@app.get("/api/admin/pages/{page_id}/versions")
+def list_admin_page_versions(
+    page_id: str,
+    limit: int = 50,
+    current_user: UserContext = Depends(require_admin),
+):
+    _ = current_user
+    items = list_page_document_versions(page_id=page_id, limit=limit)
+    for item in items:
+        item["created_by"] = str(item.get("created_by") or "")
+        item["page_id"] = str(item.get("page_id") or page_id)
+    return {
+        "items": items,
+        "next_cursor": None,
+    }
+
+
+@app.get("/api/admin/pages/{page_id}/versions/{version}")
+def get_admin_page_version(
+    page_id: str,
+    version: int,
+    current_user: UserContext = Depends(require_admin),
+):
+    _ = current_user
+    record = get_page_document_version(page_id, version)
+    if not record:
+        raise HTTPException(status_code=404, detail="버전을 찾을 수 없습니다")
+    return {
+        "pageId": page_id,
+        "version": int(record["version"]),
+        "status": record["status"],
+        "reason": record.get("reason"),
+        "createdBy": str(record.get("created_by") or ""),
+        "createdAt": str(record.get("created_at") or ""),
+        "document": record.get("document_json"),
+    }
+
+
+@app.post("/api/admin/pages/{page_id}/rollback")
+def rollback_admin_page(
+    page_id: str,
+    payload: AdminPageRollbackRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    reason = require_action_reason(payload.reason)
+    restored = rollback_page_document(
+        page_id=page_id,
+        target_version=payload.targetVersion,
+        actor_id=current_user["id"],
+        reason=reason,
+        publish_now=payload.publishNow,
+    )
+    if not restored:
+        raise HTTPException(status_code=404, detail="복원 대상 버전을 찾을 수 없습니다")
+
+    published_version = cast(Optional[int], restored.get("published_version"))
+    if payload.publishNow and published_version and page_id == ABOUT_CONTENT_KEY:
+        published_doc = get_page_document_version(page_id, published_version)
+        if published_doc and published_doc.get("document_json"):
+            about_payload = extract_about_content_from_page_document(
+                cast(dict[str, object], published_doc["document_json"])
+            )
+            _ = upsert_site_content(ABOUT_CONTENT_KEY, about_payload)
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="page_rolled_back",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=reason,
+    )
+
+    return {
+        "restoredDraftVersion": cast(int, restored["restored_draft_version"]),
+        "publishedVersion": published_version,
+    }
 
 
 @app.patch("/api/admin/content/about")

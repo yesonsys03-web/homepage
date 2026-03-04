@@ -156,6 +156,58 @@ export interface AboutContent {
   updated_at?: string
 }
 
+export interface PageSeo {
+  metaTitle: string
+  metaDescription: string
+  ogImage?: string | null
+}
+
+export interface PageBlock {
+  id: string
+  type: "hero" | "rich_text" | "image" | "cta" | "faq" | "gallery" | "feature_list"
+  order: number
+  visible: boolean
+  content: Record<string, unknown>
+  style?: Record<string, unknown>
+}
+
+export interface PageDocument {
+  pageId: string
+  status: "draft" | "published"
+  version: number
+  title: string
+  seo: PageSeo
+  blocks: PageBlock[]
+  updatedBy: string
+  updatedAt: string
+}
+
+export interface AdminPageDraftResponse {
+  pageId: string
+  baseVersion: number
+  publishedVersion: number
+  document: PageDocument
+}
+
+export interface AdminPageVersionListItem {
+  page_id: string
+  version: number
+  status: "draft" | "published"
+  reason?: string | null
+  created_by?: string | null
+  created_at: string
+}
+
+export interface AdminPageVersionDetail {
+  pageId: string
+  version: number
+  status: "draft" | "published"
+  reason?: string | null
+  createdBy?: string | null
+  createdAt: string
+  document: PageDocument
+}
+
 export interface AdminOAuthSettings {
   google_oauth_enabled: boolean
   google_redirect_uri: string
@@ -1045,6 +1097,49 @@ export const api = {
       body: JSON.stringify(payload),
     })
     return res.json() as Promise<AdminOAuthSettings>
+  },
+
+  getAdminPageDraft: async (pageId: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/draft`)
+    return res.json() as Promise<AdminPageDraftResponse>
+  },
+
+  updateAdminPageDraft: async (pageId: string, baseVersion: number, document: PageDocument, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/draft`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ baseVersion, document, reason }),
+    })
+    return res.json() as Promise<{ savedVersion: number; document: PageDocument }>
+  },
+
+  publishAdminPage: async (pageId: string, reason: string, draftVersion?: number) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/publish`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason, draftVersion }),
+    })
+    return res.json() as Promise<{ publishedVersion: number }>
+  },
+
+  getAdminPageVersions: async (pageId: string, limit: number = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/versions?${params.toString()}`)
+    return res.json() as Promise<{ items: AdminPageVersionListItem[]; next_cursor: string | null }>
+  },
+
+  getAdminPageVersion: async (pageId: string, version: number) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/versions/${version}`)
+    return res.json() as Promise<AdminPageVersionDetail>
+  },
+
+  rollbackAdminPage: async (pageId: string, targetVersion: number, reason: string, publishNow: boolean = false) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/rollback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetVersion, reason, publishNow }),
+    })
+    return res.json() as Promise<{ restoredDraftVersion: number; publishedVersion?: number | null }>
   },
 
   updateAboutContent: async (payload: AboutContent & { reason: string }) => {

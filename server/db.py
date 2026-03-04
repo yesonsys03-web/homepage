@@ -164,6 +164,27 @@ def init_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS page_documents_current (
+                    page_id VARCHAR(100) PRIMARY KEY,
+                    draft_version INTEGER NOT NULL DEFAULT 0,
+                    published_version INTEGER NOT NULL DEFAULT 0,
+                    updated_by UUID REFERENCES users(id),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS page_document_versions (
+                    page_id VARCHAR(100) NOT NULL,
+                    version INTEGER NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    document_json JSONB NOT NULL,
+                    reason TEXT,
+                    created_by UUID REFERENCES users(id),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (page_id, version)
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS oauth_runtime_settings (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
                     google_oauth_enabled BOOLEAN DEFAULT FALSE,
@@ -346,6 +367,10 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_admin_action_logs_action_type
                 ON admin_action_logs (action_type)
             """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_page_document_versions_page_created_at
+                ON page_document_versions (page_id, created_at DESC)
+            """)
 
             conn.commit()
             print("✅ Database tables initialized successfully!")
@@ -358,6 +383,34 @@ def ensure_site_contents_table(cur):
             content_key VARCHAR(100) PRIMARY KEY,
             content_json JSONB NOT NULL,
             updated_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
+
+
+def ensure_page_documents_tables(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS page_documents_current (
+            page_id VARCHAR(100) PRIMARY KEY,
+            draft_version INTEGER NOT NULL DEFAULT 0,
+            published_version INTEGER NOT NULL DEFAULT 0,
+            updated_by UUID REFERENCES users(id),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS page_document_versions (
+            page_id VARCHAR(100) NOT NULL,
+            version INTEGER NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            document_json JSONB NOT NULL,
+            reason TEXT,
+            created_by UUID REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (page_id, version)
         )
         """
     )
@@ -1478,6 +1531,311 @@ def upsert_site_content(content_key: str, content_json: Mapping[str, object]):
             )
             conn.commit()
             return cur.fetchone()
+
+
+def get_page_document_draft(page_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT c.page_id,
+                       c.draft_version,
+                       c.published_version,
+                       c.updated_by,
+                       c.updated_at,
+                       v.document_json
+                FROM page_documents_current c
+                LEFT JOIN page_document_versions v
+                  ON v.page_id = c.page_id AND v.version = c.draft_version
+                WHERE c.page_id = %s
+                """,
+                (page_id,),
+            )
+            return cur.fetchone()
+
+
+def save_page_document_draft(
+    page_id: str,
+    base_version: int,
+    document_json: Mapping[str, object],
+    actor_id: str,
+    reason: Optional[str] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, draft_version, published_version
+                FROM page_documents_current
+                WHERE page_id = %s
+                FOR UPDATE
+                """,
+                (page_id,),
+            )
+            current = cur.fetchone()
+
+            if not current:
+                if base_version != 0:
+                    conn.rollback()
+                    return {
+                        "conflict": True,
+                        "current_version": 0,
+                    }
+
+                saved_version = 1
+                cur.execute(
+                    """
+                    INSERT INTO page_document_versions
+                        (page_id, version, status, document_json, reason, created_by, created_at)
+                    VALUES (%s, %s, 'draft', %s, %s, %s, NOW())
+                    """,
+                    (page_id, saved_version, Json(document_json), reason, actor_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO page_documents_current
+                        (page_id, draft_version, published_version, updated_by, updated_at)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    """,
+                    (page_id, saved_version, 0, actor_id),
+                )
+            else:
+                current_version = int(current["draft_version"])
+                if base_version != current_version:
+                    conn.rollback()
+                    return {
+                        "conflict": True,
+                        "current_version": current_version,
+                    }
+
+                saved_version = current_version + 1
+                cur.execute(
+                    """
+                    INSERT INTO page_document_versions
+                        (page_id, version, status, document_json, reason, created_by, created_at)
+                    VALUES (%s, %s, 'draft', %s, %s, %s, NOW())
+                    """,
+                    (page_id, saved_version, Json(document_json), reason, actor_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE page_documents_current
+                    SET draft_version = %s,
+                        updated_by = %s,
+                        updated_at = NOW()
+                    WHERE page_id = %s
+                    """,
+                    (saved_version, actor_id, page_id),
+                )
+
+            conn.commit()
+            return {
+                "conflict": False,
+                "saved_version": saved_version,
+            }
+
+
+def publish_page_document(
+    page_id: str,
+    actor_id: str,
+    reason: str,
+    draft_version: Optional[int] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, draft_version, published_version
+                FROM page_documents_current
+                WHERE page_id = %s
+                FOR UPDATE
+                """,
+                (page_id,),
+            )
+            current = cur.fetchone()
+            if not current:
+                conn.rollback()
+                return None
+
+            selected_draft_version = (
+                int(draft_version)
+                if draft_version is not None
+                else int(current["draft_version"])
+            )
+            if selected_draft_version <= 0:
+                conn.rollback()
+                return None
+
+            cur.execute(
+                """
+                SELECT document_json
+                FROM page_document_versions
+                WHERE page_id = %s AND version = %s
+                """,
+                (page_id, selected_draft_version),
+            )
+            source = cur.fetchone()
+            if not source:
+                conn.rollback()
+                return None
+
+            published_version = int(current["draft_version"]) + 1
+            cur.execute(
+                """
+                INSERT INTO page_document_versions
+                    (page_id, version, status, document_json, reason, created_by, created_at)
+                VALUES (%s, %s, 'published', %s, %s, %s, NOW())
+                """,
+                (
+                    page_id,
+                    published_version,
+                    source["document_json"],
+                    reason,
+                    actor_id,
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE page_documents_current
+                SET draft_version = %s,
+                    published_version = %s,
+                    updated_by = %s,
+                    updated_at = NOW()
+                WHERE page_id = %s
+                """,
+                (published_version, published_version, actor_id, page_id),
+            )
+            conn.commit()
+            return {
+                "source_version": selected_draft_version,
+                "published_version": published_version,
+            }
+
+
+def list_page_document_versions(page_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, version, status, reason, created_by, created_at
+                FROM page_document_versions
+                WHERE page_id = %s
+                ORDER BY version DESC
+                LIMIT %s
+                """,
+                (page_id, limit),
+            )
+            return cur.fetchall()
+
+
+def get_page_document_version(page_id: str, version: int):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, version, status, reason, created_by, created_at, document_json
+                FROM page_document_versions
+                WHERE page_id = %s AND version = %s
+                """,
+                (page_id, version),
+            )
+            return cur.fetchone()
+
+
+def rollback_page_document(
+    page_id: str,
+    target_version: int,
+    actor_id: str,
+    reason: str,
+    publish_now: bool = False,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, draft_version, published_version
+                FROM page_documents_current
+                WHERE page_id = %s
+                FOR UPDATE
+                """,
+                (page_id,),
+            )
+            current = cur.fetchone()
+            if not current:
+                conn.rollback()
+                return None
+
+            cur.execute(
+                """
+                SELECT document_json
+                FROM page_document_versions
+                WHERE page_id = %s AND version = %s
+                """,
+                (page_id, target_version),
+            )
+            source = cur.fetchone()
+            if not source:
+                conn.rollback()
+                return None
+
+            next_version = int(current["draft_version"]) + 1
+            cur.execute(
+                """
+                INSERT INTO page_document_versions
+                    (page_id, version, status, document_json, reason, created_by, created_at)
+                VALUES (%s, %s, 'draft', %s, %s, %s, NOW())
+                """,
+                (
+                    page_id,
+                    next_version,
+                    source["document_json"],
+                    reason,
+                    actor_id,
+                ),
+            )
+            final_published_version = int(current["published_version"])
+
+            if publish_now:
+                publish_version = next_version + 1
+                cur.execute(
+                    """
+                    INSERT INTO page_document_versions
+                        (page_id, version, status, document_json, reason, created_by, created_at)
+                    VALUES (%s, %s, 'published', %s, %s, %s, NOW())
+                    """,
+                    (
+                        page_id,
+                        publish_version,
+                        source["document_json"],
+                        reason,
+                        actor_id,
+                    ),
+                )
+                next_version = publish_version
+                final_published_version = publish_version
+
+            cur.execute(
+                """
+                UPDATE page_documents_current
+                SET draft_version = %s,
+                    published_version = %s,
+                    updated_by = %s,
+                    updated_at = NOW()
+                WHERE page_id = %s
+                """,
+                (next_version, final_published_version, actor_id, page_id),
+            )
+            conn.commit()
+            return {
+                "restored_draft_version": next_version,
+                "published_version": final_published_version if publish_now else None,
+            }
 
 
 def create_user(email: str, nickname: str, password_hash: str, status: str = "pending"):
