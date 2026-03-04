@@ -1011,7 +1011,12 @@ def get_admin_users(limit: int = 200):
             return cur.fetchall()
 
 
-def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
+def limit_user(
+    user_id: str,
+    hours: int = 24,
+    reason: Optional[str] = None,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -1019,17 +1024,19 @@ def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
                 UPDATE users
                 SET limited_until = NOW() + (%s || ' hours')::INTERVAL,
                     limited_reason = %s
-                WHERE id = %s AND role != 'admin'
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (hours, reason, user_id),
+                (hours, reason, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def unlimit_user(user_id: str):
+def unlimit_user(user_id: str, allow_admin_target: bool = False):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -1037,11 +1044,13 @@ def unlimit_user(user_id: str):
                 UPDATE users
                 SET limited_until = NULL,
                     limited_reason = NULL
-                WHERE id = %s AND role != 'admin'
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (user_id,),
+                (user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
@@ -1103,7 +1112,12 @@ def set_user_role(user_id: str, role: str):
             return cur.fetchone()
 
 
-def suspend_user(user_id: str, admin_id: str, reason: str):
+def suspend_user(
+    user_id: str,
+    admin_id: str,
+    reason: str,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -1115,11 +1129,13 @@ def suspend_user(user_id: str, admin_id: str, reason: str):
                     suspended_by = %s,
                     token_version = token_version + 1,
                     updated_at = NOW()
-                WHERE id = %s AND role != 'admin'
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (reason, admin_id, user_id),
+                (reason, admin_id, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
@@ -1164,7 +1180,13 @@ def revoke_user_tokens(user_id: str):
             return cur.fetchone()
 
 
-def schedule_user_deletion(user_id: str, admin_id: str, days: int, reason: str):
+def schedule_user_deletion(
+    user_id: str,
+    admin_id: str,
+    days: int,
+    reason: str,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -1177,17 +1199,19 @@ def schedule_user_deletion(user_id: str, admin_id: str, days: int, reason: str):
                     suspended_by = %s,
                     token_version = token_version + 1,
                     updated_at = NOW()
-                WHERE id = %s AND role NOT IN ('admin', 'super_admin')
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (days, reason, admin_id, user_id),
+                (days, reason, admin_id, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def cancel_user_deletion(user_id: str):
+def cancel_user_deletion(user_id: str, allow_admin_target: bool = False):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -1199,17 +1223,25 @@ def cancel_user_deletion(user_id: str):
                     suspended_at = NULL,
                     suspended_by = NULL,
                     updated_at = NOW()
-                WHERE id = %s AND status = 'pending_delete' AND role NOT IN ('admin', 'super_admin')
+                WHERE id = %s
+                  AND status = 'pending_delete'
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (user_id,),
+                (user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def delete_user_now(user_id: str, admin_id: str, reason: str):
+def delete_user_now(
+    user_id: str,
+    admin_id: str,
+    reason: str,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -1224,11 +1256,13 @@ def delete_user_now(user_id: str, admin_id: str, reason: str):
                     suspended_by = %s,
                     token_version = token_version + 1,
                     updated_at = NOW()
-                WHERE id = %s AND role NOT IN ('admin', 'super_admin')
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (admin_id, reason, admin_id, user_id),
+                (admin_id, reason, admin_id, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()

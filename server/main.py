@@ -1675,11 +1675,19 @@ def limit_user_endpoint(
     payload: AdminUserLimitRequest,
     current_user: UserContext = Depends(require_admin),
 ):
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     if payload.hours <= 0:
         raise HTTPException(status_code=400, detail="hours는 1 이상이어야 합니다")
 
     limited_user = limit_user(
-        user_id=user_id, hours=payload.hours, reason=payload.reason
+        user_id=user_id,
+        hours=payload.hours,
+        reason=payload.reason,
+        allow_admin_target=current_user.get("role") == "super_admin",
     )
     if not limited_user:
         raise HTTPException(
@@ -1703,7 +1711,15 @@ def unlimit_user_endpoint(
     user_id: str,
     current_user: UserContext = Depends(require_admin),
 ):
-    released_user = unlimit_user(user_id=user_id)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
+    released_user = unlimit_user(
+        user_id=user_id,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     if not released_user:
         raise HTTPException(
             status_code=404, detail="사용자를 찾을 수 없거나 해제할 수 없습니다"
@@ -1727,10 +1743,17 @@ def suspend_user_endpoint(
     payload: AdminActionReasonRequest,
     current_user: UserContext = Depends(require_admin),
 ):
-    validate_enforcement_target(user_id, current_user)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     reason = require_action_reason(payload.reason)
     suspended_user = suspend_user(
-        user_id=user_id, admin_id=current_user["id"], reason=reason
+        user_id=user_id,
+        admin_id=current_user["id"],
+        reason=reason,
+        allow_admin_target=current_user.get("role") == "super_admin",
     )
     if not suspended_user:
         raise HTTPException(
@@ -1785,7 +1808,11 @@ def revoke_user_tokens_endpoint(
     payload: AdminActionReasonRequest,
     current_user: UserContext = Depends(require_admin),
 ):
-    validate_enforcement_target(user_id, current_user)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     reason = (
         payload.reason.strip() if isinstance(payload.reason, str) else "세션 무효화"
     )
@@ -1813,7 +1840,11 @@ def schedule_user_delete_endpoint(
     payload: AdminUserDeleteScheduleRequest,
     current_user: UserContext = Depends(require_admin),
 ):
-    validate_enforcement_target(user_id, current_user)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     if payload.days < 1:
         raise HTTPException(status_code=400, detail="days는 1 이상이어야 합니다")
 
@@ -1823,6 +1854,7 @@ def schedule_user_delete_endpoint(
         admin_id=current_user["id"],
         days=payload.days,
         reason=reason,
+        allow_admin_target=current_user.get("role") == "super_admin",
     )
     if not scheduled_user:
         raise HTTPException(
@@ -1849,8 +1881,15 @@ def cancel_user_delete_schedule_endpoint(
     user_id: str,
     current_user: UserContext = Depends(require_admin),
 ):
-    validate_enforcement_target(user_id, current_user)
-    restored_user = cancel_user_deletion(user_id=user_id)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
+    restored_user = cancel_user_deletion(
+        user_id=user_id,
+        allow_admin_target=current_user.get("role") == "super_admin",
+    )
     if not restored_user:
         raise HTTPException(
             status_code=404,
@@ -1875,12 +1914,17 @@ def delete_user_now_endpoint(
     payload: AdminActionReasonRequest,
     current_user: UserContext = Depends(require_super_admin),
 ):
-    validate_enforcement_target(user_id, current_user)
+    validate_enforcement_target(
+        user_id,
+        current_user,
+        allow_admin_target=True,
+    )
     reason = require_action_reason(payload.reason)
     deleted_user = delete_user_now(
         user_id=user_id,
         admin_id=current_user["id"],
         reason=reason,
+        allow_admin_target=True,
     )
     if not deleted_user:
         raise HTTPException(

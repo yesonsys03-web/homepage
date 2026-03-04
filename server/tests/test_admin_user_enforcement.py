@@ -307,6 +307,102 @@ def test_unsuspend_admin_target_allowed_for_super_admin(
     assert response.json()["role"] == "admin"
 
 
+def test_suspend_admin_target_requires_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "admin-1", role="admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+
+    response = client.post(
+        "/api/admin/users/target-admin/suspend",
+        json={"reason": "policy"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "관리자 계정에는 적용할 수 없습니다"
+
+
+def test_suspend_admin_target_allowed_for_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "suspend_user",
+        lambda **_: {
+            "id": "target-admin",
+            "status": "suspended",
+            "role": "admin",
+            "suspended_by": "super-1",
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/users/target-admin/suspend",
+        json={"reason": "policy"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "suspended"
+    assert response.json()["role"] == "admin"
+
+
+def test_delete_now_admin_target_allowed_for_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "delete_user_now",
+        lambda **_: {
+            "id": "target-admin",
+            "status": "deleted",
+            "role": "admin",
+            "deleted_by": "super-1",
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/users/target-admin/delete-now",
+        json={"reason": "incident"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleted"
+    assert response.json()["role"] == "admin"
+
+
 def test_due_deletion_cleanup_logs_deleted_users(monkeypatch: Any) -> None:
     captured: list[dict[str, Any]] = []
     monkeypatch.setattr(

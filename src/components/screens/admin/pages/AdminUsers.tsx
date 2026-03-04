@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { getUserApprovalState, getUserLimitState, useAdminUsers } from "@/components/screens/admin/hooks/useAdminUsers"
 import type { AdminManagedUser } from "@/lib/api"
+import { useAuth } from "@/lib/use-auth"
 
 type UserActionType =
   | "approve"
@@ -32,6 +33,8 @@ const USER_TABLE_COLUMNS: DataTableColumn[] = [
 
 export function AdminUsers() {
   const { users, loadingUsers, actions } = useAdminUsers()
+  const { user: currentUser } = useAuth()
+  const isSuperAdmin = currentUser?.role === "super_admin"
   const [search, setSearch] = useState("")
   const [selected, setSelected] = useState<AdminManagedUser | null>(null)
   const [actionType, setActionType] = useState<UserActionType | null>(null)
@@ -115,6 +118,48 @@ export function AdminUsers() {
         renderRow={(user) => {
           const approval = getUserApprovalState(user)
           const limit = getUserLimitState(user)
+          const isAdminTarget = user.role === "admin"
+          const isSuperAdminTarget = user.role === "super_admin"
+          const canTargetAdmin = isSuperAdmin
+          const canApplyEnforcement = !isSuperAdminTarget && (!isAdminTarget || canTargetAdmin)
+          const rowActions = [
+            { key: "approve", label: "가입 승인", onClick: () => openAction(user, "approve"), disabled: user.status !== "pending" },
+            { key: "reject", label: "가입 반려", onClick: () => openAction(user, "reject"), disabled: user.status !== "pending", danger: true },
+            ...(isSuperAdmin
+              ? [
+                  {
+                    key: "role-admin",
+                    label: "관리자 승격",
+                    onClick: () => openAction(user, "role_admin"),
+                    disabled: isAdminTarget || isSuperAdminTarget,
+                  },
+                  {
+                    key: "role-user",
+                    label: "일반 권한",
+                    onClick: () => openAction(user, "role_user"),
+                    disabled: !isAdminTarget,
+                  },
+                ]
+              : []),
+            { key: "limit", label: "계정 제한", onClick: () => openAction(user, "limit"), disabled: !canApplyEnforcement },
+            { key: "unlimit", label: "제한 해제", onClick: () => openAction(user, "unlimit"), disabled: !limit.isLimited || !canApplyEnforcement },
+            { key: "suspend", label: "계정 정지", onClick: () => openAction(user, "suspend"), danger: true, disabled: !canApplyEnforcement },
+            { key: "unsuspend", label: "정지 해제", onClick: () => openAction(user, "unsuspend"), disabled: user.status !== "suspended" || !canApplyEnforcement },
+            { key: "revoke", label: "세션 무효화", onClick: () => openAction(user, "revoke"), disabled: !canApplyEnforcement },
+            { key: "schedule-delete", label: "삭제 예약", onClick: () => openAction(user, "schedule_delete"), danger: true, disabled: !canApplyEnforcement },
+            { key: "cancel-delete", label: "삭제 예약 취소", onClick: () => openAction(user, "cancel_delete"), disabled: user.status !== "pending_delete" || !canApplyEnforcement },
+            ...(isSuperAdmin
+              ? [
+                  {
+                    key: "delete-now",
+                    label: "즉시 삭제",
+                    onClick: () => openAction(user, "delete_now"),
+                    danger: true,
+                    disabled: isSuperAdminTarget,
+                  },
+                ]
+              : []),
+          ]
 
           return (
             <>
@@ -130,20 +175,7 @@ export function AdminUsers() {
               <td className="px-4 py-3 text-sm text-slate-300">
                 <RowActions
                   label={`${user.nickname} 사용자`}
-                  actions={[
-                    { key: "approve", label: "가입 승인", onClick: () => openAction(user, "approve"), disabled: user.status !== "pending" },
-                    { key: "reject", label: "가입 반려", onClick: () => openAction(user, "reject"), disabled: user.status !== "pending", danger: true },
-                    { key: "role-admin", label: "관리자 승격", onClick: () => openAction(user, "role_admin"), disabled: user.role === "admin" || user.role === "super_admin" },
-                    { key: "role-user", label: "일반 권한", onClick: () => openAction(user, "role_user"), disabled: user.role !== "admin" },
-                    { key: "limit", label: "계정 제한", onClick: () => openAction(user, "limit") },
-                    { key: "unlimit", label: "제한 해제", onClick: () => openAction(user, "unlimit"), disabled: !limit.isLimited },
-                    { key: "suspend", label: "계정 정지", onClick: () => openAction(user, "suspend"), danger: true },
-                    { key: "unsuspend", label: "정지 해제", onClick: () => openAction(user, "unsuspend"), disabled: user.status !== "suspended" },
-                    { key: "revoke", label: "세션 무효화", onClick: () => openAction(user, "revoke") },
-                    { key: "schedule-delete", label: "삭제 예약", onClick: () => openAction(user, "schedule_delete"), danger: true },
-                    { key: "cancel-delete", label: "삭제 예약 취소", onClick: () => openAction(user, "cancel_delete"), disabled: user.status !== "pending_delete" },
-                    { key: "delete-now", label: "즉시 삭제", onClick: () => openAction(user, "delete_now"), danger: true },
-                  ]}
+                  actions={rowActions}
                 />
               </td>
             </>
