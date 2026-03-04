@@ -9,15 +9,40 @@ const { loginSpy, logoutSpy, getMeWithTokenSpy, exchangeGoogleOAuthCodeSpy } = v
   exchangeGoogleOAuthCodeSpy: vi.fn(),
 }))
 
-vi.mock("./components/screens", () => ({
+vi.mock("./components/screens/HomeScreen", () => ({
   HomeScreen: () => <div>home</div>,
+}))
+
+vi.mock("./components/screens/ProjectDetailScreen", () => ({
   ProjectDetailScreen: () => <div>detail</div>,
+}))
+
+vi.mock("./components/screens/SubmitScreen", () => ({
   SubmitScreen: () => <div>submit</div>,
+}))
+
+vi.mock("./components/screens/ProfileScreen", () => ({
   ProfileScreen: () => <div>profile</div>,
-  AdminScreen: () => <div>admin</div>,
+}))
+
+vi.mock("./components/screens/ExploreScreen", () => ({
   ExploreScreen: () => <div>explore</div>,
+}))
+
+vi.mock("./components/screens/ChallengesScreen", () => ({
   ChallengesScreen: () => <div>challenges</div>,
+}))
+
+vi.mock("./components/screens/AboutScreen", () => ({
   AboutScreen: () => <div>about</div>,
+}))
+
+vi.mock("./components/screens/admin/AdminLayout", () => ({
+  AdminLayout: () => <div>admin</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminDashboard", () => ({
+  AdminDashboard: () => <div>admin-dashboard</div>,
 }))
 
 vi.mock("./components/screens/LoginScreen", () => ({

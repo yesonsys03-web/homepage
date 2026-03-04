@@ -102,6 +102,54 @@ def test_require_admin_allows_super_admin() -> None:
     assert context["role"] == "super_admin"
 
 
+def test_admin_stats_requires_admin_role(client: TestClient) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: (_ for _ in ()).throw(
+        HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
+    )
+
+    response = client.get("/api/admin/stats")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "관리자 권한이 필요합니다"
+
+
+def test_admin_stats_response_shape(client: TestClient, monkeypatch: Any) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "admin-1"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_admin_stats",
+        lambda: {
+            "total_users": 120,
+            "total_projects": 45,
+            "open_reports": 7,
+            "pending_user_approvals": 3,
+            "users_this_week": 8,
+            "users_last_week": 5,
+            "projects_this_week": 4,
+            "projects_last_week": 2,
+            "users_week_delta": 3,
+            "projects_week_delta": 2,
+            "weekly_trend": [
+                {
+                    "day": "2026-03-02",
+                    "new_users": 2,
+                    "new_projects": 1,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/admin/stats")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_users"] == 120
+    assert body["users_week_delta"] == 3
+    assert body["weekly_trend"][0]["day"] == "2026-03-02"
+
+
 def test_update_user_role_requires_super_admin(client: TestClient) -> None:
     main.app.dependency_overrides[main.require_super_admin] = lambda: (
         _ for _ in ()

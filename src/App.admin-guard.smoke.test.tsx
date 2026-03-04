@@ -14,17 +14,6 @@ const state = vi.hoisted(() => ({
   user: null as MockUser | null,
 }))
 
-vi.mock("./components/screens", () => ({
-  HomeScreen: () => <div>home</div>,
-  ProjectDetailScreen: () => <div>detail</div>,
-  SubmitScreen: () => <div>submit</div>,
-  ProfileScreen: () => <div>profile</div>,
-  AdminScreen: () => <div>admin</div>,
-  ExploreScreen: () => <div>explore</div>,
-  ChallengesScreen: () => <div>challenges</div>,
-  AboutScreen: () => <div>about</div>,
-}))
-
 vi.mock("./components/screens/HomeScreen", () => ({
   HomeScreen: () => <div>home</div>,
 }))
@@ -41,8 +30,36 @@ vi.mock("./components/screens/ProfileScreen", () => ({
   ProfileScreen: () => <div>profile</div>,
 }))
 
-vi.mock("./components/screens/AdminScreen", () => ({
-  AdminScreen: () => <div>admin</div>,
+vi.mock("./components/screens/admin/AdminLayout", () => ({
+  AdminLayout: () => <div>admin</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminDashboard", () => ({
+  AdminDashboard: () => <div>admin-dashboard</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminUsers", () => ({
+  AdminUsers: () => <div>admin-users</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminContent", () => ({
+  AdminContent: () => <div>admin-content</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminReports", () => ({
+  AdminReports: () => <div>admin-reports</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminPages", () => ({
+  AdminPages: () => <div>admin-pages</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminPolicies", () => ({
+  AdminPolicies: () => <div>admin-policies</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminLogs", () => ({
+  AdminLogs: () => <div>admin-logs</div>,
 }))
 
 vi.mock("./components/screens/ExploreScreen", () => ({

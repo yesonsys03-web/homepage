@@ -779,6 +779,115 @@ def get_reports_count(status: Optional[str] = None):
             return int(result["count"]) if result else 0
 
 
+def get_admin_stats():
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT
+                        date_trunc('week', NOW()) AS this_week_start,
+                        date_trunc('week', NOW()) - INTERVAL '7 day' AS last_week_start
+                )
+                SELECT
+                    (SELECT COUNT(*)::int FROM users) AS total_users,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM users
+                        WHERE created_at >= (SELECT this_week_start FROM bounds)
+                    ) AS users_this_week,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM users
+                        WHERE created_at >= (SELECT last_week_start FROM bounds)
+                          AND created_at < (SELECT this_week_start FROM bounds)
+                    ) AS users_last_week,
+                    (SELECT COUNT(*)::int FROM projects) AS total_projects,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM projects
+                        WHERE created_at >= (SELECT this_week_start FROM bounds)
+                    ) AS projects_this_week,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM projects
+                        WHERE created_at >= (SELECT last_week_start FROM bounds)
+                          AND created_at < (SELECT this_week_start FROM bounds)
+                    ) AS projects_last_week,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM reports
+                        WHERE status = 'open'
+                    ) AS open_reports,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM users
+                        WHERE status = 'pending'
+                    ) AS pending_user_approvals
+                """
+            )
+            summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                WITH week_days AS (
+                    SELECT generate_series(
+                        date_trunc('week', NOW()),
+                        date_trunc('week', NOW()) + INTERVAL '6 day',
+                        INTERVAL '1 day'
+                    )::date AS day
+                )
+                SELECT
+                    wd.day,
+                    COALESCE(u.count, 0)::int AS new_users,
+                    COALESCE(p.count, 0)::int AS new_projects
+                FROM week_days wd
+                LEFT JOIN (
+                    SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+                    FROM users
+                    WHERE created_at >= date_trunc('week', NOW())
+                    GROUP BY 1
+                ) u ON wd.day = u.day
+                LEFT JOIN (
+                    SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+                    FROM projects
+                    WHERE created_at >= date_trunc('week', NOW())
+                    GROUP BY 1
+                ) p ON wd.day = p.day
+                ORDER BY wd.day ASC
+                """
+            )
+            weekly_rows = cur.fetchall() or []
+
+            users_this_week = int(summary.get("users_this_week") or 0)
+            users_last_week = int(summary.get("users_last_week") or 0)
+            projects_this_week = int(summary.get("projects_this_week") or 0)
+            projects_last_week = int(summary.get("projects_last_week") or 0)
+
+            return {
+                "total_users": int(summary.get("total_users") or 0),
+                "total_projects": int(summary.get("total_projects") or 0),
+                "open_reports": int(summary.get("open_reports") or 0),
+                "pending_user_approvals": int(
+                    summary.get("pending_user_approvals") or 0
+                ),
+                "users_this_week": users_this_week,
+                "users_last_week": users_last_week,
+                "projects_this_week": projects_this_week,
+                "projects_last_week": projects_last_week,
+                "users_week_delta": users_this_week - users_last_week,
+                "projects_week_delta": projects_this_week - projects_last_week,
+                "weekly_trend": [
+                    {
+                        "day": row["day"].isoformat(),
+                        "new_users": int(row["new_users"] or 0),
+                        "new_projects": int(row["new_projects"] or 0),
+                    }
+                    for row in weekly_rows
+                ],
+            }
+
+
 def update_report(report_id: str, new_status: str):
     """신고 처리 상태 변경"""
     with get_db_connection() as conn:

@@ -34,6 +34,7 @@ from db import (
     report_comment,
     get_reports,
     get_reports_count,
+    get_admin_stats,
     update_report,
     create_user,
     create_or_update_google_user,
@@ -1393,6 +1394,12 @@ def list_reports(
 def get_projects_perf(current_user: UserContext = Depends(require_admin)):
     _ = current_user
     return _project_perf_snapshot()
+
+
+@app.get("/api/admin/stats")
+def get_admin_stats_endpoint(current_user: UserContext = Depends(require_admin)):
+    _ = current_user
+    return get_admin_stats()
 
 
 @app.get("/api/admin/integrations/oauth")

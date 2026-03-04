@@ -8,10 +8,12 @@ import {
   useLocation,
   useNavigate,
 } from 'react-router-dom'
+import { QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider } from './lib/auth-context'
 import { useAuth } from './lib/use-auth'
 import { api } from './lib/api'
 import { isAdminRole } from './lib/roles'
+import { appQueryClient } from './lib/query-client'
 
 type Screen =
   | 'home'
@@ -51,9 +53,44 @@ const ProfileScreen = lazy(async () => {
   return { default: module.ProfileScreen }
 })
 
-const AdminScreen = lazy(async () => {
-  const module = await import('./components/screens/AdminScreen')
-  return { default: module.AdminScreen }
+const AdminLayout = lazy(async () => {
+  const module = await import('./components/screens/admin/AdminLayout')
+  return { default: module.AdminLayout }
+})
+
+const AdminDashboard = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminDashboard')
+  return { default: module.AdminDashboard }
+})
+
+const AdminUsers = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminUsers')
+  return { default: module.AdminUsers }
+})
+
+const AdminContent = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminContent')
+  return { default: module.AdminContent }
+})
+
+const AdminReports = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminReports')
+  return { default: module.AdminReports }
+})
+
+const AdminPages = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminPages')
+  return { default: module.AdminPages }
+})
+
+const AdminPolicies = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminPolicies')
+  return { default: module.AdminPolicies }
+})
+
+const AdminLogs = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminLogs')
+  return { default: module.AdminLogs }
 })
 
 const ExploreScreen = lazy(async () => {
@@ -156,7 +193,7 @@ function parseRoute(pathname: string): RouteState {
 
   if (pathname === '/submit') return { screen: 'submit', projectId: null, editingProjectId: null }
   if (pathname === '/profile') return { screen: 'profile', projectId: null, editingProjectId: null }
-  if (pathname === '/admin') return { screen: 'admin', projectId: null, editingProjectId: null }
+  if (pathname.startsWith('/admin')) return { screen: 'admin', projectId: null, editingProjectId: null }
   if (pathname === '/login') return { screen: 'login', projectId: null, editingProjectId: null }
   if (pathname === '/register') return { screen: 'register', projectId: null, editingProjectId: null }
   if (pathname === '/explore') return { screen: 'explore', projectId: null, editingProjectId: null }
@@ -332,15 +369,6 @@ function AppContent() {
     void restoreOAuthSession()
   }, [location.pathname, location.search, login, navigate])
 
-  useEffect(() => {
-    if (isLoading) {
-      return
-    }
-    if (currentScreen === 'admin' && !isAdminRole(user?.role)) {
-      navigate(user ? '/' : '/login', { replace: true })
-    }
-  }, [currentScreen, isLoading, navigate, user])
-
   const handleLogout = () => {
     logout()
     setLastProjectId(null)
@@ -493,7 +521,15 @@ function AppContent() {
             <Route path="/submit" element={<SubmitScreen onNavigate={handleNavigate} />} />
             <Route path="/submit/:projectId/edit" element={<SubmitScreen onNavigate={handleNavigate} editingProjectId={routeState.editingProjectId ?? undefined} />} />
             <Route path="/profile" element={<ProfileScreen onNavigate={handleNavigate} />} />
-            <Route path="/admin" element={<AdminScreen onNavigate={handleNavigate} />} />
+            <Route path="/admin" element={<AdminLayout />}>
+              <Route index element={<AdminDashboard />} />
+              <Route path="users" element={<AdminUsers />} />
+              <Route path="content" element={<AdminContent />} />
+              <Route path="reports" element={<AdminReports />} />
+              <Route path="pages" element={<AdminPages />} />
+              <Route path="policies" element={<AdminPolicies />} />
+              <Route path="logs" element={<AdminLogs />} />
+            </Route>
             <Route path="/login" element={<LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />} />
             <Route path="/register" element={<RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />} />
             <Route path="/project/:projectId" element={<ProjectDetailScreen onNavigate={handleNavigate} projectId={routeState.projectId ?? undefined} onEditProject={openProjectEdit} />} />
@@ -508,9 +544,11 @@ function AppContent() {
 function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
+      <QueryClientProvider client={appQueryClient}>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </QueryClientProvider>
     </BrowserRouter>
   )
 }

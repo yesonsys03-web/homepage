@@ -168,6 +168,26 @@ export interface AdminOAuthHealth extends AdminOAuthSettings {
   is_ready: boolean
 }
 
+export interface AdminWeeklyTrendPoint {
+  day: string
+  new_users: number
+  new_projects: number
+}
+
+export interface AdminStats {
+  total_users: number
+  total_projects: number
+  open_reports: number
+  pending_user_approvals: number
+  users_this_week: number
+  users_last_week: number
+  projects_this_week: number
+  projects_last_week: number
+  users_week_delta: number
+  projects_week_delta: number
+  weekly_trend: AdminWeeklyTrendPoint[]
+}
+
 type AdminReportsResponse = { items: Report[]; total: number }
 type AdminListResponse<T> = { items: T[] }
 type ProjectsResponse = { items: Project[] }
@@ -208,6 +228,7 @@ type SWRFetchOptions<T> = {
 
 const ADMIN_TAB_TTL_MS = {
   reports: 15_000,
+  stats: 20_000,
   users: 120_000,
   content: 120_000,
   pages: 180_000,
@@ -701,6 +722,19 @@ export const api = {
   },
 
   // Admin
+  getAdminStats: async (options?: SWRFetchOptions<AdminStats>) => {
+    const key = createAdminCacheKey("stats")
+    return fetchWithAdminSWR(
+      key,
+      ADMIN_TAB_TTL_MS.stats,
+      async (signal) => {
+        const res = await authFetch(`${API_BASE}/api/admin/stats`, { signal })
+        return res.json() as Promise<AdminStats>
+      },
+      options,
+    )
+  },
+
   getReports: async (
     status?: string,
     limit: number = 50,
