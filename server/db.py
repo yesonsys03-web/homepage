@@ -153,6 +153,12 @@ def init_db():
                     admin_log_retention_days INTEGER DEFAULT 365,
                     admin_log_view_window_days INTEGER DEFAULT 30,
                     admin_log_mask_reasons BOOLEAN DEFAULT TRUE,
+                    page_editor_enabled BOOLEAN DEFAULT TRUE,
+                    page_editor_rollout_stage VARCHAR(20) DEFAULT 'qa',
+                    page_editor_pilot_admin_ids TEXT[] DEFAULT '{}',
+                    page_editor_publish_fail_rate_threshold DOUBLE PRECISION DEFAULT 0.2,
+                    page_editor_rollback_ratio_threshold DOUBLE PRECISION DEFAULT 0.3,
+                    page_editor_conflict_rate_threshold DOUBLE PRECISION DEFAULT 0.25,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -307,6 +313,42 @@ def init_db():
                 """
                 ALTER TABLE moderation_settings
                 ADD COLUMN IF NOT EXISTS admin_log_mask_reasons BOOLEAN DEFAULT TRUE
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_enabled BOOLEAN DEFAULT TRUE
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_rollout_stage VARCHAR(20) DEFAULT 'qa'
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_pilot_admin_ids TEXT[] DEFAULT '{}'
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_publish_fail_rate_threshold DOUBLE PRECISION DEFAULT 0.2
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_rollback_ratio_threshold DOUBLE PRECISION DEFAULT 0.3
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_conflict_rate_threshold DOUBLE PRECISION DEFAULT 0.25
                 """
             )
             cur.execute(
@@ -1482,7 +1524,11 @@ def get_moderation_settings():
             cur.execute(
                 """
                 SELECT id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
-                       admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons, updated_at
+                       admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons,
+                       page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
+                       page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
+                       page_editor_conflict_rate_threshold,
+                       updated_at
                 FROM moderation_settings
                 WHERE id = 1
                 """
@@ -1498,6 +1544,12 @@ def update_moderation_settings(
     admin_log_retention_days: int,
     admin_log_view_window_days: int,
     admin_log_mask_reasons: bool,
+    page_editor_enabled: bool,
+    page_editor_rollout_stage: str,
+    page_editor_pilot_admin_ids: list[str],
+    page_editor_publish_fail_rate_threshold: float,
+    page_editor_rollback_ratio_threshold: float,
+    page_editor_conflict_rate_threshold: float,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1511,10 +1563,20 @@ def update_moderation_settings(
                     admin_log_retention_days = %s,
                     admin_log_view_window_days = %s,
                     admin_log_mask_reasons = %s,
+                    page_editor_enabled = %s,
+                    page_editor_rollout_stage = %s,
+                    page_editor_pilot_admin_ids = %s,
+                    page_editor_publish_fail_rate_threshold = %s,
+                    page_editor_rollback_ratio_threshold = %s,
+                    page_editor_conflict_rate_threshold = %s,
                     updated_at = NOW()
                 WHERE id = 1
                 RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
-                          admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons, updated_at
+                          admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons,
+                          page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
+                          page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
+                          page_editor_conflict_rate_threshold,
+                          updated_at
                 """,
                 (
                     blocked_keywords,
@@ -1524,6 +1586,12 @@ def update_moderation_settings(
                     admin_log_retention_days,
                     admin_log_view_window_days,
                     admin_log_mask_reasons,
+                    page_editor_enabled,
+                    page_editor_rollout_stage,
+                    page_editor_pilot_admin_ids,
+                    page_editor_publish_fail_rate_threshold,
+                    page_editor_rollback_ratio_threshold,
+                    page_editor_conflict_rate_threshold,
                 ),
             )
             conn.commit()
@@ -1655,6 +1723,23 @@ def upsert_site_content(content_key: str, content_json: Mapping[str, object]):
             )
             conn.commit()
             return cur.fetchone()
+
+
+def list_site_contents_by_prefix(content_key_prefix: str, limit: int = 20):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_site_contents_table(cur)
+            cur.execute(
+                """
+                SELECT content_key, content_json, updated_at
+                FROM site_contents
+                WHERE content_key LIKE %s
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (f"{content_key_prefix}%", max(1, min(limit, 100))),
+            )
+            return cur.fetchall()
 
 
 def get_page_document_draft(page_id: str):

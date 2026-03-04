@@ -88,6 +88,7 @@ from db import (
     cleanup_oauth_state_tokens,
     get_site_content,
     upsert_site_content,
+    list_site_contents_by_prefix,
     get_page_document_draft,
     save_page_document_draft,
     publish_page_document,
@@ -154,6 +155,7 @@ async def enforce_https_and_security_headers(request, call_next):
 
 PROJECT_LIST_CACHE_TTL_SECONDS = 12.0
 PROJECT_PERF_WINDOW_SIZE = 300
+PAGE_EDITOR_PERF_WINDOW_SIZE = 500
 _project_list_cache: dict[
     tuple[str, Optional[str], Optional[str]], tuple[float, list[dict[str, object]]]
 ] = {}
@@ -162,6 +164,10 @@ _project_perf_samples: deque[tuple[float, float, int]] = deque(
     maxlen=PROJECT_PERF_WINDOW_SIZE
 )
 _project_perf_lock = Lock()
+_page_editor_perf_samples: deque[tuple[str, float]] = deque(
+    maxlen=PAGE_EDITOR_PERF_WINDOW_SIZE
+)
+_page_editor_perf_lock = Lock()
 
 
 def _project_cache_key(
@@ -244,6 +250,65 @@ def _project_perf_snapshot() -> dict[str, object]:
         "elapsed_ms_p95": round(_percentile(elapsed_values, 0.95), 2),
         "db_ms_p50": round(_percentile(db_values, 0.5), 2),
         "db_ms_p95": round(_percentile(db_values, 0.95), 2),
+    }
+
+
+PAGE_EDITOR_PERF_SCENARIOS: set[str] = {
+    "editor_initial_load",
+    "preview_switch",
+    "draft_save_roundtrip",
+}
+
+PAGE_EDITOR_PERF_SLO_P75_MS: dict[str, float] = {
+    "editor_initial_load": 2500.0,
+    "draft_save_roundtrip": 800.0,
+    "preview_switch": 500.0,
+}
+
+
+def _record_page_editor_perf(scenario: str, duration_ms: float) -> None:
+    with _page_editor_perf_lock:
+        _page_editor_perf_samples.append((scenario, duration_ms))
+
+
+def _page_editor_perf_snapshot() -> dict[str, object]:
+    with _page_editor_perf_lock:
+        samples = list(_page_editor_perf_samples)
+
+    if not samples:
+        return {
+            "window_size": PAGE_EDITOR_PERF_WINDOW_SIZE,
+            "sample_count": 0,
+            "metrics": {
+                scenario: {
+                    "sample_count": 0,
+                    "p75_ms": 0.0,
+                    "p95_ms": 0.0,
+                    "slo_p75_ms": PAGE_EDITOR_PERF_SLO_P75_MS[scenario],
+                    "within_slo": True,
+                }
+                for scenario in sorted(PAGE_EDITOR_PERF_SCENARIOS)
+            },
+        }
+
+    metrics: dict[str, dict[str, object]] = {}
+    for scenario in sorted(PAGE_EDITOR_PERF_SCENARIOS):
+        durations = [row[1] for row in samples if row[0] == scenario]
+        p75_ms = round(_percentile(durations, 0.75), 2)
+        p95_ms = round(_percentile(durations, 0.95), 2)
+        slo_p75_ms = PAGE_EDITOR_PERF_SLO_P75_MS[scenario]
+        metrics[scenario] = {
+            "sample_count": len(durations),
+            "p75_ms": p75_ms,
+            "p95_ms": p95_ms,
+            "slo_p75_ms": slo_p75_ms,
+            "within_slo": p75_ms <= slo_p75_ms,
+        }
+
+    return {
+        "window_size": PAGE_EDITOR_PERF_WINDOW_SIZE,
+        "sample_count": len(samples),
+        "metrics": metrics,
     }
 
 
@@ -439,6 +504,10 @@ PROFILE_BIO_MAX_LEN = 300
 GOOGLE_OAUTH_STATE_TTL_SECONDS = 600
 DEFAULT_ADMIN_LOG_RETENTION_DAYS = 365
 DEFAULT_ADMIN_LOG_VIEW_WINDOW_DAYS = 30
+DEFAULT_PAGE_EDITOR_ROLLOUT_STAGE = "qa"
+DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD = 0.2
+DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD = 0.3
+DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD = 0.25
 ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
 SYSTEM_ADMIN_USER_ID = "11111111-1111-1111-1111-111111111111"
 ADMIN_ALLOWED_ROLES = {"admin", "super_admin"}
@@ -534,6 +603,12 @@ class AdminPolicyUpdateRequest(BaseModel):
     admin_log_retention_days: Optional[int] = None
     admin_log_view_window_days: Optional[int] = None
     admin_log_mask_reasons: Optional[bool] = None
+    page_editor_enabled: Optional[bool] = None
+    page_editor_rollout_stage: Optional[Literal["qa", "pilot", "open"]] = None
+    page_editor_pilot_admin_ids: Optional[list[str]] = None
+    page_editor_publish_fail_rate_threshold: Optional[float] = None
+    page_editor_rollback_ratio_threshold: Optional[float] = None
+    page_editor_conflict_rate_threshold: Optional[float] = None
 
 
 class AdminOAuthSettingsUpdateRequest(BaseModel):
@@ -642,6 +717,28 @@ class AdminPageRollbackRequest(BaseModel):
     targetVersion: int
     reason: Optional[str] = None
     publishNow: bool = False
+
+
+class AdminPageMigrationExecuteRequest(BaseModel):
+    reason: Optional[str] = None
+    dryRun: bool = False
+
+
+class AdminPageMigrationRestoreRequest(BaseModel):
+    backupKey: str
+    reason: Optional[str] = None
+    dryRun: bool = False
+
+
+class AdminPagePerfEventRequest(BaseModel):
+    pageId: str
+    scenario: Literal[
+        "editor_initial_load",
+        "preview_switch",
+        "draft_save_roundtrip",
+    ]
+    durationMs: float
+    source: Optional[str] = None
 
 
 def extract_block_core_fields(
@@ -1115,6 +1212,249 @@ def extract_about_content_from_page_document(
     }
 
 
+def build_page_migration_preview(page_id: str) -> dict[str, object]:
+    if page_id != ABOUT_CONTENT_KEY:
+        raise HTTPException(
+            status_code=404, detail="지원하지 않는 마이그레이션 대상 페이지입니다"
+        )
+
+    source_payload = get_about_content_payload()
+    transformed_document = build_page_document_from_about_content(
+        page_id, source_payload, 0
+    )
+    issues = collect_page_document_issues(transformed_document)
+    blocking = issues["blocking"]
+    warnings = issues["warnings"]
+
+    return {
+        "pageId": page_id,
+        "sourceType": "site_content",
+        "sourceKey": ABOUT_CONTENT_KEY,
+        "mappingRules": [
+            {"from": "hero_*", "to": "hero"},
+            {"from": "hero_description", "to": "rich_text"},
+            {"from": "hero image", "to": "image"},
+            {"from": "contact/link", "to": "cta"},
+        ],
+        "document": transformed_document,
+        "validation": {
+            "blocking": blocking,
+            "warnings": warnings,
+            "blockingCount": len(blocking),
+            "warningCount": len(warnings),
+        },
+    }
+
+
+def execute_page_migration(
+    page_id: str,
+    actor_id: str,
+    reason: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    preview = build_page_migration_preview(page_id)
+    source_payload = get_about_content_payload()
+    transformed_document = cast(dict[str, object], preview["document"])
+    validation = cast(dict[str, object], preview["validation"])
+    blocking = cast(list[dict[str, str]], validation.get("blocking") or [])
+
+    backup_key = f"{ABOUT_CONTENT_KEY}_migration_backup_{int(time.time())}"
+    backup_payload: dict[str, object] = {
+        "page_id": page_id,
+        "source_key": ABOUT_CONTENT_KEY,
+        "reason": reason,
+        "dry_run": dry_run,
+        "captured_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "source": to_json_compatible(source_payload),
+        "document": to_json_compatible(transformed_document),
+        "validation": to_json_compatible(validation),
+    }
+    backup_result = upsert_site_content(backup_key, backup_payload)
+    if not backup_result:
+        raise HTTPException(
+            status_code=500, detail="마이그레이션 백업 생성에 실패했습니다"
+        )
+
+    write_admin_action_log(
+        admin_id=actor_id,
+        action_type="page_migration_backup_created",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=f"backup_key={backup_key}",
+    )
+
+    if blocking:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "page_migration_validation_failed",
+                "message": "마이그레이션 변환 결과에 차단 이슈가 있습니다",
+                "field_errors": blocking,
+                "backup_key": backup_key,
+            },
+        )
+
+    if dry_run:
+        write_admin_action_log(
+            admin_id=actor_id,
+            action_type="page_migration_dry_run",
+            target_type="page",
+            target_id=page_action_target_id(page_id),
+            reason=reason,
+        )
+        return {
+            "pageId": page_id,
+            "dryRun": True,
+            "applied": False,
+            "backupKey": backup_key,
+            "validation": validation,
+        }
+
+    existing_draft = get_page_document_draft(page_id)
+    base_version = int(existing_draft.get("draft_version", 0)) if existing_draft else 0
+    save_result = save_page_document_draft(
+        page_id=page_id,
+        base_version=base_version,
+        document_json=transformed_document,
+        actor_id=actor_id,
+        reason=f"migration:{reason}",
+    )
+    if save_result.get("conflict"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "page_migration_conflict",
+                "message": "마이그레이션 저장 중 버전 충돌이 발생했습니다",
+                "current_version": save_result.get("current_version"),
+                "backup_key": backup_key,
+            },
+        )
+
+    saved_version = int(save_result.get("saved_version", 0))
+    write_admin_action_log(
+        admin_id=actor_id,
+        action_type="page_migrated",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=f"{reason}; saved_version={saved_version}; backup_key={backup_key}",
+    )
+    return {
+        "pageId": page_id,
+        "dryRun": False,
+        "applied": True,
+        "savedVersion": saved_version,
+        "backupKey": backup_key,
+        "validation": validation,
+    }
+
+
+def restore_page_migration_backup(
+    page_id: str,
+    backup_key: str,
+    actor_id: str,
+    reason: str,
+    dry_run: bool,
+) -> dict[str, object]:
+    backup = get_site_content(backup_key)
+    if not backup or not backup.get("content_json"):
+        raise HTTPException(status_code=404, detail="백업 키를 찾을 수 없습니다")
+
+    payload = cast(dict[str, object], backup["content_json"])
+    backup_page_id = str(payload.get("page_id") or "")
+    if backup_page_id != page_id:
+        raise HTTPException(
+            status_code=400,
+            detail="백업 키의 page_id가 요청 경로와 일치하지 않습니다",
+        )
+
+    source = cast(dict[str, object], payload.get("source") or {})
+    source_key = str(payload.get("source_key") or ABOUT_CONTENT_KEY)
+    document = cast(dict[str, object], payload.get("document") or {})
+    validation = cast(dict[str, object], payload.get("validation") or {})
+
+    if dry_run:
+        write_admin_action_log(
+            admin_id=actor_id,
+            action_type="page_migration_restore_dry_run",
+            target_type="page",
+            target_id=page_action_target_id(page_id),
+            reason=f"backup_key={backup_key}; {reason}",
+        )
+        return {
+            "pageId": page_id,
+            "dryRun": True,
+            "restored": False,
+            "backupKey": backup_key,
+            "validation": validation,
+        }
+
+    if page_id == ABOUT_CONTENT_KEY:
+        _ = upsert_site_content(ABOUT_CONTENT_KEY, source)
+
+    draft = get_page_document_draft(page_id)
+    base_version = int(draft.get("draft_version", 0)) if draft else 0
+    save_result = save_page_document_draft(
+        page_id=page_id,
+        base_version=base_version,
+        document_json=document,
+        actor_id=actor_id,
+        reason=f"migration-restore:{reason}",
+    )
+    if save_result.get("conflict"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "page_migration_restore_conflict",
+                "message": "복구 저장 중 버전 충돌이 발생했습니다",
+                "current_version": save_result.get("current_version"),
+            },
+        )
+
+    restored_version = int(save_result.get("saved_version", 0))
+    write_admin_action_log(
+        admin_id=actor_id,
+        action_type="page_migration_restored",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=f"backup_key={backup_key}; restored_version={restored_version}; {reason}",
+    )
+    return {
+        "pageId": page_id,
+        "dryRun": False,
+        "restored": True,
+        "restoredVersion": restored_version,
+        "backupKey": backup_key,
+        "validation": validation,
+    }
+
+
+def list_page_migration_backups(page_id: str, limit: int = 20) -> dict[str, object]:
+    backups = list_site_contents_by_prefix(f"{page_id}_migration_backup_", limit=limit)
+    items: list[dict[str, object]] = []
+    for row in backups:
+        payload = cast(dict[str, object], row.get("content_json") or {})
+        if str(payload.get("page_id") or "") != page_id:
+            continue
+        items.append(
+            {
+                "backupKey": str(row.get("content_key") or ""),
+                "capturedAt": str(
+                    payload.get("captured_at") or row.get("updated_at") or ""
+                ),
+                "reason": str(payload.get("reason") or ""),
+                "dryRun": bool(payload.get("dry_run", False)),
+                "sourceKey": str(payload.get("source_key") or ABOUT_CONTENT_KEY),
+                "updatedAt": str(row.get("updated_at") or ""),
+            }
+        )
+
+    return {
+        "pageId": page_id,
+        "count": len(items),
+        "items": items,
+    }
+
+
 def page_action_target_id(page_id: str) -> str:
     if page_id == ABOUT_CONTENT_KEY:
         return ABOUT_CONTENT_TARGET_ID
@@ -1248,6 +1588,33 @@ def normalize_positive_int(
     return value
 
 
+def normalize_ratio(value: object, fallback: float) -> float:
+    if isinstance(value, bool):
+        return fallback
+    if not isinstance(value, (int, float, str)):
+        return fallback
+    try:
+        number = float(value)
+    except ValueError:
+        return fallback
+    if number < 0:
+        return 0.0
+    if number > 1:
+        return 1.0
+    return number
+
+
+def normalize_rollout_stage(value: object, fallback: str = "qa") -> str:
+    stage = str(value or "").strip().lower()
+    if stage in {"qa", "pilot", "open"}:
+        return stage
+    return fallback
+
+
+def to_json_compatible(value: object) -> object:
+    return json.loads(json.dumps(value, default=str))
+
+
 def mask_sensitive_reason(reason: Optional[str], mask_enabled: bool) -> Optional[str]:
     if reason is None:
         return None
@@ -1335,6 +1702,31 @@ def get_effective_moderation_settings() -> dict[str, object]:
         maximum=365,
     )
     admin_log_mask_reasons = bool(settings.get("admin_log_mask_reasons", True))
+    page_editor_enabled = bool(settings.get("page_editor_enabled", True))
+    page_editor_rollout_stage = normalize_rollout_stage(
+        settings.get("page_editor_rollout_stage"),
+        DEFAULT_PAGE_EDITOR_ROLLOUT_STAGE,
+    )
+    page_editor_pilot_admin_ids_raw = settings.get("page_editor_pilot_admin_ids") or []
+    page_editor_pilot_admin_ids = sorted(
+        {
+            str(admin_id).strip()
+            for admin_id in page_editor_pilot_admin_ids_raw
+            if str(admin_id).strip()
+        }
+    )
+    page_editor_publish_fail_rate_threshold = normalize_ratio(
+        settings.get("page_editor_publish_fail_rate_threshold"),
+        DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD,
+    )
+    page_editor_rollback_ratio_threshold = normalize_ratio(
+        settings.get("page_editor_rollback_ratio_threshold"),
+        DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD,
+    )
+    page_editor_conflict_rate_threshold = normalize_ratio(
+        settings.get("page_editor_conflict_rate_threshold"),
+        DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
+    )
     baseline_categories = {
         category: normalize_keyword_list(keywords)
         for category, keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.items()
@@ -1361,6 +1753,12 @@ def get_effective_moderation_settings() -> dict[str, object]:
         "admin_log_retention_days": admin_log_retention_days,
         "admin_log_view_window_days": admin_log_view_window_days,
         "admin_log_mask_reasons": admin_log_mask_reasons,
+        "page_editor_enabled": page_editor_enabled,
+        "page_editor_rollout_stage": page_editor_rollout_stage,
+        "page_editor_pilot_admin_ids": page_editor_pilot_admin_ids,
+        "page_editor_publish_fail_rate_threshold": page_editor_publish_fail_rate_threshold,
+        "page_editor_rollback_ratio_threshold": page_editor_rollback_ratio_threshold,
+        "page_editor_conflict_rate_threshold": page_editor_conflict_rate_threshold,
         "updated_at": settings["updated_at"],
         "last_updated_by": last_updated_by,
         "last_updated_by_id": last_updated_by_id,
@@ -1397,6 +1795,31 @@ def ensure_baseline_moderation_settings() -> None:
         maximum=365,
     )
     admin_log_mask_reasons = bool(settings.get("admin_log_mask_reasons", True))
+    page_editor_enabled = bool(settings.get("page_editor_enabled", True))
+    page_editor_rollout_stage = normalize_rollout_stage(
+        settings.get("page_editor_rollout_stage"),
+        DEFAULT_PAGE_EDITOR_ROLLOUT_STAGE,
+    )
+    page_editor_pilot_admin_ids_raw = settings.get("page_editor_pilot_admin_ids") or []
+    page_editor_pilot_admin_ids = sorted(
+        {
+            str(admin_id).strip()
+            for admin_id in page_editor_pilot_admin_ids_raw
+            if str(admin_id).strip()
+        }
+    )
+    page_editor_publish_fail_rate_threshold = normalize_ratio(
+        settings.get("page_editor_publish_fail_rate_threshold"),
+        DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD,
+    )
+    page_editor_rollback_ratio_threshold = normalize_ratio(
+        settings.get("page_editor_rollback_ratio_threshold"),
+        DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD,
+    )
+    page_editor_conflict_rate_threshold = normalize_ratio(
+        settings.get("page_editor_conflict_rate_threshold"),
+        DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
+    )
     if (
         effective_keywords != (settings.get("blocked_keywords") or [])
         or home_filter_tabs != (settings.get("home_filter_tabs") or [])
@@ -1404,6 +1827,25 @@ def ensure_baseline_moderation_settings() -> None:
         or admin_log_retention_days != settings.get("admin_log_retention_days")
         or admin_log_view_window_days != settings.get("admin_log_view_window_days")
         or admin_log_mask_reasons != settings.get("admin_log_mask_reasons")
+        or page_editor_enabled != settings.get("page_editor_enabled")
+        or page_editor_rollout_stage != settings.get("page_editor_rollout_stage")
+        or page_editor_pilot_admin_ids
+        != (settings.get("page_editor_pilot_admin_ids") or [])
+        or page_editor_publish_fail_rate_threshold
+        != normalize_ratio(
+            settings.get("page_editor_publish_fail_rate_threshold"),
+            DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD,
+        )
+        or page_editor_rollback_ratio_threshold
+        != normalize_ratio(
+            settings.get("page_editor_rollback_ratio_threshold"),
+            DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD,
+        )
+        or page_editor_conflict_rate_threshold
+        != normalize_ratio(
+            settings.get("page_editor_conflict_rate_threshold"),
+            DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
+        )
     ):
         update_moderation_settings(
             blocked_keywords=effective_keywords,
@@ -1413,6 +1855,12 @@ def ensure_baseline_moderation_settings() -> None:
             admin_log_retention_days=admin_log_retention_days,
             admin_log_view_window_days=admin_log_view_window_days,
             admin_log_mask_reasons=admin_log_mask_reasons,
+            page_editor_enabled=page_editor_enabled,
+            page_editor_rollout_stage=page_editor_rollout_stage,
+            page_editor_pilot_admin_ids=page_editor_pilot_admin_ids,
+            page_editor_publish_fail_rate_threshold=page_editor_publish_fail_rate_threshold,
+            page_editor_rollback_ratio_threshold=page_editor_rollback_ratio_threshold,
+            page_editor_conflict_rate_threshold=page_editor_conflict_rate_threshold,
         )
 
 
@@ -1745,6 +2193,52 @@ async def require_super_admin(current_user: UserContext = Depends(get_current_us
     return current_user
 
 
+def enforce_page_editor_rollout_access(current_user: UserContext) -> None:
+    settings = get_effective_moderation_settings()
+    if not bool(settings.get("page_editor_enabled", True)):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "page_editor_disabled",
+                "message": "페이지 편집 기능이 현재 비활성화되어 있습니다",
+            },
+        )
+
+    stage = normalize_rollout_stage(
+        settings.get("page_editor_rollout_stage"),
+        DEFAULT_PAGE_EDITOR_ROLLOUT_STAGE,
+    )
+    role = str(current_user.get("role") or "")
+    if role == "super_admin":
+        return
+
+    if stage == "open":
+        return
+
+    if stage == "qa":
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "page_editor_stage_qa_only",
+                "message": "현재 내부 QA 단계로 super_admin만 접근할 수 있습니다",
+            },
+        )
+
+    pilot_ids = {
+        str(admin_id).strip()
+        for admin_id in cast(list[str], settings.get("page_editor_pilot_admin_ids", []))
+        if str(admin_id).strip()
+    }
+    if str(current_user.get("id") or "") not in pilot_ids:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "page_editor_stage_pilot_only",
+                "message": "현재 파일럿 단계로 지정된 운영자만 접근할 수 있습니다",
+            },
+        )
+
+
 @app.patch("/api/projects/{project_id}")
 def update_project_endpoint(
     project_id: str,
@@ -1813,6 +2307,34 @@ def list_reports(
 def get_projects_perf(current_user: UserContext = Depends(require_admin)):
     _ = current_user
     return _project_perf_snapshot()
+
+
+@app.get("/api/admin/perf/page-editor")
+def get_page_editor_perf(current_user: UserContext = Depends(require_admin)):
+    _ = current_user
+    return _page_editor_perf_snapshot()
+
+
+@app.post("/api/admin/perf/page-editor/events")
+def create_page_editor_perf_event(
+    payload: AdminPagePerfEventRequest,
+    current_user: UserContext = Depends(require_admin),
+):
+    duration_ms = max(0.0, min(float(payload.durationMs), 120000.0))
+    scenario = payload.scenario
+    if scenario not in PAGE_EDITOR_PERF_SCENARIOS:
+        raise HTTPException(status_code=400, detail="지원하지 않는 성능 시나리오입니다")
+
+    _record_page_editor_perf(scenario=scenario, duration_ms=duration_ms)
+    source = (payload.source or "ui").strip() or "ui"
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type=f"page_perf_{scenario}",
+        target_type="page",
+        target_id=page_action_target_id(payload.pageId),
+        reason=f"duration_ms={duration_ms:.2f}; source={source}",
+    )
+    return {"ok": True}
 
 
 @app.get("/api/admin/stats")
@@ -2483,6 +3005,63 @@ def update_admin_policies(
         if payload.admin_log_mask_reasons is not None
         else bool(current_settings.get("admin_log_mask_reasons", True))
     )
+    page_editor_enabled = (
+        payload.page_editor_enabled
+        if payload.page_editor_enabled is not None
+        else bool(current_settings.get("page_editor_enabled", True))
+    )
+    page_editor_rollout_stage = normalize_rollout_stage(
+        payload.page_editor_rollout_stage,
+        cast(
+            str,
+            current_settings.get(
+                "page_editor_rollout_stage", DEFAULT_PAGE_EDITOR_ROLLOUT_STAGE
+            ),
+        ),
+    )
+    page_editor_pilot_admin_ids = sorted(
+        {
+            admin_id.strip()
+            for admin_id in (
+                payload.page_editor_pilot_admin_ids
+                if payload.page_editor_pilot_admin_ids is not None
+                else cast(
+                    list[str], current_settings.get("page_editor_pilot_admin_ids", [])
+                )
+            )
+            if admin_id and admin_id.strip()
+        }
+    )
+    page_editor_publish_fail_rate_threshold = normalize_ratio(
+        payload.page_editor_publish_fail_rate_threshold,
+        cast(
+            float,
+            current_settings.get(
+                "page_editor_publish_fail_rate_threshold",
+                DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD,
+            ),
+        ),
+    )
+    page_editor_rollback_ratio_threshold = normalize_ratio(
+        payload.page_editor_rollback_ratio_threshold,
+        cast(
+            float,
+            current_settings.get(
+                "page_editor_rollback_ratio_threshold",
+                DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD,
+            ),
+        ),
+    )
+    page_editor_conflict_rate_threshold = normalize_ratio(
+        payload.page_editor_conflict_rate_threshold,
+        cast(
+            float,
+            current_settings.get(
+                "page_editor_conflict_rate_threshold",
+                DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
+            ),
+        ),
+    )
 
     updated = update_moderation_settings(
         blocked_keywords=effective_keywords,
@@ -2492,6 +3071,12 @@ def update_admin_policies(
         admin_log_retention_days=admin_log_retention_days,
         admin_log_view_window_days=admin_log_view_window_days,
         admin_log_mask_reasons=admin_log_mask_reasons,
+        page_editor_enabled=page_editor_enabled,
+        page_editor_rollout_stage=page_editor_rollout_stage,
+        page_editor_pilot_admin_ids=page_editor_pilot_admin_ids,
+        page_editor_publish_fail_rate_threshold=page_editor_publish_fail_rate_threshold,
+        page_editor_rollback_ratio_threshold=page_editor_rollback_ratio_threshold,
+        page_editor_conflict_rate_threshold=page_editor_conflict_rate_threshold,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
@@ -2506,11 +3091,64 @@ def update_admin_policies(
             f"threshold={payload.auto_hide_report_threshold}, "
             f"retention_days={admin_log_retention_days}, "
             f"view_window_days={admin_log_view_window_days}, "
-            f"mask_reasons={admin_log_mask_reasons}"
+            f"mask_reasons={admin_log_mask_reasons}, "
+            f"page_editor_enabled={page_editor_enabled}, "
+            f"rollout_stage={page_editor_rollout_stage}, "
+            f"pilot_admin_count={len(page_editor_pilot_admin_ids)}"
         ),
     )
 
     return get_effective_moderation_settings()
+
+
+@app.get("/api/admin/pages/{page_id}/migration/preview")
+def get_admin_page_migration_preview(
+    page_id: str,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    _ = current_user
+    return build_page_migration_preview(page_id)
+
+
+@app.get("/api/admin/pages/{page_id}/migration/backups")
+def get_admin_page_migration_backups(
+    page_id: str,
+    limit: int = 20,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    _ = current_user
+    return list_page_migration_backups(page_id, limit=limit)
+
+
+@app.post("/api/admin/pages/{page_id}/migration/execute")
+def execute_admin_page_migration(
+    page_id: str,
+    payload: AdminPageMigrationExecuteRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    reason = require_action_reason(payload.reason)
+    return execute_page_migration(
+        page_id=page_id,
+        actor_id=current_user["id"],
+        reason=reason,
+        dry_run=payload.dryRun,
+    )
+
+
+@app.post("/api/admin/pages/{page_id}/migration/restore")
+def restore_admin_page_migration(
+    page_id: str,
+    payload: AdminPageMigrationRestoreRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    reason = require_action_reason(payload.reason)
+    return restore_page_migration_backup(
+        page_id=page_id,
+        backup_key=payload.backupKey.strip(),
+        actor_id=current_user["id"],
+        reason=reason,
+        dry_run=payload.dryRun,
+    )
 
 
 @app.get("/api/admin/pages/{page_id}/draft")
@@ -2518,7 +3156,7 @@ def get_admin_page_draft(
     page_id: str,
     current_user: UserContext = Depends(require_admin),
 ):
-    _ = current_user
+    enforce_page_editor_rollout_access(current_user)
     draft = get_page_document_draft(page_id)
     if draft and draft.get("document_json"):
         document = cast(dict[str, object], draft["document_json"])
@@ -2569,6 +3207,7 @@ def update_admin_page_draft(
     payload: AdminPageDraftUpdateRequest,
     current_user: UserContext = Depends(require_admin),
 ):
+    enforce_page_editor_rollout_access(current_user)
     if payload.document.pageId != page_id:
         raise HTTPException(status_code=400, detail="pageId가 경로와 일치하지 않습니다")
 
@@ -2638,6 +3277,7 @@ def publish_admin_page(
     payload: AdminPagePublishRequest,
     current_user: UserContext = Depends(require_super_admin),
 ):
+    enforce_page_editor_rollout_access(current_user)
     reason = require_action_reason(payload.reason)
 
     current_draft = get_page_document_draft(page_id)
@@ -2734,7 +3374,7 @@ def list_admin_page_versions(
     limit: int = 50,
     current_user: UserContext = Depends(require_admin),
 ):
-    _ = current_user
+    enforce_page_editor_rollout_access(current_user)
     items = list_page_document_versions(page_id=page_id, limit=limit)
     for item in items:
         item["created_by"] = str(item.get("created_by") or "")
@@ -2751,7 +3391,7 @@ def get_admin_page_version(
     version: int,
     current_user: UserContext = Depends(require_admin),
 ):
-    _ = current_user
+    enforce_page_editor_rollout_access(current_user)
     record = get_page_document_version(page_id, version)
     if not record:
         raise HTTPException(status_code=404, detail="버전을 찾을 수 없습니다")
@@ -2773,7 +3413,7 @@ def compare_admin_page_versions(
     to_version: int,
     current_user: UserContext = Depends(require_admin),
 ):
-    _ = current_user
+    enforce_page_editor_rollout_access(current_user)
     from_record = get_page_document_version(page_id, from_version)
     to_record = get_page_document_version(page_id, to_version)
     if not from_record or not to_record:
@@ -2811,6 +3451,7 @@ def rollback_admin_page(
     payload: AdminPageRollbackRequest,
     current_user: UserContext = Depends(require_super_admin),
 ):
+    enforce_page_editor_rollout_access(current_user)
     reason = require_action_reason(payload.reason)
     restored = rollback_page_document(
         page_id=page_id,

@@ -34,6 +34,12 @@ describe("AdminPolicies log policy fields", () => {
       admin_log_retention_days: 180,
       admin_log_view_window_days: 14,
       admin_log_mask_reasons: false,
+      page_editor_enabled: true,
+      page_editor_rollout_stage: "qa",
+      page_editor_pilot_admin_ids: ["admin-1"],
+      page_editor_publish_fail_rate_threshold: 0.2,
+      page_editor_rollback_ratio_threshold: 0.3,
+      page_editor_conflict_rate_threshold: 0.25,
       updated_at: "2026-03-04T00:00:00Z",
     })
     mocks.getAdminOAuthSettings.mockResolvedValue({
@@ -78,6 +84,12 @@ describe("AdminPolicies log policy fields", () => {
         365,
         30,
         true,
+        true,
+        "qa",
+        ["admin-1"],
+        0.2,
+        0.3,
+        0.25,
       )
     })
   })

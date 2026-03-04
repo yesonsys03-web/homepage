@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button"
 import {
   ApiRequestError,
   api,
+  type AdminPageMigrationBackupListResponse,
+  type AdminPagePerfScenario,
   type AdminPageVersionCompareResponse,
   type AdminPageVersionListItem,
   type PageBlock,
@@ -18,7 +20,7 @@ const LOCAL_DRAFT_KEY = `page-editor-local-draft:${PAGE_ID}`
 
 type EditorTab = "overview" | "editor" | "preview" | "versions" | "settings"
 type PreviewDevice = "desktop" | "mobile"
-type SupportedBlockType = "hero" | "rich_text" | "image" | "cta"
+type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq"
 
 const SUPPORTED_BLOCK_TYPES: SupportedBlockType[] = ["hero", "rich_text", "image", "cta"]
 
@@ -27,6 +29,8 @@ const BLOCK_LABEL: Record<SupportedBlockType, string> = {
   rich_text: "RichText",
   image: "Image",
   cta: "CTA",
+  feature_list: "FeatureList",
+  faq: "FAQ",
 }
 
 function createBlock(type: SupportedBlockType, order: number): PageBlock {
@@ -62,6 +66,24 @@ function createBlock(type: SupportedBlockType, order: number): PageBlock {
       content: { src: "", alt: "", caption: "" },
     }
   }
+  if (type === "feature_list") {
+    return {
+      id: `feature_list_${Date.now()}_${order}`,
+      type,
+      order,
+      visible: true,
+      content: { items: [] },
+    }
+  }
+  if (type === "faq") {
+    return {
+      id: `faq_${Date.now()}_${order}`,
+      type,
+      order,
+      visible: true,
+      content: { items: [] },
+    }
+  }
   return {
     id: `cta_${Date.now()}_${order}`,
     type,
@@ -77,6 +99,7 @@ function defaultBlocks(): PageBlock[] {
     createBlock("rich_text", 1),
     createBlock("image", 2),
     createBlock("cta", 3),
+    createBlock("feature_list", 4),
   ]
 }
 
@@ -121,6 +144,8 @@ export function AdminPages() {
   const [autoSaving, setAutoSaving] = useState(false)
   const [publishing, setPublishing] = useState(false)
   const [loadingVersions, setLoadingVersions] = useState(false)
+  const [loadingBackups, setLoadingBackups] = useState(false)
+  const [restoringBackup, setRestoringBackup] = useState(false)
   const [comparing, setComparing] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
@@ -131,6 +156,9 @@ export function AdminPages() {
   const [compareFromVersion, setCompareFromVersion] = useState<number | null>(null)
   const [compareToVersion, setCompareToVersion] = useState<number | null>(null)
   const [compareResult, setCompareResult] = useState<AdminPageVersionCompareResponse | null>(null)
+  const [migrationBackups, setMigrationBackups] = useState<AdminPageMigrationBackupListResponse["items"]>([])
+  const [selectedBackupKey, setSelectedBackupKey] = useState("")
+  const [showDryRunBackupsOnly, setShowDryRunBackupsOnly] = useState(false)
 
   const [pageTitle, setPageTitle] = useState("About Page")
   const [metaTitle, setMetaTitle] = useState("")
@@ -139,13 +167,47 @@ export function AdminPages() {
   const [blocks, setBlocks] = useState<PageBlock[]>(defaultBlocks())
   const [selectedBlockId, setSelectedBlockId] = useState<string>(blocks[0]?.id ?? "")
   const [conflictVersion, setConflictVersion] = useState<number | null>(null)
+  const [listItemsInput, setListItemsInput] = useState("[]")
+  const [listItemsError, setListItemsError] = useState<string | null>(null)
 
   const lastSavedSnapshotRef = useRef<string>("")
+  const previewSwitchStartedRef = useRef<number | null>(null)
 
   const selectedBlock = useMemo(
     () => blocks.find((block) => block.id === selectedBlockId) ?? null,
     [blocks, selectedBlockId],
   )
+  const selectedBackup = useMemo(
+    () => migrationBackups.find((item) => item.backupKey === selectedBackupKey) ?? null,
+    [migrationBackups, selectedBackupKey],
+  )
+  const filteredMigrationBackups = useMemo(
+    () =>
+      showDryRunBackupsOnly
+        ? migrationBackups.filter((item) => item.dryRun)
+        : migrationBackups,
+    [migrationBackups, showDryRunBackupsOnly],
+  )
+
+  useEffect(() => {
+    if (selectedBackupKey && filteredMigrationBackups.some((item) => item.backupKey === selectedBackupKey)) {
+      return
+    }
+    setSelectedBackupKey(filteredMigrationBackups[0]?.backupKey ?? "")
+  }, [filteredMigrationBackups, selectedBackupKey])
+
+  useEffect(() => {
+    if (!selectedBlock || (selectedBlock.type !== "feature_list" && selectedBlock.type !== "faq")) {
+      setListItemsError(null)
+      return
+    }
+
+    const items = Array.isArray(selectedBlock.content.items)
+      ? selectedBlock.content.items
+      : []
+    setListItemsInput(JSON.stringify(items, null, 2))
+    setListItemsError(null)
+  }, [selectedBlock])
 
   const buildDocument = useMemo((): PageDocument => {
     const normalizedBlocks = normalizeBlocks(blocks)
@@ -189,12 +251,27 @@ export function AdminPages() {
     }
   }
 
-  const reloadDraft = async () => {
+  const logPerfEvent = (
+    scenario: AdminPagePerfScenario,
+    durationMs: number,
+    source: string,
+  ) => {
+    if (!Number.isFinite(durationMs) || durationMs < 0) return
+    void api
+      .logAdminPagePerfEvent(PAGE_ID, scenario, Number(durationMs.toFixed(2)), source)
+      .catch((error) => {
+        console.error("page perf event log failed", error)
+      })
+  }
+
+  const reloadDraft = async (metricSource: string = "reload") => {
+    const startedAt = performance.now()
     const draft = await api.getAdminPageDraft(PAGE_ID)
     setBaseVersion(draft.baseVersion)
     setPublishedVersion(draft.publishedVersion)
     applyDocument(draft.document, true)
     setConflictVersion(null)
+    logPerfEvent("editor_initial_load", performance.now() - startedAt, metricSource)
   }
 
   useEffect(() => {
@@ -202,7 +279,7 @@ export function AdminPages() {
       setLoading(true)
       setErrorBanner(null)
       try {
-        await reloadDraft()
+        await reloadDraft("initial_load")
       } catch (error) {
         setErrorBanner(parseErrorMessage(error))
       } finally {
@@ -216,21 +293,33 @@ export function AdminPages() {
     if (activeTab !== "versions") return
     const loadVersions = async () => {
       setLoadingVersions(true)
+      setLoadingBackups(true)
       try {
-        const response = await api.getAdminPageVersions(PAGE_ID, 50)
+        const [response, backups] = await Promise.all([
+          api.getAdminPageVersions(PAGE_ID, 50),
+          isSuperAdmin ? api.getAdminPageMigrationBackups(PAGE_ID, 20) : Promise.resolve({ pageId: PAGE_ID, count: 0, items: [] }),
+        ])
         setVersions(response.items)
         if (response.items.length >= 2) {
           setCompareFromVersion(response.items[1].version)
           setCompareToVersion(response.items[0].version)
         }
+        setMigrationBackups(backups.items)
+        setSelectedBackupKey((current) => {
+          if (current && backups.items.some((item) => item.backupKey === current)) {
+            return current
+          }
+          return backups.items[0]?.backupKey ?? ""
+        })
       } catch (error) {
         setErrorBanner(parseErrorMessage(error))
       } finally {
         setLoadingVersions(false)
+        setLoadingBackups(false)
       }
     }
     void loadVersions()
-  }, [activeTab])
+  }, [activeTab, isSuperAdmin])
 
   const saveInternal = async (source: "manual" | "auto") => {
     if (source === "manual" && !reason.trim()) {
@@ -246,6 +335,7 @@ export function AdminPages() {
     setNotice(null)
     if (source === "auto") setAutoSaving(true)
     if (source === "manual") setSaving(true)
+    const saveStartedAt = performance.now()
 
     try {
       const response = await api.updateAdminPageDraft(
@@ -269,10 +359,13 @@ export function AdminPages() {
       lastSavedSnapshotRef.current = snapshotOf(savedDocument)
       setConflictVersion(null)
       setNotice(source === "manual" ? "Draft를 저장했습니다" : "자동 저장 완료")
+      logPerfEvent("draft_save_roundtrip", performance.now() - saveStartedAt, source)
 
       try {
         localStorage.removeItem(LOCAL_DRAFT_KEY)
-      } catch {}
+      } catch (storageError) {
+        console.error("failed to clear local draft backup", storageError)
+      }
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 409) {
         const detail = error.detail as { current_version?: number; message?: string } | string
@@ -299,7 +392,9 @@ export function AdminPages() {
               }),
             )
             setNotice("서버 오류로 브라우저 임시 저장을 남겼습니다")
-          } catch {}
+          } catch (storageError) {
+            console.error("failed to save local draft backup", storageError)
+          }
         }
         setErrorBanner(parseErrorMessage(error))
       }
@@ -320,6 +415,30 @@ export function AdminPages() {
 
     return () => window.clearTimeout(timer)
   }, [autoSaving, blockingIssues.length, isDirty, loading, publishing, saving, buildDocument])
+
+  useEffect(() => {
+    if (activeTab !== "preview") return
+    if (previewSwitchStartedRef.current === null) return
+
+    const startedAt = previewSwitchStartedRef.current
+    previewSwitchStartedRef.current = null
+
+    const frame = window.requestAnimationFrame(() => {
+      logPerfEvent(
+        "preview_switch",
+        performance.now() - startedAt,
+        `tab=${activeTab};device=${previewDevice}`,
+      )
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeTab, previewDevice])
+
+  const handlePreviewDeviceChange = (device: PreviewDevice) => {
+    if (device === previewDevice) return
+    previewSwitchStartedRef.current = performance.now()
+    setPreviewDevice(device)
+  }
 
   const publish = async () => {
     if (!isSuperAdmin) return
@@ -371,7 +490,7 @@ export function AdminPages() {
         setPublishedVersion(result.publishedVersion)
       }
       setReason("")
-      await reloadDraft()
+      await reloadDraft("rollback_reload")
       const response = await api.getAdminPageVersions(PAGE_ID, 50)
       setVersions(response.items)
       setNotice(`v${targetVersion} 기반으로 Draft를 복원했습니다`)
@@ -401,6 +520,64 @@ export function AdminPages() {
       setErrorBanner(parseErrorMessage(error))
     } finally {
       setComparing(false)
+    }
+  }
+
+  const refreshMigrationBackups = async () => {
+    if (!isSuperAdmin) return
+    setLoadingBackups(true)
+    try {
+      const response = await api.getAdminPageMigrationBackups(PAGE_ID, 20)
+      setMigrationBackups(response.items)
+      setSelectedBackupKey((current) => {
+        if (current && response.items.some((item) => item.backupKey === current)) {
+          return current
+        }
+        return response.items[0]?.backupKey ?? ""
+      })
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setLoadingBackups(false)
+    }
+  }
+
+  const restoreFromBackup = async (dryRun: boolean) => {
+    if (!isSuperAdmin) return
+    if (!selectedBackupKey) {
+      setErrorBanner("복구할 backupKey를 선택하세요")
+      return
+    }
+    if (!reason.trim()) {
+      setErrorBanner("복구에는 사유 입력이 필요합니다")
+      return
+    }
+    if (!dryRun && !window.confirm(`backupKey(${selectedBackupKey})로 복구할까요?`)) return
+
+    setRestoringBackup(true)
+    setErrorBanner(null)
+    setNotice(null)
+    try {
+      const result = await api.restoreAdminPageMigration(PAGE_ID, selectedBackupKey, reason.trim(), dryRun)
+      if (result.dryRun) {
+        setNotice(`복구 dry-run 완료: ${result.backupKey}`)
+        return
+      }
+
+      setReason("")
+      await reloadDraft("migration_restore")
+      const [versionsResponse, backupsResponse] = await Promise.all([
+        api.getAdminPageVersions(PAGE_ID, 50),
+        api.getAdminPageMigrationBackups(PAGE_ID, 20),
+      ])
+      setVersions(versionsResponse.items)
+      setMigrationBackups(backupsResponse.items)
+      setSelectedBackupKey(backupsResponse.items[0]?.backupKey ?? "")
+      setNotice(`백업 복구 완료: ${result.backupKey}`)
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setRestoringBackup(false)
     }
   }
 
@@ -460,7 +637,7 @@ export function AdminPages() {
     )
   }
 
-  const updateSelectedBlockContent = (key: string, value: string) => {
+  const updateSelectedBlockContent = (key: string, value: unknown) => {
     if (!selectedBlock) return
     setBlocks((prev) =>
       prev.map((block) =>
@@ -496,10 +673,10 @@ export function AdminPages() {
 
       <div className="flex flex-wrap gap-2">
         <Button variant={activeTab === "overview" ? "default" : "outline"} onClick={() => setActiveTab("overview")}>개요</Button>
-        <Button variant={activeTab === "editor" ? "default" : "outline"} onClick={() => setActiveTab("editor")}>편집기</Button>
+        <Button variant={activeTab === "editor" ? "default" : "outline"} onClick={() => setActiveTab("editor")}>Hero</Button>
         <Button variant={activeTab === "preview" ? "default" : "outline"} onClick={() => setActiveTab("preview")}>미리보기</Button>
         <Button variant={activeTab === "versions" ? "default" : "outline"} onClick={() => setActiveTab("versions")}>버전</Button>
-        <Button variant={activeTab === "settings" ? "default" : "outline"} onClick={() => setActiveTab("settings")}>설정</Button>
+        <Button variant={activeTab === "settings" ? "default" : "outline"} onClick={() => setActiveTab("settings")}>About</Button>
       </div>
 
       <div className="space-y-4 rounded-xl border border-slate-700 bg-slate-800 p-5">
@@ -611,6 +788,35 @@ export function AdminPages() {
                 </>
               ) : null}
 
+              {selectedBlock && (selectedBlock.type === "feature_list" || selectedBlock.type === "faq") ? (
+                <>
+                  <textarea
+                    value={listItemsInput}
+                    onChange={(event) => {
+                      const next = event.target.value
+                      setListItemsInput(next)
+                      try {
+                        const parsed = JSON.parse(next)
+                        if (!Array.isArray(parsed)) {
+                          setListItemsError("items는 배열(JSON Array)이어야 합니다")
+                          return
+                        }
+                        setListItemsError(null)
+                        updateSelectedBlockContent("items", parsed)
+                      } catch {
+                        setListItemsError("유효한 JSON 형식으로 입력하세요")
+                      }
+                    }}
+                    rows={10}
+                    placeholder="items JSON"
+                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100"
+                  />
+                  {listItemsError ? (
+                    <p className="text-xs text-rose-300">{listItemsError}</p>
+                  ) : null}
+                </>
+              ) : null}
+
               {selectedBlock && !SUPPORTED_BLOCK_TYPES.includes(selectedBlock.type as SupportedBlockType) ? (
                 <p className="text-xs text-slate-400">이 블록 타입은 현재 MVP 편집 범위 밖입니다.</p>
               ) : null}
@@ -621,8 +827,8 @@ export function AdminPages() {
         {activeTab === "preview" ? (
           <div className="space-y-3">
             <div className="flex gap-2">
-              <Button variant={previewDevice === "desktop" ? "default" : "outline"} onClick={() => setPreviewDevice("desktop")}>Desktop</Button>
-              <Button variant={previewDevice === "mobile" ? "default" : "outline"} onClick={() => setPreviewDevice("mobile")}>Mobile</Button>
+              <Button variant={previewDevice === "desktop" ? "default" : "outline"} onClick={() => handlePreviewDeviceChange("desktop")}>Desktop</Button>
+              <Button variant={previewDevice === "mobile" ? "default" : "outline"} onClick={() => handlePreviewDeviceChange("mobile")}>Mobile</Button>
             </div>
             <div className={`mx-auto rounded-xl border border-slate-700 bg-slate-900 p-4 ${previewDevice === "mobile" ? "max-w-sm" : "max-w-4xl"}`}>
               <div className="mb-3 flex items-center justify-between text-xs text-slate-400">
@@ -660,6 +866,47 @@ export function AdminPages() {
                         <a key={block.id} href={String(block.content.href ?? "#")} className="inline-flex rounded bg-emerald-500 px-4 py-2 text-sm font-medium text-slate-900">
                           {String(block.content.label ?? "CTA")}
                         </a>
+                      )
+                    }
+                    if (block.type === "feature_list") {
+                      const items = Array.isArray(block.content.items)
+                        ? (block.content.items as Array<Record<string, unknown>>)
+                        : []
+                      return (
+                        <div key={block.id} className="rounded border border-slate-700 p-3">
+                          <p className="mb-2 text-sm font-medium text-slate-100">Feature list ({items.length})</p>
+                          {items.length === 0 ? (
+                            <p className="text-xs text-slate-400">등록된 항목이 없습니다.</p>
+                          ) : (
+                            <ul className="space-y-1 text-sm text-slate-300">
+                              {items.map((item, idx) => (
+                                <li key={`${block.id}-item-${idx}`}>{JSON.stringify(item)}</li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      )
+                    }
+                    if (block.type === "faq") {
+                      const items = Array.isArray(block.content.items)
+                        ? (block.content.items as Array<Record<string, unknown>>)
+                        : []
+                      return (
+                        <div key={block.id} className="rounded border border-slate-700 p-3">
+                          <p className="mb-2 text-sm font-medium text-slate-100">FAQ ({items.length})</p>
+                          {items.length === 0 ? (
+                            <p className="text-xs text-slate-400">등록된 질문이 없습니다.</p>
+                          ) : (
+                            <ul className="space-y-2 text-sm text-slate-300">
+                              {items.map((item, idx) => (
+                                <li key={`${block.id}-faq-${idx}`}>
+                                  <p className="font-medium text-slate-200">Q. {String(item.question ?? "")}</p>
+                                  <p>A. {String(item.answer ?? "")}</p>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                       )
                     }
                     return (
@@ -735,6 +982,60 @@ export function AdminPages() {
                 ) : null}
               </div>
             ))}
+
+            {isSuperAdmin ? (
+              <div className="space-y-2 rounded border border-slate-700 bg-slate-900 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-slate-100">마이그레이션 백업 복구</p>
+                  <Button variant="outline" size="sm" onClick={() => void refreshMigrationBackups()} disabled={loadingBackups || restoringBackup}>
+                    {loadingBackups ? "로딩 중..." : "목록 새로고침"}
+                  </Button>
+                </div>
+                <select
+                  value={selectedBackupKey}
+                  onChange={(event) => setSelectedBackupKey(event.target.value)}
+                  className="w-full rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                >
+                  {filteredMigrationBackups.length === 0 ? (
+                    <option value="">사용 가능한 백업이 없습니다</option>
+                  ) : (
+                    filteredMigrationBackups.map((item) => (
+                      <option key={item.backupKey} value={item.backupKey}>
+                        {item.backupKey} · {item.capturedAt}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    checked={showDryRunBackupsOnly}
+                    onChange={(event) => setShowDryRunBackupsOnly(event.target.checked)}
+                  />
+                  dry-run 백업만 보기
+                </label>
+                <p className="text-xs text-slate-400">
+                  복구 대상: {selectedBackupKey || "없음"}
+                </p>
+                {selectedBackup ? (
+                  <div className="space-y-1 rounded border border-slate-700 bg-slate-950 p-2 text-xs text-slate-300">
+                    <p>capturedAt: {selectedBackup.capturedAt}</p>
+                    <p>updatedAt: {selectedBackup.updatedAt}</p>
+                    <p>reason: {selectedBackup.reason || "(none)"}</p>
+                    <p>sourceKey: {selectedBackup.sourceKey}</p>
+                    <p>type: {selectedBackup.dryRun ? "dry-run backup" : "applied backup"}</p>
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button variant="outline" onClick={() => void restoreFromBackup(true)} disabled={restoringBackup || loadingBackups || !selectedBackupKey}>
+                    dry-run 복구
+                  </Button>
+                  <Button onClick={() => void restoreFromBackup(false)} disabled={restoringBackup || loadingBackups || !selectedBackupKey} className="bg-emerald-500 text-slate-900 hover:bg-emerald-400">
+                    {restoringBackup ? "복구 중..." : "백업 복구 실행"}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 
@@ -775,7 +1076,7 @@ export function AdminPages() {
             </Button>
           ) : null}
           {conflictVersion !== null ? (
-            <Button variant="outline" onClick={() => void reloadDraft()}>
+            <Button variant="outline" onClick={() => void reloadDraft("conflict_reload")}>
               최신 Draft 불러오기
             </Button>
           ) : null}

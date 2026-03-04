@@ -96,6 +96,80 @@ export interface AdminActionObservability {
   publish_failure_distribution: Array<{ reason: string; count: number }>
 }
 
+export type AdminPagePerfScenario =
+  | "editor_initial_load"
+  | "preview_switch"
+  | "draft_save_roundtrip"
+
+export interface AdminPagePerfMetric {
+  sample_count: number
+  p75_ms: number
+  p95_ms: number
+  slo_p75_ms: number
+  within_slo: boolean
+}
+
+export interface AdminPagePerfSnapshot {
+  window_size: number
+  sample_count: number
+  metrics: Record<AdminPagePerfScenario, AdminPagePerfMetric>
+}
+
+export interface AdminPageMigrationPreviewResponse {
+  pageId: string
+  sourceType: string
+  sourceKey: string
+  mappingRules: Array<{ from: string; to: string }>
+  document: PageDocument
+  validation: {
+    blocking: Array<{ field: string; message: string }>
+    warnings: Array<{ field: string; message: string }>
+    blockingCount: number
+    warningCount: number
+  }
+}
+
+export interface AdminPageMigrationBackupListResponse {
+  pageId: string
+  count: number
+  items: Array<{
+    backupKey: string
+    capturedAt: string
+    reason: string
+    dryRun: boolean
+    sourceKey: string
+    updatedAt: string
+  }>
+}
+
+export interface AdminPageMigrationExecuteResponse {
+  pageId: string
+  dryRun: boolean
+  applied: boolean
+  savedVersion?: number
+  backupKey: string
+  validation: {
+    blocking: Array<{ field: string; message: string }>
+    warnings: Array<{ field: string; message: string }>
+    blockingCount: number
+    warningCount: number
+  }
+}
+
+export interface AdminPageMigrationRestoreResponse {
+  pageId: string
+  dryRun: boolean
+  restored: boolean
+  restoredVersion?: number
+  backupKey: string
+  validation: {
+    blocking: Array<{ field: string; message: string }>
+    warnings: Array<{ field: string; message: string }>
+    blockingCount: number
+    warningCount: number
+  }
+}
+
 export interface AdminManagedUser {
   id: string
   email: string
@@ -144,6 +218,12 @@ export interface ModerationPolicy {
   admin_log_retention_days: number
   admin_log_view_window_days: number
   admin_log_mask_reasons: boolean
+  page_editor_enabled: boolean
+  page_editor_rollout_stage: "qa" | "pilot" | "open"
+  page_editor_pilot_admin_ids: string[]
+  page_editor_publish_fail_rate_threshold: number
+  page_editor_rollback_ratio_threshold: number
+  page_editor_conflict_rate_threshold: number
   updated_at: string
   last_updated_by?: string | null
   last_updated_by_id?: string | null
@@ -905,6 +985,25 @@ export const api = {
     return res.json() as Promise<AdminActionObservability>
   },
 
+  getAdminPagePerfSnapshot: async () => {
+    const res = await authFetch(`${API_BASE}/api/admin/perf/page-editor`)
+    return res.json() as Promise<AdminPagePerfSnapshot>
+  },
+
+  logAdminPagePerfEvent: async (
+    pageId: string,
+    scenario: AdminPagePerfScenario,
+    durationMs: number,
+    source: string = "ui",
+  ) => {
+    const res = await authFetch(`${API_BASE}/api/admin/perf/page-editor/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pageId, scenario, durationMs, source }),
+    })
+    return res.json() as Promise<{ ok: boolean }>
+  },
+
   getAdminUsers: async (limit: number = 200, options?: SWRFetchOptions<AdminListResponse<AdminManagedUser>>) => {
     const key = createAdminCacheKey("users", { limit })
     return fetchWithAdminSWR(
@@ -1117,6 +1216,12 @@ export const api = {
     admin_log_retention_days?: number,
     admin_log_view_window_days?: number,
     admin_log_mask_reasons?: boolean,
+    page_editor_enabled?: boolean,
+    page_editor_rollout_stage?: "qa" | "pilot" | "open",
+    page_editor_pilot_admin_ids?: string[],
+    page_editor_publish_fail_rate_threshold?: number,
+    page_editor_rollback_ratio_threshold?: number,
+    page_editor_conflict_rate_threshold?: number,
   ) => {
     const payload: {
       blocked_keywords: string[]
@@ -1126,6 +1231,12 @@ export const api = {
       admin_log_retention_days?: number
       admin_log_view_window_days?: number
       admin_log_mask_reasons?: boolean
+      page_editor_enabled?: boolean
+      page_editor_rollout_stage?: "qa" | "pilot" | "open"
+      page_editor_pilot_admin_ids?: string[]
+      page_editor_publish_fail_rate_threshold?: number
+      page_editor_rollback_ratio_threshold?: number
+      page_editor_conflict_rate_threshold?: number
     } = {
       blocked_keywords,
       auto_hide_report_threshold,
@@ -1144,6 +1255,24 @@ export const api = {
     }
     if (typeof admin_log_mask_reasons === "boolean") {
       payload.admin_log_mask_reasons = admin_log_mask_reasons
+    }
+    if (typeof page_editor_enabled === "boolean") {
+      payload.page_editor_enabled = page_editor_enabled
+    }
+    if (page_editor_rollout_stage) {
+      payload.page_editor_rollout_stage = page_editor_rollout_stage
+    }
+    if (page_editor_pilot_admin_ids) {
+      payload.page_editor_pilot_admin_ids = page_editor_pilot_admin_ids
+    }
+    if (typeof page_editor_publish_fail_rate_threshold === "number") {
+      payload.page_editor_publish_fail_rate_threshold = page_editor_publish_fail_rate_threshold
+    }
+    if (typeof page_editor_rollback_ratio_threshold === "number") {
+      payload.page_editor_rollback_ratio_threshold = page_editor_rollback_ratio_threshold
+    }
+    if (typeof page_editor_conflict_rate_threshold === "number") {
+      payload.page_editor_conflict_rate_threshold = page_editor_conflict_rate_threshold
     }
 
     const res = await authFetch(`${API_BASE}/api/admin/policies`, {
@@ -1221,6 +1350,40 @@ export const api = {
     const params = new URLSearchParams({ from_version: String(fromVersion), to_version: String(toVersion) })
     const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/versions-compare?${params.toString()}`)
     return res.json() as Promise<AdminPageVersionCompareResponse>
+  },
+
+  getAdminPageMigrationPreview: async (pageId: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/migration/preview`)
+    return res.json() as Promise<AdminPageMigrationPreviewResponse>
+  },
+
+  getAdminPageMigrationBackups: async (pageId: string, limit: number = 20) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/migration/backups?${params.toString()}`)
+    return res.json() as Promise<AdminPageMigrationBackupListResponse>
+  },
+
+  executeAdminPageMigration: async (pageId: string, reason: string, dryRun: boolean = false) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/migration/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason, dryRun }),
+    })
+    return res.json() as Promise<AdminPageMigrationExecuteResponse>
+  },
+
+  restoreAdminPageMigration: async (
+    pageId: string,
+    backupKey: string,
+    reason: string,
+    dryRun: boolean = false,
+  ) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/migration/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ backupKey, reason, dryRun }),
+    })
+    return res.json() as Promise<AdminPageMigrationRestoreResponse>
   },
 
   rollbackAdminPage: async (pageId: string, targetVersion: number, reason: string, publishNow: boolean = false) => {

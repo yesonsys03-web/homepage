@@ -13,6 +13,12 @@ export function AdminPolicies() {
   const [adminLogRetentionDays, setAdminLogRetentionDays] = useState(365)
   const [adminLogViewWindowDays, setAdminLogViewWindowDays] = useState(30)
   const [adminLogMaskReasons, setAdminLogMaskReasons] = useState(true)
+  const [pageEditorEnabled, setPageEditorEnabled] = useState(true)
+  const [pageEditorRolloutStage, setPageEditorRolloutStage] = useState<"qa" | "pilot" | "open">("qa")
+  const [pageEditorPilotAdminIdsInput, setPageEditorPilotAdminIdsInput] = useState("")
+  const [pageEditorPublishFailRateThreshold, setPageEditorPublishFailRateThreshold] = useState(0.2)
+  const [pageEditorRollbackRatioThreshold, setPageEditorRollbackRatioThreshold] = useState(0.3)
+  const [pageEditorConflictRateThreshold, setPageEditorConflictRateThreshold] = useState(0.25)
   const [oauthEnabled, setOauthEnabled] = useState(false)
   const [oauthGoogleRedirectUri, setOauthGoogleRedirectUri] = useState("")
   const [oauthFrontendRedirectUri, setOauthFrontendRedirectUri] = useState("")
@@ -35,6 +41,12 @@ export function AdminPolicies() {
         setAdminLogMaskReasons(
           policy.admin_log_mask_reasons ?? true,
         )
+        setPageEditorEnabled(policy.page_editor_enabled ?? true)
+        setPageEditorRolloutStage(policy.page_editor_rollout_stage ?? "qa")
+        setPageEditorPilotAdminIdsInput((policy.page_editor_pilot_admin_ids ?? []).join(", "))
+        setPageEditorPublishFailRateThreshold(policy.page_editor_publish_fail_rate_threshold ?? 0.2)
+        setPageEditorRollbackRatioThreshold(policy.page_editor_rollback_ratio_threshold ?? 0.3)
+        setPageEditorConflictRateThreshold(policy.page_editor_conflict_rate_threshold ?? 0.25)
 
         setOauthEnabled(oauthSettings.google_oauth_enabled)
         setOauthGoogleRedirectUri(oauthSettings.google_redirect_uri || "")
@@ -53,6 +65,10 @@ export function AdminPolicies() {
       .split(",")
       .map((item) => item.trim())
       .filter(Boolean)
+    const pilotAdminIds = pageEditorPilotAdminIdsInput
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean)
 
     setSaving(true)
     try {
@@ -64,6 +80,12 @@ export function AdminPolicies() {
         adminLogRetentionDays,
         adminLogViewWindowDays,
         adminLogMaskReasons,
+        pageEditorEnabled,
+        pageEditorRolloutStage,
+        pilotAdminIds,
+        pageEditorPublishFailRateThreshold,
+        pageEditorRollbackRatioThreshold,
+        pageEditorConflictRateThreshold,
       )
     } finally {
       setSaving(false)
@@ -146,6 +168,78 @@ export function AdminPolicies() {
           />
           로그 사유(reason) 마스킹 사용
         </label>
+      </article>
+
+      <article className="space-y-4 rounded-xl border border-slate-700 bg-slate-800 p-5">
+        <h2 className="text-lg font-medium text-slate-100">페이지 편집 롤아웃(E-1)</h2>
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={pageEditorEnabled}
+            onChange={(event) => setPageEditorEnabled(event.target.checked)}
+          />
+          페이지 편집 기능 활성화
+        </label>
+        <label className="block text-sm text-slate-300">
+          롤아웃 단계
+          <select
+            aria-label="롤아웃 단계"
+            value={pageEditorRolloutStage}
+            onChange={(event) => setPageEditorRolloutStage(event.target.value as "qa" | "pilot" | "open")}
+            className="mt-1 w-48 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+          >
+            <option value="qa">내부 QA</option>
+            <option value="pilot">파일럿</option>
+            <option value="open">전체 오픈</option>
+          </select>
+        </label>
+        <label className="block text-sm text-slate-300">
+          파일럿 관리자 ID 목록(쉼표 구분)
+          <input
+            value={pageEditorPilotAdminIdsInput}
+            onChange={(event) => setPageEditorPilotAdminIdsInput(event.target.value)}
+            placeholder="1111..., 2222..."
+            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+          />
+        </label>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <label className="block text-sm text-slate-300">
+            Publish 실패율 임계치(0~1)
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={pageEditorPublishFailRateThreshold}
+              onChange={(event) => setPageEditorPublishFailRateThreshold(Number(event.target.value) || 0)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+          <label className="block text-sm text-slate-300">
+            Rollback 비율 임계치(0~1)
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={pageEditorRollbackRatioThreshold}
+              onChange={(event) => setPageEditorRollbackRatioThreshold(Number(event.target.value) || 0)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+          <label className="block text-sm text-slate-300">
+            충돌률 임계치(0~1)
+            <input
+              type="number"
+              min={0}
+              max={1}
+              step={0.01}
+              value={pageEditorConflictRateThreshold}
+              onChange={(event) => setPageEditorConflictRateThreshold(Number(event.target.value) || 0)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+        </div>
       </article>
 
       <article className="space-y-4 rounded-xl border border-slate-700 bg-slate-800 p-5">

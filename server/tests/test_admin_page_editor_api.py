@@ -28,6 +28,7 @@ def _admin_context(
 def test_get_admin_page_draft_fallback_from_about(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     monkeypatch.setattr(main, "get_page_document_draft", lambda _page_id: None)
     monkeypatch.setattr(
@@ -55,9 +56,62 @@ def test_get_admin_page_draft_fallback_from_about(monkeypatch: Any) -> None:
     main.app.dependency_overrides.clear()
 
 
+def test_get_admin_page_draft_returns_forbidden_when_rollout_disabled(
+    monkeypatch: Any,
+) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+
+    monkeypatch.setattr(
+        main,
+        "get_effective_moderation_settings",
+        lambda: {
+            "page_editor_enabled": False,
+            "page_editor_rollout_stage": "open",
+            "page_editor_pilot_admin_ids": [],
+        },
+    )
+
+    response = client.get("/api/admin/pages/about_page/draft")
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "page_editor_disabled"
+
+    main.app.dependency_overrides.clear()
+
+
+def test_get_admin_page_draft_returns_forbidden_for_non_super_admin_in_qa_stage(
+    monkeypatch: Any,
+) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        role="admin"
+    )
+
+    monkeypatch.setattr(
+        main,
+        "get_effective_moderation_settings",
+        lambda: {
+            "page_editor_enabled": True,
+            "page_editor_rollout_stage": "qa",
+            "page_editor_pilot_admin_ids": [],
+        },
+    )
+
+    response = client.get("/api/admin/pages/about_page/draft")
+
+    assert response.status_code == 403
+    detail = response.json()["detail"]
+    assert detail["code"] == "page_editor_stage_qa_only"
+
+    main.app.dependency_overrides.clear()
+
+
 def test_update_admin_page_draft_returns_conflict(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     monkeypatch.setattr(
         main,
@@ -99,6 +153,7 @@ def test_publish_admin_page_success(monkeypatch: Any) -> None:
     main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
         role="super_admin"
     )
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     monkeypatch.setattr(
         main,
@@ -174,6 +229,7 @@ def test_update_admin_page_draft_returns_validation_error_for_invalid_url(
 ) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     payload = {
         "baseVersion": 1,
@@ -224,6 +280,7 @@ def test_publish_admin_page_returns_conflict_when_not_latest_draft(
     main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
         role="super_admin"
     )
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     monkeypatch.setattr(
         main,
@@ -247,6 +304,7 @@ def test_publish_admin_page_returns_conflict_when_not_latest_draft(
 def test_compare_admin_page_versions_returns_diff_summary(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     def fake_get_page_document_version(_page_id: str, version: int) -> dict[str, Any]:
         if version == 1:
@@ -328,6 +386,7 @@ def test_compare_admin_page_versions_returns_diff_summary(monkeypatch: Any) -> N
 def test_update_admin_page_draft_conflict_writes_conflict_log(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     logged_action_types: list[str] = []
     monkeypatch.setattr(
@@ -389,6 +448,7 @@ def test_publish_admin_page_validation_failure_writes_failed_log(
     main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
         role="super_admin"
     )
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
     logged_action_types: list[str] = []
     monkeypatch.setattr(
@@ -508,5 +568,244 @@ def test_get_admin_action_logs_observability(monkeypatch: Any) -> None:
     body = response.json()
     assert body["summary"]["published"] == 2
     assert body["publish_failure_distribution"][0]["reason"] == "validation_failed"
+
+    main.app.dependency_overrides.clear()
+
+
+def test_create_page_editor_perf_event_records_sample_and_log(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+
+    recorded: list[tuple[str, float]] = []
+    logged: dict[str, Any] = {}
+
+    monkeypatch.setattr(
+        main,
+        "_record_page_editor_perf",
+        lambda scenario, duration_ms: recorded.append((scenario, duration_ms)),
+    )
+    monkeypatch.setattr(
+        main,
+        "write_admin_action_log",
+        lambda **kwargs: logged.update(kwargs),
+    )
+
+    response = client.post(
+        "/api/admin/perf/page-editor/events",
+        json={
+            "pageId": "about_page",
+            "scenario": "draft_save_roundtrip",
+            "durationMs": 612.4,
+            "source": "manual",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ok"] is True
+    assert recorded == [("draft_save_roundtrip", 612.4)]
+    assert logged["action_type"] == "page_perf_draft_save_roundtrip"
+    assert logged["target_type"] == "page"
+    assert logged["target_id"] == main.page_action_target_id("about_page")
+    assert "duration_ms=612.40" in str(logged["reason"])
+
+    main.app.dependency_overrides.clear()
+
+
+def test_get_page_editor_perf_snapshot(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+
+    monkeypatch.setattr(
+        main,
+        "_page_editor_perf_snapshot",
+        lambda: {
+            "window_size": 500,
+            "sample_count": 3,
+            "metrics": {
+                "editor_initial_load": {
+                    "sample_count": 1,
+                    "p75_ms": 2200.0,
+                    "p95_ms": 2200.0,
+                    "slo_p75_ms": 2500.0,
+                    "within_slo": True,
+                },
+                "preview_switch": {
+                    "sample_count": 1,
+                    "p75_ms": 410.0,
+                    "p95_ms": 410.0,
+                    "slo_p75_ms": 500.0,
+                    "within_slo": True,
+                },
+                "draft_save_roundtrip": {
+                    "sample_count": 1,
+                    "p75_ms": 780.0,
+                    "p95_ms": 780.0,
+                    "slo_p75_ms": 800.0,
+                    "within_slo": True,
+                },
+            },
+        },
+    )
+
+    response = client.get("/api/admin/perf/page-editor")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["sample_count"] == 3
+    assert body["metrics"]["preview_switch"]["p75_ms"] == 410.0
+
+    main.app.dependency_overrides.clear()
+
+
+def test_get_admin_page_migration_preview(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+
+    monkeypatch.setattr(
+        main,
+        "build_page_migration_preview",
+        lambda page_id: {
+            "pageId": page_id,
+            "sourceType": "site_content",
+            "sourceKey": "about_content",
+            "document": {"pageId": page_id, "blocks": []},
+            "validation": {
+                "blocking": [],
+                "warnings": [],
+                "blockingCount": 0,
+                "warningCount": 0,
+            },
+        },
+    )
+
+    response = client.get("/api/admin/pages/about_page/migration/preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["pageId"] == "about_page"
+    assert body["validation"]["blockingCount"] == 0
+
+    main.app.dependency_overrides.clear()
+
+
+def test_get_admin_page_migration_backups(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+
+    monkeypatch.setattr(
+        main,
+        "list_page_migration_backups",
+        lambda page_id, limit=20: {
+            "pageId": page_id,
+            "count": 2,
+            "items": [
+                {
+                    "backupKey": "about_page_migration_backup_111",
+                    "capturedAt": "2026-03-04T12:00:00Z",
+                    "reason": "migration run",
+                    "dryRun": False,
+                    "sourceKey": "about_content",
+                    "updatedAt": "2026-03-04T12:00:01Z",
+                },
+                {
+                    "backupKey": "about_page_migration_backup_110",
+                    "capturedAt": "2026-03-04T11:00:00Z",
+                    "reason": "dry run",
+                    "dryRun": True,
+                    "sourceKey": "about_content",
+                    "updatedAt": "2026-03-04T11:00:01Z",
+                },
+            ],
+        },
+    )
+
+    response = client.get("/api/admin/pages/about_page/migration/backups?limit=5")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 2
+    assert body["items"][0]["backupKey"].startswith("about_page_migration_backup_")
+
+    main.app.dependency_overrides.clear()
+
+
+def test_execute_admin_page_migration_dry_run(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+
+    monkeypatch.setattr(
+        main,
+        "execute_page_migration",
+        lambda page_id, actor_id, reason, dry_run: {
+            "pageId": page_id,
+            "dryRun": dry_run,
+            "applied": False,
+            "backupKey": "about_content_migration_backup_123",
+            "validation": {
+                "blocking": [],
+                "warnings": [],
+                "blockingCount": 0,
+                "warningCount": 0,
+            },
+        },
+    )
+
+    response = client.post(
+        "/api/admin/pages/about_page/migration/execute",
+        json={"reason": "dry run", "dryRun": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dryRun"] is True
+    assert body["applied"] is False
+    assert body["backupKey"].startswith("about_content_migration_backup_")
+
+    main.app.dependency_overrides.clear()
+
+
+def test_restore_admin_page_migration_dry_run(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+
+    monkeypatch.setattr(
+        main,
+        "restore_page_migration_backup",
+        lambda page_id, backup_key, actor_id, reason, dry_run: {
+            "pageId": page_id,
+            "dryRun": dry_run,
+            "restored": False,
+            "backupKey": backup_key,
+            "validation": {
+                "blocking": [],
+                "warnings": [],
+                "blockingCount": 0,
+                "warningCount": 0,
+            },
+        },
+    )
+
+    response = client.post(
+        "/api/admin/pages/about_page/migration/restore",
+        json={
+            "backupKey": "about_page_migration_backup_1772629489",
+            "reason": "restore dry run",
+            "dryRun": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dryRun"] is True
+    assert body["restored"] is False
+    assert body["backupKey"] == "about_page_migration_backup_1772629489"
 
     main.app.dependency_overrides.clear()

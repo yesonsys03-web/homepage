@@ -40,6 +40,23 @@
 - 핵심 시나리오별 기준선 수치 문서화
 - CI/스테이징 재현 측정 절차 문서화
 
+## 구현 반영 (Sprint 3)
+
+- API
+  - 페이지 편집 성능 스냅샷: `GET /api/admin/perf/page-editor`
+  - 페이지 편집 성능 이벤트 수집: `POST /api/admin/perf/page-editor/events`
+- 수집 시나리오
+  - `editor_initial_load` (편집기 초기 로딩)
+  - `draft_save_roundtrip` (draft 저장 왕복)
+  - `preview_switch` (프리뷰 디바이스 전환)
+- 기준선 산출
+  - 서버는 최근 샘플 윈도우에서 시나리오별 `p75_ms`, `p95_ms`, `sample_count`를 계산
+  - SLO(`editor_initial_load=2500ms`, `draft_save_roundtrip=800ms`, `preview_switch=500ms`) 대비 `within_slo`를 응답
+- 화면/클라이언트
+  - `AdminPages`가 초기 로딩/저장/프리뷰 전환 시 성능 이벤트를 자동 전송
+  - 이벤트는 감사 로그(`action_type=page_perf_*`)에도 남겨 운영 추적 가능
+
 ## 변경 이력
 
 - 2026-03-04: Sprint 3 초안 작성
+- 2026-03-04: D-3 성능 이벤트 수집/스냅샷 API 및 AdminPages 계측 반영

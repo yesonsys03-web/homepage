@@ -1676,3 +1676,295 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. 다음 기능은 다음 세션에서 시작하고, 이번 세션은 기록/릴리스(커밋, 태그)로 마감한다.
 2. `node_modules` 변경 분리 정책(.gitignore/워크플로우)을 점검해 커밋 노이즈를 줄인다.
+
+## Session 2026-03-04-02
+
+### 1) Goal
+- `page_edit_spec` 기준 미착수 영역 중 D-3(성능 기준선)를 실제 계측 코드로 시작한다.
+- 문서상의 기준선을 코드로 수집/관측 가능 상태로 연결한다.
+
+### 2) Inputs
+- 참고 문서:
+  - `docs/page_edit_spec_d3_performance_baseline.md`
+  - `docs/page_edit_sprint3_index.md`
+  - `docs/page_edit_tasks.md`
+- 코드베이스 팩트:
+  - Sprint 3의 C-3/D-1/D-2는 이미 반영 완료
+  - D-3은 문서 초안만 있고 성능 이벤트 계측 API는 미구현
+
+### 3) Design Decisions
+- 기존 `admin/perf/projects` 패턴을 확장해, page editor도 별도 perf 스냅샷 엔드포인트를 제공한다.
+- 성능 이벤트는 서버 메모리 윈도우(`deque`)에 집계하고, 동시에 `admin_action_logs`에 `page_perf_*`로 남겨 운영 추적 가능성을 확보한다.
+- 측정 시나리오는 D-3 명세의 핵심 3개(`editor_initial_load`, `draft_save_roundtrip`, `preview_switch`)로 고정한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `POST /api/admin/perf/page-editor/events` 추가
+    - `GET /api/admin/perf/page-editor` 추가
+    - page editor perf 샘플 윈도우, p75/p95 계산, SLO 판정(`within_slo`) 구현
+- 프론트
+  - `src/lib/api.ts`
+    - `logAdminPagePerfEvent`, `getAdminPagePerfSnapshot` API 함수 및 타입 추가
+  - `src/components/screens/admin/pages/AdminPages.tsx`
+    - 초기 로딩/저장/프리뷰 전환 시 성능 이벤트 전송 연결
+    - 기존 빈 `catch {}`를 오류 로깅 형태로 정리
+- 테스트
+  - `server/tests/test_admin_page_editor_api.py`
+    - perf 이벤트 수집 API 테스트 추가
+    - perf 스냅샷 조회 API 테스트 추가
+
+### 5) Validation
+- 진행 중: 타입체크/테스트/빌드 검증 예정
+
+### 6) Outcome
+#### 잘된 점
+- 문서(D-3) 기준선 정의가 코드 계측 경로와 연결되어, 이후 운영 지표/회귀판단 자동화 기반을 마련했다.
+
+#### 아쉬운 점
+- 현재 샘플은 서버 메모리 윈도우 기반이라 재시작 시 초기화된다.
+
+#### 다음 액션
+1. `pnpm test`, `pnpm build`, `pytest`로 회귀 확인 후 D-3 시작점을 확정한다.
+2. E-1(단계적 롤아웃)에서 D-3 스냅샷 게이트를 실제 체크리스트에 연결한다.
+
+## Session 2026-03-04-03
+
+### 1) Goal
+- `page_edit_spec_e1_rollout_plan.md` 기준으로 단계적 롤아웃 제어를 코드에 반영한다.
+- 토글 off, QA/파일럿/전체 오픈 단계를 백엔드 접근 제어와 Admin 정책 UI에 연결한다.
+
+### 2) Inputs
+- 참고 문서:
+  - `docs/page_edit_spec_e1_rollout_plan.md`
+  - `docs/page_edit_sprint3_index.md`
+- 기존 코드:
+  - `server/db.py` moderation_settings
+  - `server/main.py` 정책 API + 페이지 에디터 API
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+
+### 3) Design Decisions
+- 롤아웃 상태는 별도 테이블이 아니라 기존 `moderation_settings`에 포함해 운영 정책과 함께 관리한다.
+- 접근 제어는 프론트 숨김만으로 끝내지 않고, page editor API 엔드포인트에서 서버단 강제 차단으로 구현한다.
+- 단계 규칙은 단순화한다:
+  - `qa`: super_admin만 허용
+  - `pilot`: super_admin + 지정 pilot admin ids
+  - `open`: admin/super_admin 허용
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - moderation_settings에 롤아웃 제어 컬럼 추가
+      - `page_editor_enabled`
+      - `page_editor_rollout_stage`
+      - `page_editor_pilot_admin_ids`
+      - `page_editor_publish_fail_rate_threshold`
+      - `page_editor_rollback_ratio_threshold`
+      - `page_editor_conflict_rate_threshold`
+    - 조회/업데이트 함수(`get_moderation_settings`, `update_moderation_settings`) 확장
+  - `server/main.py`
+    - 정책 요청 모델(`AdminPolicyUpdateRequest`) 확장
+    - 정책 정규화(`get_effective_moderation_settings`, `ensure_baseline_moderation_settings`) 확장
+    - `enforce_page_editor_rollout_access` 추가 후 page editor API 진입점에 적용
+      - draft/get/save/publish/versions/compare/rollback
+- 프론트
+  - `src/lib/api.ts`
+    - `ModerationPolicy` 타입 확장
+    - `updateAdminPolicies` payload 확장
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - E-1 롤아웃 섹션 UI 추가(활성화, 단계, 파일럿 IDs, 임계치)
+- 테스트
+  - `server/tests/test_admin_page_editor_api.py`
+    - 롤아웃 비활성/QA 단계 접근 차단 케이스 추가
+  - `src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx`
+    - 정책 저장 인자에 롤아웃 필드 반영
+
+### 5) Validation
+- 진행 중: 프론트/백엔드 테스트 및 빌드 검증 예정
+
+### 6) Outcome
+#### 잘된 점
+- E-1의 핵심인 단계적 노출과 즉시 차단(토글 off)이 운영 정책 API/화면/서버 접근 제어까지 일관되게 연결됐다.
+
+#### 아쉬운 점
+- 파일럿 대상은 현재 ID 기반 수동 입력 방식이라, 향후 사용자 선택형 UI 개선 여지가 있다.
+
+#### 다음 액션
+1. E-2(데이터 마이그레이션)로 넘어가기 전에 E-1 정책 변경 회귀 테스트를 CI 기준으로 고정한다.
+2. E-3 운영 가이드에 QA/파일럿 전환 체크리스트를 구체화한다.
+
+## Session 2026-03-04-04
+
+### 1) Goal
+- E-2 데이터 마이그레이션 계획을 실제 실행 가능한 API/스크립트로 전환한다.
+- 추출-변환-검증-백업-적용 흐름을 서버에서 재현 가능하도록 구현한다.
+
+### 2) Inputs
+- 참고 문서:
+  - `docs/page_edit_spec_e2_migration_plan.md`
+  - `docs/page_edit_sprint3_index.md`
+- 기존 코드:
+  - `get_about_content_payload`, `build_page_document_from_about_content`, `collect_page_document_issues`
+  - page document draft/version 저장 계층(`save_page_document_draft`)
+
+### 3) Design Decisions
+- 마이그레이션 1차 대상은 `about_page`로 고정한다(핵심 페이지 우선 이행).
+- 실제 적용 전 반드시 백업을 생성하고, `dryRun` 모드에서 검증/백업만 수행 가능하게 설계한다.
+- 검증 차단 이슈가 있으면 적용을 중단하고 422로 반환한다.
+
+### 4) Implementation Notes
+- 백엔드 API
+  - `GET /api/admin/pages/{page_id}/migration/preview`
+  - `POST /api/admin/pages/{page_id}/migration/execute` (`reason`, `dryRun`)
+  - 구현 파일: `server/main.py`
+  - 핵심 함수:
+    - `build_page_migration_preview`
+    - `execute_page_migration`
+- 실행 보장
+  - 백업 키(`about_content_migration_backup_<ts>`)를 `site_contents`에 저장
+  - 적용 시 `save_page_document_draft`로 변환 결과를 draft 버전으로 반영
+  - 관리자 액션 로그에 backup/dry-run/applied 이벤트 기록
+- 보조 스크립트
+  - `server/migrations/e2_data_extraction.py`
+  - `server/migrations/e2_block_transform.py`
+  - `server/migrations/e2_migration_runner.py`
+- 프론트 API 타입
+  - `src/lib/api.ts`에 migration preview/execute 타입/호출 함수 추가
+
+### 5) Validation
+- 진행 중: API 테스트/빌드 검증 예정
+
+### 6) Outcome
+#### 잘된 점
+- E-2가 문서 계획 수준에서 실제 실행 단위(Preview/Execute + dry-run + backup)로 전환되었다.
+
+#### 아쉬운 점
+- 현재 마이그레이션 지원 대상은 `about_page` 단일이며, 다중 페이지 확장은 후속 설계가 필요하다.
+
+#### 다음 액션
+1. 다중 페이지 이행을 위해 legacy source resolver를 페이지별 플러그인 구조로 확장한다.
+2. E-3 운영 가이드에 backup_key 기반 복구 절차를 구체 예시와 함께 추가한다.
+
+## Session 2026-03-04-05
+
+### 1) Goal
+- E-3 운영 가이드를 실제 구현 기준(runbook/체크리스트/복구)으로 구체화한다.
+- E-2에서 생성되는 `backupKey`를 운영 복구 절차로 바로 사용할 수 있도록 API와 문서를 연결한다.
+
+### 2) Inputs
+- 참고 문서:
+  - `docs/page_edit_spec_e3_operations_guide.md`
+  - `docs/page_edit_spec_e1_rollout_plan.md`
+  - `docs/page_edit_spec_e2_migration_plan.md`
+- 기존 구현:
+  - E-1 롤아웃 제어(`page_editor_enabled`, stage/pilot)
+  - E-2 migration preview/execute + backup 생성
+
+### 3) Design Decisions
+- 운영 복구는 “문서 절차만”이 아니라 API로 즉시 실행 가능해야 한다.
+- migration backup 복구는 super_admin 전용으로 제한하고, dry-run 모드를 제공해 안전하게 검증 후 적용한다.
+- E-3 문서는 실행 가능한 API 목록/체크리스트/온보딩 시나리오까지 포함해 핸드북 수준으로 확장한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `POST /api/admin/pages/{page_id}/migration/restore` 추가
+    - 입력: `backupKey`, `reason`, `dryRun`
+    - 동작: backup 조회 -> dry-run 검증 또는 실제 복구 저장 -> 로그 기록
+  - 구현 파일: `server/main.py`
+  - 핵심 함수: `restore_page_migration_backup`
+- 프론트 API 타입
+  - `src/lib/api.ts`에 `restoreAdminPageMigration` 및 응답 타입 추가
+- 테스트
+  - `server/tests/test_admin_page_editor_api.py`
+    - restore dry-run 엔드포인트 테스트 추가
+- 문서
+  - `docs/page_edit_spec_e3_operations_guide.md`
+    - 즉시 대응 runbook, 배포 전/후/주간 체크리스트, 60분 온보딩, FAQ, 운영 API 레퍼런스 보강
+
+### 5) Validation
+- 진행 중: E-3 반영 후 테스트/빌드/진단 재실행 예정
+
+### 6) Outcome
+#### 잘된 점
+- 운영팀이 장애 상황에서 토글 off + 관측 + rollback/migration restore를 동일한 흐름으로 실행할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재 복구는 backupKey를 수동 입력하는 방식이며, 향후 UI에서 백업 목록 선택형으로 개선 여지가 있다.
+
+#### 다음 액션
+1. E-3 문서 기준으로 운영 시뮬레이션(테이블탑) 1회 수행하고 FAQ를 실제 사례 중심으로 다듬는다.
+2. 백업 키 조회 목록 API를 추가해 복구 UX를 단순화한다.
+
+## Session 2026-03-04-06
+
+### 1) Goal
+- E-3 후속으로 `backupKey` 목록 조회를 API로 제공해 복구 흐름의 운영 편의성을 높인다.
+
+### 2) Inputs
+- 이전 세션 산출물: migration restore API, E-3 runbook
+- 요구사항: 수동 backupKey 입력 대신 선택 가능한 복구 흐름
+
+### 3) Design Decisions
+- 백업 목록은 `site_contents`의 prefix 검색으로 제공하고, page_id 일치 항목만 반환한다.
+- 복구 API 자체는 유지하고, 목록 조회를 별도 read endpoint로 분리한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - DB helper: `list_site_contents_by_prefix` 추가 (`server/db.py`)
+  - API: `GET /api/admin/pages/{page_id}/migration/backups` 추가 (`server/main.py`)
+  - 응답 필드: `backupKey`, `capturedAt`, `reason`, `dryRun`, `sourceKey`, `updatedAt`
+- 프론트 API
+  - `getAdminPageMigrationBackups(pageId, limit)` 추가 (`src/lib/api.ts`)
+- 테스트
+  - backup 목록 조회 endpoint 테스트 추가 (`server/tests/test_admin_page_editor_api.py`)
+- 문서
+  - E-3 runbook/API 레퍼런스에 backup 목록 조회 절차 반영
+
+### 5) Validation
+- 진행 중: LSP/테스트/빌드 재검증 예정
+
+### 6) Outcome
+#### 잘된 점
+- 운영자는 복구 전 backupKey를 목록에서 확인해 실수 가능성을 줄일 수 있게 됐다.
+
+#### 아쉬운 점
+- 아직 UI에서 실제 목록 선택 컴포넌트는 없고 API 연결 단계까지 완료됐다.
+
+#### 다음 액션
+1. AdminPages 복구 모달에 backup 목록 드롭다운을 붙여 복구 UX를 완성한다.
+2. backup 목록에 페이징/검색(기간, dry-run 필터) 옵션을 추가한다.
+
+## Session 2026-03-04-07
+
+### 1) Goal
+- AdminPages에서 backupKey 수동 입력 없이 목록 선택으로 복구를 실행할 수 있게 UX를 완성한다.
+
+### 2) Inputs
+- 직전 산출물: backup 목록 조회 API(`GET .../migration/backups`), restore API
+
+### 3) Design Decisions
+- 복구 동선은 `버전` 탭 내에 두고, 버전 비교/롤백 흐름과 함께 운영자가 보게 한다.
+- 복구 버튼은 dry-run/실행을 분리해 실수 복구를 줄인다.
+
+### 4) Implementation Notes
+- `src/components/screens/admin/pages/AdminPages.tsx`
+  - backup 목록 로딩/선택 상태 추가
+  - `버전` 탭에 `마이그레이션 백업 복구` 카드 추가
+  - `dry-run 복구`, `백업 복구 실행`, `목록 새로고침` 동작 연결
+  - 복구 성공 시 draft/versions/backups 동시 새로고침
+- `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
+  - backup 선택 기반 dry-run 복구 호출 회귀 테스트 추가
+
+### 5) Validation
+- 진행 중: LSP/테스트/빌드 재검증 예정
+
+### 6) Outcome
+#### 잘된 점
+- 복구 UX가 API 수준에서 UI 수준으로 올라와 운영자가 즉시 사용할 수 있게 됐다.
+
+#### 아쉬운 점
+- backup 목록 필터(기간, dry-run 여부)는 아직 미지원이다.
+
+#### 다음 액션
+1. backup 목록 필터/검색 UI를 추가해 백업 수가 많아져도 빠르게 찾게 한다.
+2. restore 실행 전 선택 백업의 핵심 메타(reason/capturedAt)를 확인 모달로 재확인한다.
