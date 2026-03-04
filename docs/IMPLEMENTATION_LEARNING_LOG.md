@@ -1616,3 +1616,63 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. lifespan 내부 초기화 항목을 함수별로 분리해 테스트 가능성을 높인다.
 2. 운영 로그(cleanup 실행 횟수/삭제 건수) 메트릭을 별도 관찰 포인트로 노출한다.
+
+## Session 2026-03-04-01
+
+### 1) Goal
+- 페이지 편집 로드맵의 Sprint 2~3(C-3, D-1, D-2)을 실제 코드로 마무리하고, 테스트/빌드 검증까지 완료한다.
+- 작업 과정을 학습 로그로 남기고, 다음 기능은 다음 날로 이월 가능한 상태로 정리한다.
+
+### 2) Inputs
+- 참고 문서:
+  - `docs/page_edit_spec_c3_version_rollback.md`
+  - `docs/page_edit_spec_d1_test_strategy.md`
+  - `docs/page_edit_spec_d2_audit_observability.md`
+  - `docs/page_edit_sprint3_index.md`
+- 사용자 피드백/이슈:
+  - "한글로 설명"
+  - "계속 진행"
+  - "다음 기능은 내일, 지금까지 과정 MD 업데이트 + 커밋/푸시/태그"
+- 제약 조건:
+  - `node_modules` 대량 변경은 커밋에서 제외
+  - 기존 코드/문서 스타일 유지
+
+### 3) Design Decisions
+- 버전 비교 API 경로는 기존 버전 조회 라우트와 충돌 가능성을 피하기 위해 `versions-compare`로 분리했다.
+- 관리자 로그는 "감사 추적"과 "운영 관측"을 분리하지 않고, 필터 + 집계 API를 함께 제공해 운영자가 한 화면에서 판단 가능하게 구성했다.
+- 프론트 테스트는 실제 렌더 환경에 맞춰 `react-query` Provider를 명시적으로 감싸고, 비동기 렌더 타이밍 기준 단언으로 안정화했다.
+
+### 4) Implementation Notes
+- Sprint 2 마무리
+  - 페이지 에디터 가드레일(차단/경고), 자동저장, 충돌 처리, 블록 에디터 MVP, 프리뷰 디바이스 토글 반영
+- Sprint 3 C-3 (버전 비교/롤백 UX)
+  - 백엔드: 버전 비교(diff) 응답 추가, 롤백 흐름 강화
+  - 프론트: 버전 간 비교 UI와 롤백 연계 동선 추가
+- Sprint 3 D-1 (테스트 전략/회귀)
+  - 전략 문서 구체화, 프론트/백엔드 회귀 테스트 보강
+- Sprint 3 D-2 (감사 로그/관측)
+  - 백엔드: `GET /api/admin/action-logs` 필터(action/page/actor), `GET /api/admin/action-logs/observability` 지표 API 추가
+  - 프론트: AdminLogs 필터 UI + 관측 카드(일별 publish/rollback ratio/conflict rate/실패 분포) 반영
+  - 테스트: 관측 화면 테스트 안정화(QueryClientProvider/비동기 단언/중복 텍스트 대응)
+
+### 5) Validation
+- 프론트
+  - `pnpm test` 통과
+  - `pnpm build` 통과
+- 백엔드
+  - `uv run --with pytest --with httpx pytest tests/test_admin_user_enforcement.py tests/test_admin_page_editor_api.py` 통과 (26 passed)
+- 메모
+  - Python LSP(`basedpyright`) 미설치 환경에서는 LSP 진단 대신 실제 테스트/빌드 결과를 기준으로 검증했다.
+
+### 6) Outcome
+#### 잘된 점
+- Sprint 2~3 핵심 범위(C-3/D-1/D-2)가 코드/문서/테스트까지 한 사이클로 닫혔다.
+- 관리자 운영 관점(감사 추적 + 관측)이 UI/백엔드 계약으로 정리되어 실무 사용성이 높아졌다.
+
+#### 아쉬운 점
+- 워킹트리에 `node_modules` 변경이 많아 Git 작업 시 선별 스테이징을 계속 신경써야 한다.
+- LSP 기반 상시 정적 분석은 로컬 설치 전까지 공백이 있다.
+
+#### 다음 액션
+1. 다음 기능은 다음 세션에서 시작하고, 이번 세션은 기록/릴리스(커밋, 태그)로 마감한다.
+2. `node_modules` 변경 분리 정책(.gitignore/워크플로우)을 점검해 커밋 노이즈를 줄인다.

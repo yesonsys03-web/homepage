@@ -30,13 +30,13 @@ interface AdminSidebarProps {
 
 export function AdminSidebar({ badges, onNavigate }: AdminSidebarProps) {
   return (
-    <aside className="flex h-full w-[240px] flex-col border-r border-slate-700 bg-slate-900 px-3 py-4">
+    <aside className="flex h-full min-h-0 w-[240px] flex-col border-r border-slate-700 bg-slate-900 px-3 py-4">
       <div className="mb-4 px-2">
         <p className="text-xs uppercase tracking-wide text-slate-500">VC Admin</p>
         <p className="mt-1 text-lg font-semibold text-slate-50">Operations</p>
       </div>
 
-      <nav className="space-y-1" aria-label="관리자 네비게이션">
+      <nav className="flex-1 space-y-1 overflow-y-auto pr-1" aria-label="관리자 네비게이션">
         {NAV_ITEMS.map((item) => {
           const meta = ADMIN_ROUTE_META[item.key]
           const Icon = item.icon

@@ -10,6 +10,9 @@ export function AdminPolicies() {
 
   const [blockedKeywordsInput, setBlockedKeywordsInput] = useState("")
   const [autoHideThreshold, setAutoHideThreshold] = useState(3)
+  const [adminLogRetentionDays, setAdminLogRetentionDays] = useState(365)
+  const [adminLogViewWindowDays, setAdminLogViewWindowDays] = useState(30)
+  const [adminLogMaskReasons, setAdminLogMaskReasons] = useState(true)
   const [oauthEnabled, setOauthEnabled] = useState(false)
   const [oauthGoogleRedirectUri, setOauthGoogleRedirectUri] = useState("")
   const [oauthFrontendRedirectUri, setOauthFrontendRedirectUri] = useState("")
@@ -27,6 +30,11 @@ export function AdminPolicies() {
 
         setBlockedKeywordsInput((policy.custom_blocked_keywords || []).join(", "))
         setAutoHideThreshold(policy.auto_hide_report_threshold || 3)
+        setAdminLogRetentionDays(policy.admin_log_retention_days || 365)
+        setAdminLogViewWindowDays(policy.admin_log_view_window_days || 30)
+        setAdminLogMaskReasons(
+          policy.admin_log_mask_reasons ?? true,
+        )
 
         setOauthEnabled(oauthSettings.google_oauth_enabled)
         setOauthGoogleRedirectUri(oauthSettings.google_redirect_uri || "")
@@ -48,7 +56,15 @@ export function AdminPolicies() {
 
     setSaving(true)
     try {
-      await api.updateAdminPolicies(keywords, autoHideThreshold)
+      await api.updateAdminPolicies(
+        keywords,
+        autoHideThreshold,
+        undefined,
+        undefined,
+        adminLogRetentionDays,
+        adminLogViewWindowDays,
+        adminLogMaskReasons,
+      )
     } finally {
       setSaving(false)
     }
@@ -96,6 +112,40 @@ export function AdminPolicies() {
         <Button onClick={() => void savePolicies()} disabled={saving} className="bg-[#FF5D8F] text-white hover:bg-[#ff4a83]">
           {saving ? "저장 중..." : "정책 저장"}
         </Button>
+      </article>
+
+      <article className="space-y-4 rounded-xl border border-slate-700 bg-slate-800 p-5">
+        <h2 className="text-lg font-medium text-slate-100">로그 정책</h2>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <label className="block text-sm text-slate-300">
+            관리자 로그 보존 기간(일)
+            <input
+              type="number"
+              min={30}
+              value={adminLogRetentionDays}
+              onChange={(event) => setAdminLogRetentionDays(Number(event.target.value) || 30)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+          <label className="block text-sm text-slate-300">
+            관리자 로그 기본 조회 기간(일)
+            <input
+              type="number"
+              min={1}
+              value={adminLogViewWindowDays}
+              onChange={(event) => setAdminLogViewWindowDays(Number(event.target.value) || 1)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input
+            type="checkbox"
+            checked={adminLogMaskReasons}
+            onChange={(event) => setAdminLogMaskReasons(event.target.checked)}
+          />
+          로그 사유(reason) 마스킹 사용
+        </label>
       </article>
 
       <article className="space-y-4 rounded-xl border border-slate-700 bg-slate-800 p-5">

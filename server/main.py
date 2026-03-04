@@ -6,7 +6,16 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import RedirectResponse, Response
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
-from typing import Literal, Optional, Mapping, Protocol, Sequence, TypedDict, cast
+from typing import (
+    AsyncIterator,
+    Literal,
+    Optional,
+    Mapping,
+    Protocol,
+    Sequence,
+    TypedDict,
+    cast,
+)
 from datetime import timedelta
 import asyncio
 import re
@@ -54,6 +63,7 @@ from db import (
     set_project_status,
     create_admin_action_log,
     get_admin_action_logs,
+    get_admin_action_observability,
     cleanup_admin_action_logs,
     get_latest_policy_update_action,
     get_admin_users,
@@ -93,8 +103,16 @@ from auth import (
 )
 
 
+async def startup_event() -> None:
+    await _startup_event_impl()
+
+
+async def shutdown_event() -> None:
+    await _shutdown_event_impl()
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _ = app
     await startup_event()
     try:
@@ -612,6 +630,7 @@ class AdminPageDraftUpdateRequest(BaseModel):
     baseVersion: int
     document: PageDocumentPayload
     reason: Optional[str] = None
+    source: Literal["manual", "auto"] = "manual"
 
 
 class AdminPagePublishRequest(BaseModel):
@@ -623,6 +642,242 @@ class AdminPageRollbackRequest(BaseModel):
     targetVersion: int
     reason: Optional[str] = None
     publishNow: bool = False
+
+
+def extract_block_core_fields(
+    block: Mapping[str, object],
+) -> dict[str, object]:
+    block_type = str(block.get("type") or "")
+    content = cast(Mapping[str, object], block.get("content") or {})
+
+    if block_type == "hero":
+        return {
+            "headline": str(content.get("headline") or ""),
+            "highlight": str(content.get("highlight") or ""),
+            "description": str(content.get("description") or ""),
+            "contactEmail": str(content.get("contactEmail") or ""),
+        }
+    if block_type == "rich_text":
+        return {"body": str(content.get("body") or "")}
+    if block_type == "image":
+        return {
+            "src": str(content.get("src") or ""),
+            "alt": str(content.get("alt") or ""),
+            "caption": str(content.get("caption") or ""),
+        }
+    if block_type == "cta":
+        return {
+            "label": str(content.get("label") or ""),
+            "href": str(content.get("href") or ""),
+            "style": str(content.get("style") or ""),
+        }
+    return {"content": cast(dict[str, object], content)}
+
+
+def build_page_document_diff(
+    from_document: Mapping[str, object],
+    to_document: Mapping[str, object],
+) -> list[dict[str, object]]:
+    changes: list[dict[str, object]] = []
+    from_blocks = cast(list[Mapping[str, object]], from_document.get("blocks") or [])
+    to_blocks = cast(list[Mapping[str, object]], to_document.get("blocks") or [])
+
+    from_map = {str(block.get("id") or ""): block for block in from_blocks}
+    to_map = {str(block.get("id") or ""): block for block in to_blocks}
+    from_ids = [str(block.get("id") or "") for block in from_blocks]
+    to_ids = [str(block.get("id") or "") for block in to_blocks]
+
+    for block_id in from_ids:
+        if block_id and block_id not in to_map:
+            changes.append(
+                {
+                    "kind": "block_removed",
+                    "block_id": block_id,
+                    "message": f"블록 제거: {block_id}",
+                }
+            )
+    for block_id in to_ids:
+        if block_id and block_id not in from_map:
+            changes.append(
+                {
+                    "kind": "block_added",
+                    "block_id": block_id,
+                    "message": f"블록 추가: {block_id}",
+                }
+            )
+
+    shared_ids = [
+        block_id for block_id in to_ids if block_id in from_map and block_id in to_map
+    ]
+    for block_id in shared_ids:
+        before = from_map[block_id]
+        after = to_map[block_id]
+
+        before_order_raw = before.get("order")
+        after_order_raw = after.get("order")
+        before_order = before_order_raw if isinstance(before_order_raw, int) else 0
+        after_order = after_order_raw if isinstance(after_order_raw, int) else 0
+        if before_order != after_order:
+            changes.append(
+                {
+                    "kind": "block_reordered",
+                    "block_id": block_id,
+                    "from": before_order,
+                    "to": after_order,
+                    "message": f"블록 순서 변경: {block_id} ({before_order} -> {after_order})",
+                }
+            )
+
+        before_core = extract_block_core_fields(before)
+        after_core = extract_block_core_fields(after)
+        if before_core != after_core:
+            changes.append(
+                {
+                    "kind": "field_changed",
+                    "block_id": block_id,
+                    "from": before_core,
+                    "to": after_core,
+                    "message": f"블록 필드 변경: {block_id}",
+                }
+            )
+
+    return changes
+
+
+def is_valid_http_url(value: str) -> bool:
+    try:
+        parsed = urlparse(value.strip())
+    except ValueError:
+        return False
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def collect_page_document_issues(
+    document: Mapping[str, object],
+) -> dict[str, list[dict[str, str]]]:
+    blocking: list[dict[str, str]] = []
+    warnings: list[dict[str, str]] = []
+
+    blocks_raw = document.get("blocks", [])
+    blocks = cast(
+        list[Mapping[str, object]], blocks_raw if isinstance(blocks_raw, list) else []
+    )
+
+    orders: list[int] = []
+    for index, block in enumerate(blocks):
+        order_raw = block.get("order")
+        if not isinstance(order_raw, int):
+            blocking.append(
+                {
+                    "field": f"blocks[{index}].order",
+                    "message": "블록 order는 정수여야 합니다",
+                }
+            )
+            continue
+        orders.append(order_raw)
+    if len(orders) != len(set(orders)):
+        blocking.append(
+            {
+                "field": "blocks[*].order",
+                "message": "블록 order 값이 중복되었습니다",
+            }
+        )
+
+    for index, block in enumerate(blocks):
+        block_type = str(block.get("type") or "")
+        content = cast(Mapping[str, object], block.get("content") or {})
+        visible = bool(block.get("visible", True))
+
+        def _required(field_name: str, message: str) -> None:
+            value = content.get(field_name)
+            if isinstance(value, str):
+                if value.strip():
+                    return
+            elif value is not None:
+                return
+            blocking.append(
+                {
+                    "field": f"blocks[{index}].content.{field_name}",
+                    "message": message,
+                }
+            )
+
+        if block_type == "hero":
+            _required("headline", "Hero headline은 필수입니다")
+            headline = str(content.get("headline") or "").strip()
+            if len(headline) > 80:
+                warnings.append(
+                    {
+                        "field": f"blocks[{index}].content.headline",
+                        "message": "Hero headline 권장 길이(80자)를 초과했습니다",
+                    }
+                )
+        elif block_type == "rich_text":
+            if visible:
+                _required("body", "RichText body는 필수입니다")
+            body = str(content.get("body") or "").strip()
+            if len(body) > 2000:
+                warnings.append(
+                    {
+                        "field": f"blocks[{index}].content.body",
+                        "message": "RichText body 권장 길이(2000자)를 초과했습니다",
+                    }
+                )
+        elif block_type == "image":
+            if visible:
+                _required("src", "Image src는 필수입니다")
+            src = str(content.get("src") or "").strip()
+            if src and not is_valid_http_url(src):
+                blocking.append(
+                    {
+                        "field": f"blocks[{index}].content.src",
+                        "message": "Image src URL 형식이 올바르지 않습니다",
+                    }
+                )
+            alt = str(content.get("alt") or "").strip()
+            if src and not alt:
+                warnings.append(
+                    {
+                        "field": f"blocks[{index}].content.alt",
+                        "message": "이미지 alt 텍스트를 입력하는 것을 권장합니다",
+                    }
+                )
+        elif block_type == "cta":
+            if visible:
+                _required("label", "CTA label은 필수입니다")
+                _required("href", "CTA href는 필수입니다")
+            href = str(content.get("href") or "").strip()
+            if href and not is_valid_http_url(href):
+                blocking.append(
+                    {
+                        "field": f"blocks[{index}].content.href",
+                        "message": "CTA href URL 형식이 올바르지 않습니다",
+                    }
+                )
+            label = str(content.get("label") or "").strip().lower()
+            if label in {"click here", "more", "learn more", "여기", "자세히"}:
+                warnings.append(
+                    {
+                        "field": f"blocks[{index}].content.label",
+                        "message": "CTA 라벨을 더 구체적으로 작성하는 것을 권장합니다",
+                    }
+                )
+
+    seo_raw = document.get("seo")
+    seo = cast(Mapping[str, object], seo_raw if isinstance(seo_raw, Mapping) else {})
+    og_image = str(seo.get("ogImage") or "").strip()
+    if og_image and not is_valid_http_url(og_image):
+        blocking.append(
+            {
+                "field": "seo.ogImage",
+                "message": "OG 이미지 URL 형식이 올바르지 않습니다",
+            }
+        )
+
+    return {
+        "blocking": blocking,
+        "warnings": warnings,
+    }
 
 
 def require_action_reason(reason: Optional[str]) -> str:
@@ -1196,7 +1451,7 @@ async def run_admin_log_cleanup_loop() -> None:
 # ============ Startup Event ============
 
 
-async def startup_event():
+async def _startup_event_impl() -> None:
     """앱 시작 시 DB 테이블 초기화"""
     try:
         init_db()
@@ -1217,7 +1472,7 @@ async def startup_event():
         print(f"⚠️  DB initialization warning: {e}")
 
 
-async def shutdown_event() -> None:
+async def _shutdown_event_impl() -> None:
     global _admin_log_cleanup_task
     if _admin_log_cleanup_task is None:
         return
@@ -1633,13 +1888,25 @@ def get_admin_oauth_health(current_user: UserContext = Depends(require_admin)):
 
 @app.get("/api/admin/action-logs")
 def list_admin_action_logs(
-    limit: int = 50, current_user: UserContext = Depends(require_admin)
+    limit: int = 50,
+    action_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    page_id: Optional[str] = None,
+    current_user: UserContext = Depends(require_admin),
 ):
     _ = current_user
     settings = get_effective_moderation_settings()
     view_window_days = cast(int, settings["admin_log_view_window_days"])
     mask_reasons = bool(settings.get("admin_log_mask_reasons", True))
-    logs = get_admin_action_logs(limit=limit, view_window_days=view_window_days)
+    page_target_id = page_action_target_id(page_id) if page_id else None
+    logs = get_admin_action_logs(
+        limit=limit,
+        view_window_days=view_window_days,
+        action_type=(action_type or None),
+        actor_id=(actor_id or None),
+        target_type="page" if page_target_id else None,
+        target_id=page_target_id,
+    )
     for log in logs:
         log["id"] = str(log["id"])
         if log.get("admin_id"):
@@ -1650,6 +1917,16 @@ def list_admin_action_logs(
             mask_reasons,
         )
     return {"items": logs, "next_cursor": None}
+
+
+@app.get("/api/admin/action-logs/observability")
+def get_admin_action_logs_observability(
+    window_days: int = 30,
+    current_user: UserContext = Depends(require_admin),
+):
+    _ = current_user
+    normalized_window = max(1, min(window_days, 90))
+    return get_admin_action_observability(view_window_days=normalized_window)
 
 
 @app.get("/api/admin/users")
@@ -2295,6 +2572,19 @@ def update_admin_page_draft(
     if payload.document.pageId != page_id:
         raise HTTPException(status_code=400, detail="pageId가 경로와 일치하지 않습니다")
 
+    issues = collect_page_document_issues(payload.document.model_dump())
+    blocking_errors = issues["blocking"]
+    if blocking_errors:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "page_validation_failed",
+                "message": "페이지 문서 검증에 실패했습니다",
+                "field_errors": blocking_errors,
+                "warnings": issues["warnings"],
+            },
+        )
+
     result = save_page_document_draft(
         page_id=page_id,
         base_version=payload.baseVersion,
@@ -2303,6 +2593,13 @@ def update_admin_page_draft(
         reason=payload.reason,
     )
     if cast(bool, result.get("conflict", False)):
+        write_admin_action_log(
+            admin_id=current_user["id"],
+            action_type="page_conflict_detected",
+            target_type="page",
+            target_id=page_action_target_id(page_id),
+            reason=(payload.reason or "draft conflict").strip(),
+        )
         raise HTTPException(
             status_code=409,
             detail={
@@ -2318,7 +2615,9 @@ def update_admin_page_draft(
         action_type="page_draft_saved",
         target_type="page",
         target_id=page_action_target_id(page_id),
-        reason=(payload.reason or "draft save").strip(),
+        reason=(
+            f"source={payload.source}; reason={(payload.reason or 'draft save').strip()}"
+        ),
     )
 
     saved_version = cast(int, result.get("saved_version", 0))
@@ -2329,6 +2628,7 @@ def update_admin_page_draft(
     return {
         "savedVersion": saved_version,
         "document": response_doc,
+        "warnings": issues["warnings"],
     }
 
 
@@ -2339,11 +2639,69 @@ def publish_admin_page(
     current_user: UserContext = Depends(require_super_admin),
 ):
     reason = require_action_reason(payload.reason)
+
+    current_draft = get_page_document_draft(page_id)
+    if not current_draft:
+        raise HTTPException(status_code=404, detail="게시할 draft를 찾을 수 없습니다")
+
+    current_draft_version = int(current_draft.get("draft_version", 0))
+    target_draft_version = (
+        int(payload.draftVersion)
+        if payload.draftVersion is not None
+        else current_draft_version
+    )
+
+    if (
+        payload.draftVersion is not None
+        and target_draft_version != current_draft_version
+    ):
+        write_admin_action_log(
+            admin_id=current_user["id"],
+            action_type="page_publish_failed",
+            target_type="page",
+            target_id=page_action_target_id(page_id),
+            reason=f"conflict: expected={target_draft_version}, current={current_draft_version}",
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "page_publish_conflict",
+                "message": "최신 draft 버전이 아닙니다",
+                "current_version": current_draft_version,
+                "field_errors": [],
+            },
+        )
+
+    target_version_record = get_page_document_version(page_id, target_draft_version)
+    if not target_version_record or not target_version_record.get("document_json"):
+        raise HTTPException(status_code=404, detail="게시할 draft를 찾을 수 없습니다")
+
+    issues = collect_page_document_issues(
+        cast(dict[str, object], target_version_record["document_json"])
+    )
+    if issues["blocking"]:
+        write_admin_action_log(
+            admin_id=current_user["id"],
+            action_type="page_publish_failed",
+            target_type="page",
+            target_id=page_action_target_id(page_id),
+            reason="validation_failed",
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "page_validation_failed",
+                "message": "게시 전 검증에 실패했습니다",
+                "field_errors": issues["blocking"],
+                "warnings": issues["warnings"],
+            },
+        )
+
     published = publish_page_document(
         page_id=page_id,
         actor_id=current_user["id"],
         reason=reason,
-        draft_version=payload.draftVersion,
+        draft_version=target_draft_version,
     )
     if not published:
         raise HTTPException(status_code=404, detail="게시할 draft를 찾을 수 없습니다")
@@ -2405,6 +2763,45 @@ def get_admin_page_version(
         "createdBy": str(record.get("created_by") or ""),
         "createdAt": str(record.get("created_at") or ""),
         "document": record.get("document_json"),
+    }
+
+
+@app.get("/api/admin/pages/{page_id}/versions-compare")
+def compare_admin_page_versions(
+    page_id: str,
+    from_version: int,
+    to_version: int,
+    current_user: UserContext = Depends(require_admin),
+):
+    _ = current_user
+    from_record = get_page_document_version(page_id, from_version)
+    to_record = get_page_document_version(page_id, to_version)
+    if not from_record or not to_record:
+        raise HTTPException(status_code=404, detail="비교 대상 버전을 찾을 수 없습니다")
+
+    from_document = cast(dict[str, object], from_record.get("document_json") or {})
+    to_document = cast(dict[str, object], to_record.get("document_json") or {})
+    changes = build_page_document_diff(from_document, to_document)
+    return {
+        "pageId": page_id,
+        "fromVersion": from_version,
+        "toVersion": to_version,
+        "changes": changes,
+        "summary": {
+            "total": len(changes),
+            "added": len(
+                [change for change in changes if change["kind"] == "block_added"]
+            ),
+            "removed": len(
+                [change for change in changes if change["kind"] == "block_removed"]
+            ),
+            "reordered": len(
+                [change for change in changes if change["kind"] == "block_reordered"]
+            ),
+            "field_changed": len(
+                [change for change in changes if change["kind"] == "field_changed"]
+            ),
+        },
     }
 
 

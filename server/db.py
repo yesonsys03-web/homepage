@@ -988,33 +988,157 @@ def create_admin_action_log(
             return cur.fetchone()
 
 
-def get_admin_action_logs(limit: int = 50, view_window_days: Optional[int] = None):
+def get_admin_action_logs(
+    limit: int = 50,
+    view_window_days: Optional[int] = None,
+    action_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    target_type: Optional[str] = None,
+    target_id: Optional[str] = None,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            conditions: list[str] = []
+            params: list[object] = []
+
             if view_window_days and view_window_days > 0:
-                cur.execute(
-                    """
-                    SELECT l.*, u.nickname as admin_nickname
-                    FROM admin_action_logs l
-                    LEFT JOIN users u ON l.admin_id = u.id
-                    WHERE l.created_at >= NOW() - (%s * INTERVAL '1 day')
-                    ORDER BY l.created_at DESC
-                    LIMIT %s
-                    """,
-                    (view_window_days, limit),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT l.*, u.nickname as admin_nickname
-                    FROM admin_action_logs l
-                    LEFT JOIN users u ON l.admin_id = u.id
-                    ORDER BY l.created_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
+                conditions.append("l.created_at >= NOW() - (%s * INTERVAL '1 day')")
+                params.append(view_window_days)
+            if action_type:
+                conditions.append("l.action_type = %s")
+                params.append(action_type)
+            if actor_id:
+                conditions.append("l.admin_id = %s")
+                params.append(actor_id)
+            if target_type:
+                conditions.append("l.target_type = %s")
+                params.append(target_type)
+            if target_id:
+                conditions.append("l.target_id = %s")
+                params.append(target_id)
+
+            query = """
+                SELECT l.*, u.nickname as admin_nickname
+                FROM admin_action_logs l
+                LEFT JOIN users u ON l.admin_id = u.id
+            """
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY l.created_at DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(query, params)
             return cur.fetchall()
+
+
+def get_admin_action_observability(view_window_days: int = 30):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                ),
+                day_buckets AS (
+                    SELECT generate_series(
+                        date_trunc('day', (SELECT since FROM bounds)),
+                        date_trunc('day', NOW()),
+                        INTERVAL '1 day'
+                    )::date AS day
+                ),
+                publish_counts AS (
+                    SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+                    FROM admin_action_logs
+                    WHERE action_type = 'page_published'
+                      AND created_at >= (SELECT since FROM bounds)
+                    GROUP BY 1
+                )
+                SELECT
+                    d.day,
+                    COALESCE(p.count, 0)::int AS publish_count
+                FROM day_buckets d
+                LEFT JOIN publish_counts p ON p.day = d.day
+                ORDER BY d.day ASC
+                """,
+                (view_window_days,),
+            )
+            daily_publish_counts = cur.fetchall() or []
+
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                )
+                SELECT
+                    COALESCE(SUM(CASE WHEN action_type = 'page_published' THEN 1 ELSE 0 END), 0)::int AS published,
+                    COALESCE(SUM(CASE WHEN action_type = 'page_rolled_back' THEN 1 ELSE 0 END), 0)::int AS rolled_back,
+                    COALESCE(SUM(CASE WHEN action_type = 'page_draft_saved' THEN 1 ELSE 0 END), 0)::int AS draft_saved,
+                    COALESCE(SUM(CASE WHEN action_type = 'page_conflict_detected' THEN 1 ELSE 0 END), 0)::int AS conflicts
+                FROM admin_action_logs
+                WHERE created_at >= (SELECT since FROM bounds)
+                """,
+                (view_window_days,),
+            )
+            counts = cur.fetchone() or {
+                "published": 0,
+                "rolled_back": 0,
+                "draft_saved": 0,
+                "conflicts": 0,
+            }
+
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                )
+                SELECT
+                    COALESCE(NULLIF(reason, ''), 'unknown') AS reason_group,
+                    COUNT(*)::int AS count
+                FROM admin_action_logs
+                WHERE action_type = 'page_publish_failed'
+                  AND created_at >= (SELECT since FROM bounds)
+                GROUP BY 1
+                ORDER BY count DESC, reason_group ASC
+                """,
+                (view_window_days,),
+            )
+            failure_distribution = cur.fetchall() or []
+
+            published = int(counts.get("published", 0))
+            rolled_back = int(counts.get("rolled_back", 0))
+            draft_saved = int(counts.get("draft_saved", 0))
+            conflicts = int(counts.get("conflicts", 0))
+            rollback_ratio = (rolled_back / published) if published > 0 else 0.0
+            conflict_rate = (
+                conflicts / (draft_saved + conflicts)
+                if (draft_saved + conflicts) > 0
+                else 0.0
+            )
+
+            return {
+                "window_days": view_window_days,
+                "daily_publish_counts": [
+                    {
+                        "day": row["day"].isoformat(),
+                        "publish_count": int(row["publish_count"]),
+                    }
+                    for row in daily_publish_counts
+                ],
+                "summary": {
+                    "published": published,
+                    "rolled_back": rolled_back,
+                    "draft_saved": draft_saved,
+                    "conflicts": conflicts,
+                    "rollback_ratio": rollback_ratio,
+                    "conflict_rate": conflict_rate,
+                },
+                "publish_failure_distribution": [
+                    {
+                        "reason": str(row["reason_group"]),
+                        "count": int(row["count"]),
+                    }
+                    for row in failure_distribution
+                ],
+            }
 
 
 def cleanup_admin_action_logs(retention_days: int) -> int:

@@ -2,6 +2,24 @@ import type { User } from "./auth-types"
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000"
 
+export class ApiRequestError extends Error {
+  status: number
+  detail: unknown
+
+  constructor(status: number, detail: unknown) {
+    const message =
+      typeof detail === "string"
+        ? detail
+        : typeof detail === "object" && detail !== null && "message" in detail
+          ? String((detail as { message?: unknown }).message ?? "Request failed")
+          : "Request failed"
+    super(message)
+    this.name = "ApiRequestError"
+    this.status = status
+    this.detail = detail
+  }
+}
+
 function getToken(): string | null {
   if (typeof window !== "undefined") {
     return localStorage.getItem("vibecoder_token")
@@ -62,6 +80,20 @@ export interface AdminActionLog {
   target_id: string
   reason?: string
   created_at: string
+}
+
+export interface AdminActionObservability {
+  window_days: number
+  daily_publish_counts: Array<{ day: string; publish_count: number }>
+  summary: {
+    published: number
+    rolled_back: number
+    draft_saved: number
+    conflicts: number
+    rollback_ratio: number
+    conflict_rate: number
+  }
+  publish_failure_distribution: Array<{ reason: string; count: number }>
 }
 
 export interface AdminManagedUser {
@@ -208,6 +240,28 @@ export interface AdminPageVersionDetail {
   document: PageDocument
 }
 
+export interface AdminPageVersionCompareChange {
+  kind: "block_added" | "block_removed" | "block_reordered" | "field_changed"
+  block_id: string
+  message: string
+  from?: unknown
+  to?: unknown
+}
+
+export interface AdminPageVersionCompareResponse {
+  pageId: string
+  fromVersion: number
+  toVersion: number
+  changes: AdminPageVersionCompareChange[]
+  summary: {
+    total: number
+    added: number
+    removed: number
+    reordered: number
+    field_changed: number
+  }
+}
+
 export interface AdminOAuthSettings {
   google_oauth_enabled: boolean
   google_redirect_uri: string
@@ -260,7 +314,8 @@ async function authFetch(url: string, options: RequestInit = {}) {
   
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: "An error occurred" }))
-    throw new Error(error.detail || "Request failed")
+    const detail = (error as { detail?: unknown }).detail ?? "Request failed"
+    throw new ApiRequestError(res.status, detail)
   }
   
   return res
@@ -818,17 +873,36 @@ export const api = {
     return res.json() as Promise<Report>
   },
 
-  getAdminActionLogs: async (limit: number = 50, options?: SWRFetchOptions<AdminListResponse<AdminActionLog>>) => {
-    const key = createAdminCacheKey("actions", { limit })
+  getAdminActionLogs: async (
+    limit: number = 50,
+    filters?: { actionType?: string; actorId?: string; pageId?: string },
+    options?: SWRFetchOptions<AdminListResponse<AdminActionLog>>,
+  ) => {
+    const key = createAdminCacheKey("actions", {
+      limit,
+      actionType: filters?.actionType ?? "all",
+      actorId: filters?.actorId ?? "all",
+      pageId: filters?.pageId ?? "all",
+    })
     return fetchWithAdminSWR(
       key,
       ADMIN_TAB_TTL_MS.actions,
       async (signal) => {
-        const res = await authFetch(`${API_BASE}/api/admin/action-logs?limit=${limit}`, { signal })
+        const params = new URLSearchParams({ limit: String(limit) })
+        if (filters?.actionType) params.set("action_type", filters.actionType)
+        if (filters?.actorId) params.set("actor_id", filters.actorId)
+        if (filters?.pageId) params.set("page_id", filters.pageId)
+        const res = await authFetch(`${API_BASE}/api/admin/action-logs?${params.toString()}`, { signal })
         return res.json() as Promise<AdminListResponse<AdminActionLog>>
       },
       options,
     )
+  },
+
+  getAdminActionObservability: async (windowDays: number = 30) => {
+    const params = new URLSearchParams({ window_days: String(windowDays) })
+    const res = await authFetch(`${API_BASE}/api/admin/action-logs/observability?${params.toString()}`)
+    return res.json() as Promise<AdminActionObservability>
   },
 
   getAdminUsers: async (limit: number = 200, options?: SWRFetchOptions<AdminListResponse<AdminManagedUser>>) => {
@@ -1104,13 +1178,23 @@ export const api = {
     return res.json() as Promise<AdminPageDraftResponse>
   },
 
-  updateAdminPageDraft: async (pageId: string, baseVersion: number, document: PageDocument, reason?: string) => {
+  updateAdminPageDraft: async (
+    pageId: string,
+    baseVersion: number,
+    document: PageDocument,
+    reason?: string,
+    source: "manual" | "auto" = "manual",
+  ) => {
     const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/draft`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ baseVersion, document, reason }),
+      body: JSON.stringify({ baseVersion, document, reason, source }),
     })
-    return res.json() as Promise<{ savedVersion: number; document: PageDocument }>
+    return res.json() as Promise<{
+      savedVersion: number
+      document: PageDocument
+      warnings?: Array<{ field: string; message: string }>
+    }>
   },
 
   publishAdminPage: async (pageId: string, reason: string, draftVersion?: number) => {
@@ -1131,6 +1215,12 @@ export const api = {
   getAdminPageVersion: async (pageId: string, version: number) => {
     const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/versions/${version}`)
     return res.json() as Promise<AdminPageVersionDetail>
+  },
+
+  compareAdminPageVersions: async (pageId: string, fromVersion: number, toVersion: number) => {
+    const params = new URLSearchParams({ from_version: String(fromVersion), to_version: String(toVersion) })
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/versions-compare?${params.toString()}`)
+    return res.json() as Promise<AdminPageVersionCompareResponse>
   },
 
   rollbackAdminPage: async (pageId: string, targetVersion: number, reason: string, publishNow: boolean = false) => {

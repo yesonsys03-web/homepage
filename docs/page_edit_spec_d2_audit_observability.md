@@ -6,7 +6,7 @@
 
 ## 문서 상태
 
-- 상태: Draft v1
+- 상태: Draft v2
 - Sprint: 3
 - 선행: C-2, C-3
 - 후행: E-3
@@ -46,6 +46,22 @@
 - 대시보드 지표 목록 문서화
 - 검색/필터 기준(action_type, page_id, actor) 문서화
 
+## 구현 반영 (Sprint 3)
+
+- API
+  - 로그 조회: `GET /api/admin/action-logs`
+    - query: `limit`, `action_type`, `actor_id`, `page_id`
+  - 관측 지표: `GET /api/admin/action-logs/observability`
+    - query: `window_days` (1~90)
+- 지표 산출
+  - 일별 publish 횟수: `action_type=page_published` 일 단위 집계
+  - rollback 비율: `page_rolled_back / page_published`
+  - 평균 충돌 발생률: `page_conflict_detected / (page_draft_saved + page_conflict_detected)`
+  - publish 실패 원인 분포: `action_type=page_publish_failed`의 reason 그룹 집계
+- 화면
+  - `AdminLogs`에 action/page/actor 필터 입력과 지표 카드/분포 패널 제공
+
 ## 변경 이력
 
 - 2026-03-04: Sprint 3 초안 작성
+- 2026-03-04: 필터/관측 API 및 AdminLogs 지표 UI 반영
