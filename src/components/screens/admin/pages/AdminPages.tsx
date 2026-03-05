@@ -31,6 +31,14 @@ type EditorInteractionSurface = "panel" | "canvas"
 type EditorUiVariant = "baseline" | "enhanced"
 type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq"
 
+type PageConflictDetail = {
+  current_version?: number
+  current_updated_by?: string
+  current_updated_at?: string
+  retryable?: boolean
+  message?: string
+}
+
 const SUPPORTED_BLOCK_TYPES: SupportedBlockType[] = ["hero", "rich_text", "image", "cta"]
 
 function normalizeEditorUiVariant(value: string | null | undefined): EditorUiVariant {
@@ -133,6 +141,10 @@ function snapshotOf(document: PageDocument): string {
   })
 }
 
+function cloneDocument(document: PageDocument): PageDocument {
+  return JSON.parse(JSON.stringify(document)) as PageDocument
+}
+
 function parseErrorMessage(error: unknown): string {
   if (error instanceof ApiRequestError) {
     if (typeof error.detail === "string") {
@@ -198,6 +210,10 @@ export function AdminPages() {
   const [blocks, setBlocks] = useState<PageBlock[]>(defaultBlocks())
   const [selectedBlockId, setSelectedBlockId] = useState<string>(blocks[0]?.id ?? "")
   const [conflictVersion, setConflictVersion] = useState<number | null>(null)
+  const [conflictUpdatedBy, setConflictUpdatedBy] = useState<string | null>(null)
+  const [conflictUpdatedAt, setConflictUpdatedAt] = useState<string | null>(null)
+  const [pendingConflictDocument, setPendingConflictDocument] = useState<PageDocument | null>(null)
+  const [pendingConflictReason, setPendingConflictReason] = useState("")
   const [listItemsInput, setListItemsInput] = useState("[]")
   const [listItemsError, setListItemsError] = useState<string | null>(null)
   const [styleInput, setStyleInput] = useState("{}")
@@ -563,13 +579,19 @@ export function AdminPages() {
       })
   }
 
-  const reloadDraft = async (metricSource: string = "reload") => {
+  const reloadDraft = async (metricSource: string = "reload", clearPendingConflict: boolean = true) => {
     const startedAt = performance.now()
     const draft = await api.getAdminPageDraft(PAGE_ID)
     setBaseVersion(draft.baseVersion)
     setPublishedVersion(draft.publishedVersion)
     applyDocument(draft.document, true)
     setConflictVersion(null)
+    setConflictUpdatedBy(null)
+    setConflictUpdatedAt(null)
+    if (clearPendingConflict) {
+      setPendingConflictDocument(null)
+      setPendingConflictReason("")
+    }
     logPerfEvent("editor_initial_load", performance.now() - startedAt, metricSource)
     resetEditorSessionMetrics()
   }
@@ -658,6 +680,10 @@ export function AdminPages() {
       }
       lastSavedSnapshotRef.current = snapshotOf(savedDocument)
       setConflictVersion(null)
+      setConflictUpdatedBy(null)
+      setConflictUpdatedAt(null)
+      setPendingConflictDocument(null)
+      setPendingConflictReason("")
       setNotice(source === "manual" ? "Draft를 저장했습니다" : "자동 저장 완료")
       logPerfEvent("draft_save_roundtrip", performance.now() - saveStartedAt, source)
       logPerfEvent(
@@ -684,16 +710,33 @@ export function AdminPages() {
       }
     } catch (error) {
       if (error instanceof ApiRequestError && error.status === 409) {
-        const detail = error.detail as { current_version?: number; message?: string } | string
+        const detail = error.detail as PageConflictDetail | string
         const currentVersion =
           typeof detail === "object" && detail !== null && typeof detail.current_version === "number"
             ? detail.current_version
             : null
+        const currentUpdatedBy =
+          typeof detail === "object" && detail !== null && typeof detail.current_updated_by === "string"
+            ? detail.current_updated_by
+            : null
+        const currentUpdatedAt =
+          typeof detail === "object" && detail !== null && typeof detail.current_updated_at === "string"
+            ? detail.current_updated_at
+            : null
         setConflictVersion(currentVersion)
-        setErrorBanner(
+        setConflictUpdatedBy(currentUpdatedBy)
+        setConflictUpdatedAt(currentUpdatedAt)
+        setPendingConflictDocument(cloneDocument(buildDocument))
+        setPendingConflictReason(reason)
+        const conflictMessage =
           typeof detail === "object" && detail !== null && detail.message
             ? String(detail.message)
-            : "저장 충돌이 발생했습니다. 최신 버전을 불러와 다시 시도하세요",
+            : "저장 충돌이 발생했습니다. 최신 버전을 불러와 다시 시도하세요"
+        const conflictMeta = currentUpdatedBy || currentUpdatedAt
+          ? ` (최신 변경: ${currentUpdatedBy ?? "unknown"}${currentUpdatedAt ? ` / ${currentUpdatedAt}` : ""})`
+          : ""
+        setErrorBanner(
+          `${conflictMessage}${conflictMeta}`,
         )
       } else {
         if (error instanceof ApiRequestError && error.status >= 500) {
@@ -1043,6 +1086,11 @@ export function AdminPages() {
           {autoSaving ? <span className="rounded border border-sky-500/40 px-2 py-1 text-sky-200">자동 저장 중...</span> : null}
           {conflictVersion !== null ? (
             <span className="rounded border border-rose-500/40 px-2 py-1 text-rose-200">충돌 감지 (최신 v{conflictVersion})</span>
+          ) : null}
+          {conflictUpdatedBy || conflictUpdatedAt ? (
+            <span className="rounded border border-rose-500/30 px-2 py-1 text-rose-100">
+              최신 변경 정보: {conflictUpdatedBy ?? "unknown"}{conflictUpdatedAt ? ` / ${conflictUpdatedAt}` : ""}
+            </span>
           ) : null}
         </div>
 
@@ -1652,8 +1700,26 @@ export function AdminPages() {
             </Button>
           ) : null}
           {conflictVersion !== null ? (
-            <Button variant="outline" onClick={() => void reloadDraft("conflict_reload")}>
+            <Button variant="outline" onClick={() => void reloadDraft("conflict_reload", false)}>
               최신 Draft 불러오기
+            </Button>
+          ) : null}
+          {pendingConflictDocument ? (
+            <Button
+              variant="outline"
+              onClick={() => {
+                applyDocument(cloneDocument(pendingConflictDocument), false)
+                if (pendingConflictReason.trim()) {
+                  setReason(pendingConflictReason)
+                }
+                setConflictVersion(null)
+                setConflictUpdatedBy(null)
+                setConflictUpdatedAt(null)
+                setPendingConflictDocument(null)
+                setNotice("로컬 변경을 다시 적용했습니다. 내용 확인 후 저장하세요")
+              }}
+            >
+              로컬 변경 다시 적용
             </Button>
           ) : null}
         </div>

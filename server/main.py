@@ -16,7 +16,7 @@ from typing import (
     TypedDict,
     cast,
 )
-from datetime import timedelta
+from datetime import datetime, timedelta
 import asyncio
 import re
 import unicodedata
@@ -3326,6 +3326,12 @@ def update_admin_page_draft(
         reason=payload.reason,
     )
     if cast(bool, result.get("conflict", False)):
+        current_updated_at = result.get("current_updated_at")
+        current_updated_at_text = (
+            current_updated_at.isoformat()
+            if isinstance(current_updated_at, datetime)
+            else (str(current_updated_at) if current_updated_at is not None else None)
+        )
         write_admin_action_log(
             admin_id=current_user["id"],
             action_type="page_conflict_detected",
@@ -3339,6 +3345,9 @@ def update_admin_page_draft(
                 "code": "page_version_conflict",
                 "message": "다른 편집 내용이 먼저 저장되었습니다",
                 "current_version": cast(int, result.get("current_version", 0)),
+                "current_updated_by": result.get("current_updated_by"),
+                "current_updated_at": current_updated_at_text,
+                "retryable": True,
                 "field_errors": [],
             },
         )

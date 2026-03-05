@@ -2076,3 +2076,51 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. `U5-01` 충돌 감지의 정책 옵션(최신 우선/수동 병합/락 방식) 비교안을 작성한다.
 2. `U5-02` 예약 발행의 실패 재시도/타임존 정책을 설계 문서로 분리한다.
+
+## Session 2026-03-05-04
+
+### 1) Goal
+- U5-01(충돌 감지 실제 구현)을 서버/클라이언트/회귀 테스트까지 end-to-end로 반영한다.
+
+### 2) Inputs
+- 기존 충돌 경로: optimistic concurrency(`baseVersion`) + 409 응답
+- 후속 요구: 충돌 시 사용자 안내 강화 + 안전한 재시도/재적용 흐름
+
+### 3) Design Decisions
+- 서버 409 payload에 충돌 메타(`current_updated_by`, `current_updated_at`, `retryable`)를 추가한다.
+- 클라이언트는 충돌 시 로컬 편집본을 임시 보존하고, 최신 Draft 재로딩 후 "로컬 변경 다시 적용"을 제공한다.
+- 자동 병합/강제 저장은 도입하지 않고, 사용자 검토 후 수동 저장 경로를 유지한다.
+
+### 4) Implementation Notes
+- `server/db.py`
+  - `save_page_document_draft` conflict 반환값에 최신 수정자/시각 메타 추가
+- `server/main.py`
+  - `PUT /api/admin/pages/{page_id}/draft`의 409 detail 확장
+    - `current_updated_by`, `current_updated_at`, `retryable`
+- `src/components/screens/admin/pages/AdminPages.tsx`
+  - 충돌 메타 상태 추가(`conflictUpdatedBy`, `conflictUpdatedAt`)
+  - 충돌 시 로컬 편집본 보존(`pendingConflictDocument`, `pendingConflictReason`)
+  - 충돌 복구 UI 추가
+    - `최신 Draft 불러오기`(충돌 메타 유지/초기화 제어)
+    - `로컬 변경 다시 적용`(검토 후 저장 유도)
+- `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
+  - 충돌 복구 액션(최신 Draft reload + 로컬 변경 재적용) 시나리오 검증
+- `server/tests/test_admin_page_editor_api.py`
+  - 409 충돌 payload 확장 필드 검증 추가
+
+### 5) Validation
+- `pnpm test src/components/screens/admin/pages/AdminPages.workflow.test.tsx` 통과(8/8)
+- `pnpm build` 통과
+- `uv run python -m py_compile server/main.py server/db.py` 통과
+- `uv run pytest server/tests/test_admin_page_editor_api.py`는 현재 환경에서 `pytest` 실행 파일 부재로 미실행
+
+### 6) Outcome
+#### 잘된 점
+- 충돌 발생 시 "최신 상태 확인 -> 로컬 변경 재적용 -> 검토 후 저장"의 안전한 재시도 루프가 실제 UI에 반영됐다.
+
+#### 아쉬운 점
+- 서버 테스트를 실제 `pytest`로 재실행할 수 있는 환경 의존성이 남아 있다.
+
+#### 다음 액션
+1. `pytest` 실행 환경을 맞춘 뒤 `server/tests/test_admin_page_editor_api.py`를 재검증한다.
+2. U5-01 정책 비교안(최신 우선/수동 병합/락 방식)을 문서화해 U5-02 선행 기준으로 고정한다.

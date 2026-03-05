@@ -1777,6 +1777,7 @@ def save_page_document_draft(
             cur.execute(
                 """
                 SELECT page_id, draft_version, published_version
+                       , updated_by, updated_at
                 FROM page_documents_current
                 WHERE page_id = %s
                 FOR UPDATE
@@ -1817,6 +1818,8 @@ def save_page_document_draft(
                     return {
                         "conflict": True,
                         "current_version": current_version,
+                        "current_updated_by": current.get("updated_by"),
+                        "current_updated_at": current.get("updated_at"),
                     }
 
                 saved_version = current_version + 1

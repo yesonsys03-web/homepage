@@ -152,6 +152,7 @@ describe("AdminPages workflow regression", () => {
       changes: [{ kind: "field_changed", block_id: "hero-1", message: "블록 필드 변경: hero-1" }],
       summary: { total: 1, added: 0, removed: 0, reordered: 0, field_changed: 1 },
     })
+    mocks.logAdminPagePerfEvent.mockResolvedValue({ ok: true })
     mocks.getAdminPageMigrationBackups.mockResolvedValue({
       pageId: "about_page",
       count: 2,
@@ -203,7 +204,7 @@ describe("AdminPages workflow regression", () => {
     expect(screen.getByText("블록 필드 변경: hero-1")).toBeInTheDocument()
   })
 
-  it("shows conflict banner and reload button on draft save conflict", async () => {
+  it("shows conflict recovery actions on draft save conflict", async () => {
     mocks.updateAdminPageDraft.mockRejectedValue(
       new mocks.ApiRequestError(409, {
         code: "page_version_conflict",
@@ -222,6 +223,15 @@ describe("AdminPages workflow regression", () => {
 
     await screen.findByText("다른 편집 내용이 먼저 저장되었습니다")
     expect(screen.getByRole("button", { name: "최신 Draft 불러오기" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "로컬 변경 다시 적용" })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "최신 Draft 불러오기" }))
+    await waitFor(() => {
+      expect(mocks.getAdminPageDraft).toHaveBeenCalledTimes(2)
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "로컬 변경 다시 적용" }))
+    expect(screen.getByText("로컬 변경을 다시 적용했습니다. 내용 확인 후 저장하세요")).toBeInTheDocument()
   })
 
   it("executes backup restore dry-run from selected backup", async () => {

@@ -116,7 +116,12 @@ def test_update_admin_page_draft_returns_conflict(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         main,
         "save_page_document_draft",
-        lambda **_: {"conflict": True, "current_version": 2},
+        lambda **_: {
+            "conflict": True,
+            "current_version": 2,
+            "current_updated_by": "admin-2",
+            "current_updated_at": "2026-03-05T00:00:00Z",
+        },
     )
 
     payload = {
@@ -144,6 +149,9 @@ def test_update_admin_page_draft_returns_conflict(monkeypatch: Any) -> None:
     detail = response.json()["detail"]
     assert detail["code"] == "page_version_conflict"
     assert detail["current_version"] == 2
+    assert detail["current_updated_by"] == "admin-2"
+    assert detail["current_updated_at"] == "2026-03-05T00:00:00Z"
+    assert detail["retryable"] is True
 
     main.app.dependency_overrides.clear()
 
