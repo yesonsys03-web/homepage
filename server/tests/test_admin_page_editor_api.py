@@ -112,6 +112,7 @@ def test_update_admin_page_draft_returns_conflict(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
     monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
 
     monkeypatch.setattr(
         main,
@@ -491,6 +492,7 @@ def test_publish_admin_page_returns_conflict_when_not_latest_draft(
         role="super_admin"
     )
     monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
 
     monkeypatch.setattr(
         main,
@@ -792,7 +794,9 @@ def test_create_page_editor_perf_event_records_sample_and_log(monkeypatch: Any) 
     monkeypatch.setattr(
         main,
         "_record_page_editor_perf",
-        lambda scenario, duration_ms: recorded.append((scenario, duration_ms)),
+        lambda scenario, duration_ms, source=None: recorded.append(
+            (scenario, duration_ms)
+        ),
     )
     monkeypatch.setattr(
         main,
