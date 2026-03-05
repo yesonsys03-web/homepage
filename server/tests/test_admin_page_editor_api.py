@@ -429,6 +429,60 @@ def test_update_admin_page_draft_returns_validation_error_for_invalid_url(
     main.app.dependency_overrides.clear()
 
 
+def test_update_admin_page_draft_returns_validation_error_for_invalid_gallery_src(
+    monkeypatch: Any,
+) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+
+    payload = {
+        "baseVersion": 1,
+        "reason": "save gallery",
+        "source": "manual",
+        "document": {
+            "pageId": "about_page",
+            "status": "draft",
+            "version": 1,
+            "title": "About",
+            "seo": {
+                "metaTitle": "About",
+                "metaDescription": "Desc",
+                "ogImage": None,
+            },
+            "blocks": [
+                {
+                    "id": "gallery-1",
+                    "type": "gallery",
+                    "order": 0,
+                    "visible": True,
+                    "content": {
+                        "layout": "grid",
+                        "items": [
+                            {
+                                "src": "not-a-url",
+                                "alt": "bad",
+                                "caption": "bad",
+                            }
+                        ],
+                    },
+                }
+            ],
+            "updatedBy": "11111111-1111-1111-1111-111111111111",
+            "updatedAt": "2026-03-04T00:00:00Z",
+        },
+    }
+
+    response = client.put("/api/admin/pages/about_page/draft", json=payload)
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "page_validation_failed"
+    assert any("content.items[0].src" in err["field"] for err in detail["field_errors"])
+
+    main.app.dependency_overrides.clear()
+
+
 def test_publish_admin_page_returns_conflict_when_not_latest_draft(
     monkeypatch: Any,
 ) -> None:

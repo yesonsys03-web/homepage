@@ -30,7 +30,7 @@ type PreviewDevice = "desktop" | "tablet" | "mobile"
 type EditorZoom = 80 | 100 | 120
 type EditorInteractionSurface = "panel" | "canvas"
 type EditorUiVariant = "baseline" | "enhanced"
-type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq"
+type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq" | "gallery"
 
 type PageConflictDetail = {
   current_version?: number
@@ -40,7 +40,15 @@ type PageConflictDetail = {
   message?: string
 }
 
-const SUPPORTED_BLOCK_TYPES: SupportedBlockType[] = ["hero", "rich_text", "image", "cta"]
+const SUPPORTED_BLOCK_TYPES: SupportedBlockType[] = [
+  "hero",
+  "rich_text",
+  "image",
+  "cta",
+  "feature_list",
+  "faq",
+  "gallery",
+]
 
 function normalizeEditorUiVariant(value: string | null | undefined): EditorUiVariant {
   if (value === "baseline") {
@@ -56,6 +64,7 @@ const BLOCK_LABEL: Record<SupportedBlockType, string> = {
   cta: "CTA",
   feature_list: "FeatureList",
   faq: "FAQ",
+  gallery: "Gallery",
 }
 
 function createBlock(type: SupportedBlockType, order: number): PageBlock {
@@ -107,6 +116,15 @@ function createBlock(type: SupportedBlockType, order: number): PageBlock {
       order,
       visible: true,
       content: { items: [] },
+    }
+  }
+  if (type === "gallery") {
+    return {
+      id: `gallery_${Date.now()}_${order}`,
+      type,
+      order,
+      visible: true,
+      content: { items: [], layout: "grid" },
     }
   }
   return {
@@ -503,7 +521,12 @@ export function AdminPages() {
   }, [filteredMigrationBackups, selectedBackupKey])
 
   useEffect(() => {
-    if (!selectedBlock || (selectedBlock.type !== "feature_list" && selectedBlock.type !== "faq")) {
+    if (
+      !selectedBlock ||
+      (selectedBlock.type !== "feature_list" &&
+        selectedBlock.type !== "faq" &&
+        selectedBlock.type !== "gallery")
+    ) {
       setListItemsError(null)
       return
     }
@@ -1469,7 +1492,7 @@ export function AdminPages() {
                         </>
                       ) : null}
 
-                      {selectedBlock.type === "feature_list" || selectedBlock.type === "faq" ? (
+                      {selectedBlock.type === "feature_list" || selectedBlock.type === "faq" || selectedBlock.type === "gallery" ? (
                         <>
                           <textarea
                             value={listItemsInput}
@@ -1494,6 +1517,14 @@ export function AdminPages() {
                           />
                           {listItemsError ? (
                             <p className="text-xs text-rose-300">{listItemsError}</p>
+                          ) : null}
+                          {selectedBlock.type === "gallery" ? (
+                            <input
+                              value={String(selectedBlock.content.layout ?? "grid")}
+                              onChange={(event) => updateSelectedBlockContent("layout", event.target.value)}
+                              placeholder="layout (grid/carousel)"
+                              className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                            />
                           ) : null}
                         </>
                       ) : null}
@@ -1664,6 +1695,39 @@ export function AdminPages() {
                                 </li>
                               ))}
                             </ul>
+                          )}
+                        </div>
+                      )
+                    }
+                    if (block.type === "gallery") {
+                      const items = Array.isArray(block.content.items)
+                        ? (block.content.items as Array<Record<string, unknown>>)
+                        : []
+                      return (
+                        <div key={block.id} className="rounded border border-slate-700 p-3">
+                          <p className="mb-2 text-sm font-medium text-slate-100">
+                            Gallery ({items.length}) · {String(block.content.layout ?? "grid")}
+                          </p>
+                          {items.length === 0 ? (
+                            <p className="text-xs text-slate-400">등록된 이미지가 없습니다.</p>
+                          ) : (
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              {items.map((item, idx) => {
+                                const src = String(item.src ?? "")
+                                const alt = String(item.alt ?? "")
+                                const caption = String(item.caption ?? "")
+                                return (
+                                  <div key={`${block.id}-gallery-${idx}`} className="space-y-1 rounded border border-slate-700 p-2">
+                                    {src ? (
+                                      <img src={src} alt={alt} className="h-28 w-full rounded object-cover" />
+                                    ) : (
+                                      <div className="h-28 w-full rounded bg-slate-800" />
+                                    )}
+                                    <p className="text-xs text-slate-300">{caption || `(item ${idx + 1})`}</p>
+                                  </div>
+                                )
+                              })}
+                            </div>
                           )}
                         </div>
                       )

@@ -399,6 +399,29 @@ describe("AdminPages workflow regression", () => {
     expect(screen.queryByText("유효한 JSON 형식으로 입력하세요")).not.toBeInTheDocument()
   })
 
+  it("adds and previews gallery block", async () => {
+    render(<AdminPages />)
+
+    const heroTabButtons = await screen.findAllByRole("button", { name: "Hero" })
+    fireEvent.click(heroTabButtons[0])
+
+    fireEvent.click(screen.getByRole("button", { name: "+ Gallery" }))
+
+    const galleryButtons = await screen.findAllByRole("button", { name: /Gallery/ })
+    fireEvent.click(galleryButtons[0])
+
+    const itemsEditor = screen.getByPlaceholderText("items JSON")
+    fireEvent.change(itemsEditor, {
+      target: {
+        value: '[{"src":"https://example.com/g1.png","alt":"g1","caption":"first"}]',
+      },
+    })
+
+    const previewTabButtons = await screen.findAllByRole("button", { name: "미리보기" })
+    fireEvent.click(previewTabButtons[0])
+    expect(await screen.findByText(/Gallery \(1\)/)).toBeInTheDocument()
+  })
+
   it("shows JSON validation error for invalid and non-array items", async () => {
     render(<AdminPages />)
 

@@ -2221,3 +2221,51 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. U5-04 착수 전 Tablet 상세 QA 체크리스트(블록 타입별) 문서를 추가한다.
 2. 예약 발행(U5-02) 처리 자동화(cron/worker)와 연결해 운영 완성도를 높인다.
+
+## Session 2026-03-05-07
+
+### 1) Goal
+- U5-04 확장 블록 타입을 `schema -> 편집 UI -> preview -> validation`까지 일관되게 완성한다.
+
+### 2) Inputs
+- 로드맵 DoD: "신규 블록 스키마/편집 UI/validation/preview 일관 동작"
+- 기존 상태: `feature_list/faq`는 부분 지원, `gallery`는 타입만 존재하고 편집/검증 누락
+
+### 3) Design Decisions
+- 확장 블록으로 `gallery`를 신규 활성화하고, `feature_list/faq/gallery`를 동일한 JSON items 편집 패턴으로 맞춘다.
+- validation은 FE guardrails와 BE `collect_page_document_issues`를 동시 확장해 저장 전/서버 저장 시점 모두 같은 규칙을 적용한다.
+- gallery는 `items[{src, alt, caption}]` + `layout` 필드를 기본 스키마로 사용한다.
+
+### 4) Implementation Notes
+- `src/components/screens/admin/pages/AdminPages.tsx`
+  - `SupportedBlockType`에 `gallery` 추가
+  - `SUPPORTED_BLOCK_TYPES`를 확장(`feature_list`, `faq`, `gallery` 포함)
+  - `createBlock("gallery")` 기본 payload 추가
+  - Content 패널 JSON 편집 범위를 `feature_list/faq/gallery`로 확장
+  - Preview 렌더 분기 `gallery` 추가(이미지 카드 + caption)
+- `src/components/screens/admin/pages/pageEditorGuardrails.ts`
+  - `feature_list/faq/gallery` validation 추가
+  - gallery `src` URL 형식 및 `alt` 권장 규칙 반영
+- `server/main.py`
+  - `collect_page_document_issues`에 `feature_list/faq/gallery` validation 분기 추가
+- `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
+  - `adds and previews gallery block` 시나리오 추가
+- `server/tests/test_admin_page_editor_api.py`
+  - gallery invalid src 저장 시 422 검증 테스트 추가
+
+### 5) Validation
+- `pnpm test src/components/screens/admin/pages/AdminPages.workflow.test.tsx` 통과(11/11)
+- `pnpm build` 통과
+- `uv run python -m py_compile server/main.py` 통과
+- `uv run pytest server/tests/test_admin_page_editor_api.py`는 현 환경에서 `pytest` 실행 파일 부재로 미실행
+
+### 6) Outcome
+#### 잘된 점
+- 확장 블록이 "추가 가능" 수준이 아니라 실제 저장/프리뷰/검증 체계에 편입됐다.
+
+#### 아쉬운 점
+- gallery 레이아웃(`grid/carousel`) 실제 렌더 모드 차별화는 후속 개선 여지가 있다.
+
+#### 다음 액션
+1. gallery `layout`별 렌더링 차별화(특히 carousel)와 접근성 점검을 추가한다.
+2. `pytest` 실행 환경 정비 후 서버 테스트를 CI 경로에서 재검증한다.

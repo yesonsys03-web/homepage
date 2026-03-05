@@ -126,6 +126,79 @@ export function validatePageDocument(document: PageDocument): GuardrailIssue[] {
         })
       }
     }
+
+    if (block.type === "feature_list") {
+      const items = Array.isArray(block.content.items) ? block.content.items : null
+      if (!items) {
+        issues.push({
+          level: "blocking",
+          field: `blocks[${index}].content.items`,
+          message: "FeatureList items는 배열이어야 합니다",
+        })
+      } else if (block.visible && items.length === 0) {
+        issues.push({
+          level: "warning",
+          field: `blocks[${index}].content.items`,
+          message: "FeatureList 항목이 비어 있습니다",
+        })
+      }
+    }
+
+    if (block.type === "faq") {
+      const items = Array.isArray(block.content.items) ? block.content.items : null
+      if (!items) {
+        issues.push({
+          level: "blocking",
+          field: `blocks[${index}].content.items`,
+          message: "FAQ items는 배열이어야 합니다",
+        })
+      } else if (block.visible && items.length === 0) {
+        issues.push({
+          level: "warning",
+          field: `blocks[${index}].content.items`,
+          message: "FAQ 항목이 비어 있습니다",
+        })
+      }
+    }
+
+    if (block.type === "gallery") {
+      const items = Array.isArray(block.content.items) ? block.content.items : null
+      if (!items) {
+        issues.push({
+          level: "blocking",
+          field: `blocks[${index}].content.items`,
+          message: "Gallery items는 배열이어야 합니다",
+        })
+      } else {
+        items.forEach((item, imageIndex) => {
+          const node = item as Record<string, unknown>
+          const src = String(node.src ?? "").trim()
+          const alt = String(node.alt ?? "").trim()
+          if (block.visible && !src) {
+            issues.push({
+              level: "blocking",
+              field: `blocks[${index}].content.items[${imageIndex}].src`,
+              message: "Gallery image src는 필수입니다",
+            })
+            return
+          }
+          if (src && !isHttpUrl(src)) {
+            issues.push({
+              level: "blocking",
+              field: `blocks[${index}].content.items[${imageIndex}].src`,
+              message: "Gallery image src URL 형식이 올바르지 않습니다",
+            })
+          }
+          if (src && !alt) {
+            issues.push({
+              level: "warning",
+              field: `blocks[${index}].content.items[${imageIndex}].alt`,
+              message: "Gallery 이미지 alt 텍스트를 입력하는 것을 권장합니다",
+            })
+          }
+        })
+      }
+    }
   })
 
   const ogImage = String(document.seo.ogImage ?? "").trim()

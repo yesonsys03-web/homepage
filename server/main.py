@@ -1072,6 +1072,77 @@ def collect_page_document_issues(
                         "message": "CTA 라벨을 더 구체적으로 작성하는 것을 권장합니다",
                     }
                 )
+        elif block_type == "feature_list":
+            items_raw = content.get("items")
+            if not isinstance(items_raw, list):
+                blocking.append(
+                    {
+                        "field": f"blocks[{index}].content.items",
+                        "message": "FeatureList items는 배열이어야 합니다",
+                    }
+                )
+            elif visible and len(items_raw) == 0:
+                warnings.append(
+                    {
+                        "field": f"blocks[{index}].content.items",
+                        "message": "FeatureList 항목이 비어 있습니다",
+                    }
+                )
+        elif block_type == "faq":
+            items_raw = content.get("items")
+            if not isinstance(items_raw, list):
+                blocking.append(
+                    {
+                        "field": f"blocks[{index}].content.items",
+                        "message": "FAQ items는 배열이어야 합니다",
+                    }
+                )
+            elif visible and len(items_raw) == 0:
+                warnings.append(
+                    {
+                        "field": f"blocks[{index}].content.items",
+                        "message": "FAQ 항목이 비어 있습니다",
+                    }
+                )
+        elif block_type == "gallery":
+            items_raw = content.get("items")
+            if not isinstance(items_raw, list):
+                blocking.append(
+                    {
+                        "field": f"blocks[{index}].content.items",
+                        "message": "Gallery items는 배열이어야 합니다",
+                    }
+                )
+            else:
+                for image_index, item_raw in enumerate(items_raw):
+                    item = (
+                        cast(Mapping[str, object], item_raw)
+                        if isinstance(item_raw, Mapping)
+                        else {}
+                    )
+                    src = str(item.get("src") or "").strip()
+                    if visible and not src:
+                        blocking.append(
+                            {
+                                "field": f"blocks[{index}].content.items[{image_index}].src",
+                                "message": "Gallery image src는 필수입니다",
+                            }
+                        )
+                    elif src and not is_valid_http_url(src):
+                        blocking.append(
+                            {
+                                "field": f"blocks[{index}].content.items[{image_index}].src",
+                                "message": "Gallery image src URL 형식이 올바르지 않습니다",
+                            }
+                        )
+                    alt = str(item.get("alt") or "").strip()
+                    if src and not alt:
+                        warnings.append(
+                            {
+                                "field": f"blocks[{index}].content.items[{image_index}].alt",
+                                "message": "Gallery 이미지 alt 텍스트를 입력하는 것을 권장합니다",
+                            }
+                        )
 
     seo_raw = document.get("seo")
     seo = cast(Mapping[str, object], seo_raw if isinstance(seo_raw, Mapping) else {})
