@@ -26,7 +26,7 @@ const PROPERTY_PANEL_MAX_WIDTH = 440
 const PROPERTY_PANEL_DEFAULT_WIDTH = 360
 
 type EditorTab = "overview" | "editor" | "preview" | "versions" | "settings"
-type PreviewDevice = "desktop" | "mobile"
+type PreviewDevice = "desktop" | "tablet" | "mobile"
 type EditorZoom = 80 | 100 | 120
 type EditorInteractionSurface = "panel" | "canvas"
 type EditorUiVariant = "baseline" | "enhanced"
@@ -1578,9 +1578,18 @@ export function AdminPages() {
           <div className="space-y-3">
             <div className="flex gap-2">
               <Button variant={previewDevice === "desktop" ? "default" : "outline"} onClick={() => handlePreviewDeviceChange("desktop")}>Desktop</Button>
+              <Button variant={previewDevice === "tablet" ? "default" : "outline"} onClick={() => handlePreviewDeviceChange("tablet")}>Tablet</Button>
               <Button variant={previewDevice === "mobile" ? "default" : "outline"} onClick={() => handlePreviewDeviceChange("mobile")}>Mobile</Button>
             </div>
-            <div className={`mx-auto rounded-xl border border-slate-700 bg-slate-900 p-4 ${previewDevice === "mobile" ? "max-w-sm" : "max-w-4xl"}`}>
+            <div
+              className={`mx-auto rounded-xl border border-slate-700 bg-slate-900 p-4 ${
+                previewDevice === "mobile"
+                  ? "max-w-sm"
+                  : previewDevice === "tablet"
+                    ? "max-w-2xl"
+                    : "max-w-4xl"
+              }`}
+            >
               <div className="mb-3 flex items-center justify-between text-xs text-slate-400">
                 <span>{previewDevice} preview</span>
                 <span className="rounded border border-slate-600 px-2 py-0.5">{baseVersion === publishedVersion && baseVersion > 0 ? "published state" : "draft state"}</span>

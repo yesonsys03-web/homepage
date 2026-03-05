@@ -237,7 +237,8 @@ describe("AdminPages workflow regression", () => {
   it("shows compare diff result in versions tab", async () => {
     render(<AdminPages />)
 
-    fireEvent.click(await screen.findByRole("button", { name: "버전" }))
+    const versionTabButtons = await screen.findAllByRole("button", { name: "버전" })
+    fireEvent.click(versionTabButtons[0])
     await screen.findByText("버전 비교")
 
     fireEvent.click(screen.getByRole("button", { name: "Diff 보기" }))
@@ -247,6 +248,17 @@ describe("AdminPages workflow regression", () => {
     })
     expect(screen.getByText(/총 1건/)).toBeInTheDocument()
     expect(screen.getByText("블록 필드 변경: hero-1")).toBeInTheDocument()
+  })
+
+  it("switches preview device to tablet preset", async () => {
+    render(<AdminPages />)
+
+    const previewTabButtons = await screen.findAllByRole("button", { name: "미리보기" })
+    fireEvent.click(previewTabButtons[0])
+    expect(await screen.findByText("desktop preview")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "Tablet" }))
+    expect(await screen.findByText("tablet preview")).toBeInTheDocument()
   })
 
   it("shows conflict recovery actions on draft save conflict", async () => {

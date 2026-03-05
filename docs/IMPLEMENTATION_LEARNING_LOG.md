@@ -2182,3 +2182,42 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. 예약 처리 엔드포인트를 주기 실행하는 운영 작업(cron/worker)을 연결한다.
 2. U5-03(tablet preview) 착수 전 예약 실패 알림(슬랙/로그 대시보드) 정책을 정한다.
+
+## Session 2026-03-05-06
+
+### 1) Goal
+- U5-03 tablet preview를 Preview 탭에 반영하고 회귀 테스트로 고정한다.
+
+### 2) Inputs
+- U5 로드맵(섹션 15)에서 tablet preview 우선 항목
+- 기존 Preview 디바이스 전환 흐름(Desktop/Mobile)
+
+### 3) Design Decisions
+- Preview 디바이스 모델에 `tablet`을 추가하고, 기존 전환 핸들러를 그대로 재사용한다.
+- 폭 프리셋은 `mobile=max-w-sm`, `tablet=max-w-2xl`, `desktop=max-w-4xl`로 단순 규칙을 유지한다.
+- 테스트는 UI 상호작용(버튼 클릭 -> `tablet preview` 노출) 기준으로 작성해 회귀 안정성을 확보한다.
+
+### 4) Implementation Notes
+- `src/components/screens/admin/pages/AdminPages.tsx`
+  - `PreviewDevice`를 `desktop | tablet | mobile`로 확장
+  - Preview 탭 버튼에 `Tablet` 추가
+  - 프리뷰 컨테이너 폭 분기 로직에 tablet(`max-w-2xl`) 추가
+- `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
+  - `switches preview device to tablet preset` 테스트 추가
+  - 기존 탭 버튼 선택 로직을 중복 버튼 환경에서 안정적으로 동작하도록 보완(`findAllByRole(...)[0]`)
+
+### 5) Validation
+- `pnpm test src/components/screens/admin/pages/AdminPages.workflow.test.tsx` 통과(10/10)
+- `pnpm build` 통과
+- TS LSP diagnostics 통과(`AdminPages.tsx`, `AdminPages.workflow.test.tsx`)
+
+### 6) Outcome
+#### 잘된 점
+- Tablet 프리셋이 Preview 흐름에 자연스럽게 추가되어 디바이스 간 검수 공백이 줄었다.
+
+#### 아쉬운 점
+- Tablet 전용 상세 레이아웃 QA 체크리스트(블록별 기준)는 아직 별도 문서화가 필요하다.
+
+#### 다음 액션
+1. U5-04 착수 전 Tablet 상세 QA 체크리스트(블록 타입별) 문서를 추가한다.
+2. 예약 발행(U5-02) 처리 자동화(cron/worker)와 연결해 운영 완성도를 높인다.
