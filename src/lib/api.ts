@@ -100,6 +100,9 @@ export type AdminPagePerfScenario =
   | "editor_initial_load"
   | "preview_switch"
   | "draft_save_roundtrip"
+  | "panel_canvas_roundtrip_count"
+  | "edit_completion_time"
+  | "editor_scroll_distance"
 
 export interface AdminPagePerfMetric {
   sample_count: number

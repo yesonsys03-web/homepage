@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -17,9 +17,16 @@ import { validatePageDocument } from "./pageEditorGuardrails"
 
 const PAGE_ID = "about_page"
 const LOCAL_DRAFT_KEY = `page-editor-local-draft:${PAGE_ID}`
+const DESKTOP_LAYOUT_MEDIA_QUERY = "(min-width: 1440px)"
+const NOTEBOOK_LAYOUT_MEDIA_QUERY = "(min-width: 1024px) and (max-width: 1439px)"
+const PROPERTY_PANEL_MIN_WIDTH = 320
+const PROPERTY_PANEL_MAX_WIDTH = 440
+const PROPERTY_PANEL_DEFAULT_WIDTH = 360
 
 type EditorTab = "overview" | "editor" | "preview" | "versions" | "settings"
 type PreviewDevice = "desktop" | "mobile"
+type EditorZoom = 80 | 100 | 120
+type EditorInteractionSurface = "panel" | "canvas"
 type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq"
 
 const SUPPORTED_BLOCK_TYPES: SupportedBlockType[] = ["hero", "rich_text", "image", "cta"]
@@ -139,6 +146,7 @@ export function AdminPages() {
 
   const [activeTab, setActiveTab] = useState<EditorTab>("overview")
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop")
+  const [editorZoom, setEditorZoom] = useState<EditorZoom>(100)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -169,13 +177,42 @@ export function AdminPages() {
   const [conflictVersion, setConflictVersion] = useState<number | null>(null)
   const [listItemsInput, setListItemsInput] = useState("[]")
   const [listItemsError, setListItemsError] = useState<string | null>(null)
+  const [styleInput, setStyleInput] = useState("{}")
+  const [styleInputError, setStyleInputError] = useState<string | null>(null)
+  const [panelSectionOpen, setPanelSectionOpen] = useState({
+    content: true,
+    style: false,
+    advanced: false,
+  })
+  const [isDesktopWide, setIsDesktopWide] = useState(false)
+  const [isNotebookWide, setIsNotebookWide] = useState(false)
+  const [propertyPanelWidth, setPropertyPanelWidth] = useState(PROPERTY_PANEL_DEFAULT_WIDTH)
+  const [isResizingPropertyPanel, setIsResizingPropertyPanel] = useState(false)
+  const [isNotebookPropertyPanelOpen, setIsNotebookPropertyPanelOpen] = useState(false)
 
   const lastSavedSnapshotRef = useRef<string>("")
   const previewSwitchStartedRef = useRef<number | null>(null)
+  const resizeStartXRef = useRef<number | null>(null)
+  const resizeStartWidthRef = useRef<number>(PROPERTY_PANEL_DEFAULT_WIDTH)
+  const editorCanvasScrollContainerRef = useRef<HTMLDivElement | null>(null)
+  const editorCanvasScrollTopRef = useRef(0)
+  const shouldRestoreEditorCanvasScrollRef = useRef(false)
+  const editSessionStartedRef = useRef<number>(performance.now())
+  const panelCanvasRoundtripCountRef = useRef(0)
+  const lastEditorInteractionSurfaceRef = useRef<EditorInteractionSurface | null>(null)
+  const editorCanvasScrollDistanceRef = useRef(0)
+  const lastEditorCanvasScrollTopRef = useRef<number | null>(null)
 
   const selectedBlock = useMemo(
     () => blocks.find((block) => block.id === selectedBlockId) ?? null,
     [blocks, selectedBlockId],
+  )
+  const selectedBlockSupported = useMemo(
+    () =>
+      selectedBlock
+        ? SUPPORTED_BLOCK_TYPES.includes(selectedBlock.type as SupportedBlockType)
+        : false,
+    [selectedBlock],
   )
   const selectedBackup = useMemo(
     () => migrationBackups.find((item) => item.backupKey === selectedBackupKey) ?? null,
@@ -188,6 +225,196 @@ export function AdminPages() {
         : migrationBackups,
     [migrationBackups, showDryRunBackupsOnly],
   )
+
+  const markEditorCanvasScrollForRestore = useCallback(() => {
+    const container = editorCanvasScrollContainerRef.current
+    if (!container) {
+      return
+    }
+    editorCanvasScrollTopRef.current = container.scrollTop
+    shouldRestoreEditorCanvasScrollRef.current = true
+  }, [])
+
+  const getCurrentEditorDevice = useCallback((): "desktop" | "notebook" | "mobile" => {
+    if (isDesktopWide) return "desktop"
+    if (isNotebookWide) return "notebook"
+    return "mobile"
+  }, [isDesktopWide, isNotebookWide])
+
+  const getCurrentEditorMode = useCallback((): "balanced" | "canvas_focus" | "property_focus" => {
+    if (isDesktopWide) return "balanced"
+    if (isNotebookWide) return isNotebookPropertyPanelOpen ? "property_focus" : "canvas_focus"
+    return "canvas_focus"
+  }, [isDesktopWide, isNotebookWide, isNotebookPropertyPanelOpen])
+
+  const resetEditorSessionMetrics = useCallback(() => {
+    editSessionStartedRef.current = performance.now()
+    panelCanvasRoundtripCountRef.current = 0
+    lastEditorInteractionSurfaceRef.current = null
+    editorCanvasScrollDistanceRef.current = 0
+    const container = editorCanvasScrollContainerRef.current
+    lastEditorCanvasScrollTopRef.current = container ? container.scrollTop : null
+  }, [])
+
+  const markEditorInteraction = useCallback(
+    (surface: EditorInteractionSurface) => {
+      if (activeTab !== "editor") {
+        return
+      }
+      const previous = lastEditorInteractionSurfaceRef.current
+      if (previous && previous !== surface) {
+        panelCanvasRoundtripCountRef.current += 1
+      }
+      lastEditorInteractionSurfaceRef.current = surface
+    },
+    [activeTab],
+  )
+
+  const buildEditorMetricSource = useCallback(
+    (label: string) =>
+      `${label};tab=editor;device=${getCurrentEditorDevice()};mode=${getCurrentEditorMode()};zoom=${editorZoom}`,
+    [editorZoom, getCurrentEditorDevice, getCurrentEditorMode],
+  )
+
+  const handleEditorCanvasScroll = useCallback(() => {
+    const container = editorCanvasScrollContainerRef.current
+    if (!container) {
+      return
+    }
+    markEditorInteraction("canvas")
+    if (lastEditorCanvasScrollTopRef.current === null) {
+      lastEditorCanvasScrollTopRef.current = container.scrollTop
+    } else {
+      editorCanvasScrollDistanceRef.current += Math.abs(container.scrollTop - lastEditorCanvasScrollTopRef.current)
+      lastEditorCanvasScrollTopRef.current = container.scrollTop
+    }
+    editorCanvasScrollTopRef.current = container.scrollTop
+  }, [markEditorInteraction])
+
+  useEffect(() => {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return
+    }
+
+    const desktopMediaQuery = window.matchMedia(DESKTOP_LAYOUT_MEDIA_QUERY)
+    const notebookMediaQuery = window.matchMedia(NOTEBOOK_LAYOUT_MEDIA_QUERY)
+
+    const syncLayoutMode = () => {
+      setIsDesktopWide(desktopMediaQuery.matches)
+      setIsNotebookWide(notebookMediaQuery.matches)
+    }
+
+    syncLayoutMode()
+
+    if (
+      typeof desktopMediaQuery.addEventListener === "function"
+      && typeof notebookMediaQuery.addEventListener === "function"
+    ) {
+      desktopMediaQuery.addEventListener("change", syncLayoutMode)
+      notebookMediaQuery.addEventListener("change", syncLayoutMode)
+      return () => {
+        desktopMediaQuery.removeEventListener("change", syncLayoutMode)
+        notebookMediaQuery.removeEventListener("change", syncLayoutMode)
+      }
+    }
+
+    desktopMediaQuery.addListener(syncLayoutMode)
+    notebookMediaQuery.addListener(syncLayoutMode)
+    return () => {
+      desktopMediaQuery.removeListener(syncLayoutMode)
+      notebookMediaQuery.removeListener(syncLayoutMode)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!isDesktopWide) {
+      setIsResizingPropertyPanel(false)
+    }
+  }, [isDesktopWide])
+
+  useEffect(() => {
+    if (!isNotebookWide || activeTab !== "editor") {
+      setIsNotebookPropertyPanelOpen(false)
+    }
+  }, [activeTab, isNotebookWide])
+
+  useEffect(() => {
+    if (activeTab !== "editor") {
+      return
+    }
+    resetEditorSessionMetrics()
+  }, [activeTab, resetEditorSessionMetrics])
+
+  useEffect(() => {
+    if (activeTab !== "editor") {
+      return
+    }
+    if (!shouldRestoreEditorCanvasScrollRef.current) {
+      return
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const container = editorCanvasScrollContainerRef.current
+      if (!container) {
+        return
+      }
+      container.scrollTop = editorCanvasScrollTopRef.current
+      shouldRestoreEditorCanvasScrollRef.current = false
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    activeTab,
+    blocks,
+    editorZoom,
+    isNotebookPropertyPanelOpen,
+    panelSectionOpen,
+    selectedBlockId,
+  ])
+
+  const startPropertyPanelResize = useCallback(
+    (event: React.MouseEvent<HTMLButtonElement>) => {
+      if (!isDesktopWide || event.button !== 0) {
+        return
+      }
+      resizeStartXRef.current = event.clientX
+      resizeStartWidthRef.current = propertyPanelWidth
+      setIsResizingPropertyPanel(true)
+      event.preventDefault()
+    },
+    [isDesktopWide, propertyPanelWidth],
+  )
+
+  useEffect(() => {
+    if (!isResizingPropertyPanel) {
+      return
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (resizeStartXRef.current === null) {
+        return
+      }
+      const deltaX = event.clientX - resizeStartXRef.current
+      const nextWidth = Math.max(
+        PROPERTY_PANEL_MIN_WIDTH,
+        Math.min(PROPERTY_PANEL_MAX_WIDTH, resizeStartWidthRef.current - deltaX),
+      )
+      setPropertyPanelWidth(nextWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingPropertyPanel(false)
+      resizeStartXRef.current = null
+    }
+
+    window.addEventListener("mousemove", handleMouseMove)
+    window.addEventListener("mouseup", handleMouseUp)
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove)
+      window.removeEventListener("mouseup", handleMouseUp)
+    }
+  }, [isResizingPropertyPanel])
 
   useEffect(() => {
     if (selectedBackupKey && filteredMigrationBackups.some((item) => item.backupKey === selectedBackupKey)) {
@@ -207,6 +434,22 @@ export function AdminPages() {
       : []
     setListItemsInput(JSON.stringify(items, null, 2))
     setListItemsError(null)
+  }, [selectedBlock])
+
+  useEffect(() => {
+    if (!selectedBlock) {
+      setStyleInput("{}")
+      setStyleInputError(null)
+      return
+    }
+
+    setStyleInput(JSON.stringify(selectedBlock.style ?? {}, null, 2))
+    setStyleInputError(null)
+    setPanelSectionOpen({
+      content: true,
+      style: false,
+      advanced: false,
+    })
   }, [selectedBlock])
 
   const buildDocument = useMemo((): PageDocument => {
@@ -272,6 +515,7 @@ export function AdminPages() {
     applyDocument(draft.document, true)
     setConflictVersion(null)
     logPerfEvent("editor_initial_load", performance.now() - startedAt, metricSource)
+    resetEditorSessionMetrics()
   }
 
   useEffect(() => {
@@ -360,6 +604,22 @@ export function AdminPages() {
       setConflictVersion(null)
       setNotice(source === "manual" ? "Draft를 저장했습니다" : "자동 저장 완료")
       logPerfEvent("draft_save_roundtrip", performance.now() - saveStartedAt, source)
+      logPerfEvent(
+        "panel_canvas_roundtrip_count",
+        panelCanvasRoundtripCountRef.current,
+        buildEditorMetricSource(`save_source=${source}`),
+      )
+      logPerfEvent(
+        "edit_completion_time",
+        performance.now() - editSessionStartedRef.current,
+        buildEditorMetricSource(`save_source=${source}`),
+      )
+      logPerfEvent(
+        "editor_scroll_distance",
+        editorCanvasScrollDistanceRef.current,
+        buildEditorMetricSource(`save_source=${source}`),
+      )
+      resetEditorSessionMetrics()
 
       try {
         localStorage.removeItem(LOCAL_DRAFT_KEY)
@@ -582,6 +842,8 @@ export function AdminPages() {
   }
 
   const addBlock = (type: SupportedBlockType) => {
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
     setBlocks((prev) => {
       const next = normalizeBlocks([...prev, createBlock(type, prev.length)])
       setSelectedBlockId(next[next.length - 1]?.id ?? "")
@@ -590,6 +852,8 @@ export function AdminPages() {
   }
 
   const duplicateBlock = (blockId: string) => {
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
     setBlocks((prev) => {
       const target = prev.find((block) => block.id === blockId)
       if (!target) return prev
@@ -605,6 +869,8 @@ export function AdminPages() {
   }
 
   const deleteBlock = (blockId: string) => {
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
     setBlocks((prev) => {
       if (prev.length <= 1) return prev
       const next = normalizeBlocks(prev.filter((block) => block.id !== blockId))
@@ -616,6 +882,8 @@ export function AdminPages() {
   }
 
   const moveBlock = (blockId: string, direction: -1 | 1) => {
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
     setBlocks((prev) => {
       const ordered = normalizeBlocks(prev)
       const index = ordered.findIndex((block) => block.id === blockId)
@@ -630,6 +898,8 @@ export function AdminPages() {
   }
 
   const toggleVisible = (blockId: string) => {
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
     setBlocks((prev) =>
       prev.map((block) =>
         block.id === blockId ? { ...block, visible: !block.visible } : block,
@@ -639,6 +909,8 @@ export function AdminPages() {
 
   const updateSelectedBlockContent = (key: string, value: unknown) => {
     if (!selectedBlock) return
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
     setBlocks((prev) =>
       prev.map((block) =>
         block.id === selectedBlock.id
@@ -652,6 +924,31 @@ export function AdminPages() {
           : block,
       ),
     )
+  }
+
+  const updateSelectedBlockStyle = (nextStyle: Record<string, unknown>) => {
+    if (!selectedBlock) return
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
+    setBlocks((prev) =>
+      prev.map((block) =>
+        block.id === selectedBlock.id
+          ? {
+              ...block,
+              style: nextStyle,
+            }
+          : block,
+      ),
+    )
+  }
+
+  const togglePanelSection = (section: "content" | "style" | "advanced") => {
+    markEditorCanvasScrollForRestore()
+    markEditorInteraction("panel")
+    setPanelSectionOpen((prev) => ({
+      ...prev,
+      [section]: !prev[section],
+    }))
   }
 
   return (
@@ -704,7 +1001,32 @@ export function AdminPages() {
         ) : null}
 
         {activeTab === "editor" ? (
-          <div className="grid gap-4 lg:grid-cols-3">
+          <>
+            {isNotebookWide ? (
+              <div className="mb-2 flex justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    markEditorCanvasScrollForRestore()
+                    markEditorInteraction("panel")
+                    setIsNotebookPropertyPanelOpen(true)
+                  }}
+                >
+                  속성 패널 열기
+                </Button>
+              </div>
+            ) : null}
+            <div
+              className={`grid gap-4 ${isDesktopWide ? "items-start" : "lg:grid-cols-2"}`}
+              style={
+                isDesktopWide
+                  ? {
+                      gridTemplateColumns: `minmax(240px, 300px) minmax(720px, 1fr) ${propertyPanelWidth}px`,
+                    }
+                  : undefined
+              }
+            >
             <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
               <p className="text-sm font-medium text-slate-100">블록 목록</p>
               {normalizeBlocks(blocks).map((block, index) => {
@@ -716,7 +1038,11 @@ export function AdminPages() {
                   >
                     <button
                       className="w-full text-left text-sm text-slate-100"
-                      onClick={() => setSelectedBlockId(block.id)}
+                      onClick={() => {
+                        markEditorCanvasScrollForRestore()
+                        markEditorInteraction("panel")
+                        setSelectedBlockId(block.id)
+                      }}
                       type="button"
                     >
                       {index + 1}. {BLOCK_LABEL[block.type as SupportedBlockType] ?? block.type}
@@ -744,84 +1070,260 @@ export function AdminPages() {
             </div>
 
             <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
-              <p className="text-sm font-medium text-slate-100">캔버스 미리보기</p>
-              {normalizeBlocks(blocks)
-                .filter((block) => block.visible)
-                .map((block) => (
-                  <div key={block.id} className="rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200">
-                    <p className="font-medium text-slate-100">{BLOCK_LABEL[block.type as SupportedBlockType] ?? block.type}</p>
-                    <pre className="overflow-auto text-xs text-slate-300">{JSON.stringify(block.content, null, 2)}</pre>
-                  </div>
-                ))}
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-100">캔버스 미리보기</p>
+                <div className="flex items-center gap-1">
+                  {[80, 100, 120].map((zoom) => (
+                    <Button
+                      key={zoom}
+                      variant={editorZoom === zoom ? "default" : "outline"}
+                      size="sm"
+                      onClick={() => {
+                        markEditorCanvasScrollForRestore()
+                        markEditorInteraction("panel")
+                        setEditorZoom(zoom as EditorZoom)
+                      }}
+                    >
+                      {zoom}%
+                    </Button>
+                  ))}
+                </div>
+              </div>
+              <div
+                ref={editorCanvasScrollContainerRef}
+                onScroll={handleEditorCanvasScroll}
+                className="overflow-auto rounded border border-slate-700 bg-slate-950 p-2"
+              >
+                <div
+                  className="space-y-2"
+                  style={{
+                    transform: `scale(${editorZoom / 100})`,
+                    transformOrigin: "top center",
+                  }}
+                >
+                  {normalizeBlocks(blocks)
+                    .filter((block) => block.visible)
+                    .map((block) => (
+                      <button
+                        key={block.id}
+                        type="button"
+                      onClick={() => {
+                        markEditorCanvasScrollForRestore()
+                        markEditorInteraction("canvas")
+                        setSelectedBlockId(block.id)
+                      }}
+                        className={`w-full rounded border px-3 py-2 text-left text-sm ${
+                          selectedBlockId === block.id
+                            ? "border-emerald-400 bg-emerald-500/10 text-slate-100"
+                            : "border-slate-700 bg-slate-800 text-slate-200"
+                        }`}
+                      >
+                        <p className="font-medium text-slate-100">{BLOCK_LABEL[block.type as SupportedBlockType] ?? block.type}</p>
+                        <pre className="overflow-auto text-xs text-slate-300">{JSON.stringify(block.content, null, 2)}</pre>
+                      </button>
+                    ))}
+                </div>
+              </div>
             </div>
 
-            <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
-              <p className="text-sm font-medium text-slate-100">속성 패널</p>
-              {!selectedBlock ? <p className="text-sm text-slate-300">선택된 블록이 없습니다.</p> : null}
-
-              {selectedBlock?.type === "hero" ? (
-                <>
-                  <input value={String(selectedBlock.content.headline ?? "")} onChange={(event) => updateSelectedBlockContent("headline", event.target.value)} placeholder="headline" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <input value={String(selectedBlock.content.highlight ?? "")} onChange={(event) => updateSelectedBlockContent("highlight", event.target.value)} placeholder="highlight" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <textarea value={String(selectedBlock.content.description ?? "")} onChange={(event) => updateSelectedBlockContent("description", event.target.value)} rows={4} placeholder="description" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <input value={String(selectedBlock.content.contactEmail ?? "")} onChange={(event) => updateSelectedBlockContent("contactEmail", event.target.value)} placeholder="contactEmail" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                </>
+            <div
+              className={`relative space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3 ${
+                isNotebookWide
+                  ? `fixed right-0 top-0 z-40 h-full w-[min(420px,92vw)] overflow-auto rounded-none border-l border-slate-700 transition-transform ${
+                      isNotebookPropertyPanelOpen ? "translate-x-0" : "translate-x-full"
+                    }`
+                  : ""
+              }`}
+            >
+              {isDesktopWide ? (
+                <button
+                  type="button"
+                  aria-label="속성 패널 너비 조절"
+                  onMouseDown={startPropertyPanelResize}
+                  className={`absolute -left-2 top-0 h-full w-2 cursor-col-resize rounded bg-slate-600/40 transition hover:bg-emerald-400/60 ${isResizingPropertyPanel ? "bg-emerald-400/70" : ""}`}
+                />
               ) : null}
-
-              {selectedBlock?.type === "rich_text" ? (
-                <textarea value={String(selectedBlock.content.body ?? "")} onChange={(event) => updateSelectedBlockContent("body", event.target.value)} rows={8} placeholder="body" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-              ) : null}
-
-              {selectedBlock?.type === "image" ? (
-                <>
-                  <input value={String(selectedBlock.content.src ?? "")} onChange={(event) => updateSelectedBlockContent("src", event.target.value)} placeholder="https://..." className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <input value={String(selectedBlock.content.alt ?? "")} onChange={(event) => updateSelectedBlockContent("alt", event.target.value)} placeholder="alt" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <textarea value={String(selectedBlock.content.caption ?? "")} onChange={(event) => updateSelectedBlockContent("caption", event.target.value)} rows={3} placeholder="caption" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                </>
-              ) : null}
-
-              {selectedBlock?.type === "cta" ? (
-                <>
-                  <input value={String(selectedBlock.content.label ?? "")} onChange={(event) => updateSelectedBlockContent("label", event.target.value)} placeholder="label" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <input value={String(selectedBlock.content.href ?? "")} onChange={(event) => updateSelectedBlockContent("href", event.target.value)} placeholder="https://..." className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                  <input value={String(selectedBlock.content.style ?? "primary")} onChange={(event) => updateSelectedBlockContent("style", event.target.value)} placeholder="style" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
-                </>
-              ) : null}
-
-              {selectedBlock && (selectedBlock.type === "feature_list" || selectedBlock.type === "faq") ? (
-                <>
-                  <textarea
-                    value={listItemsInput}
-                    onChange={(event) => {
-                      const next = event.target.value
-                      setListItemsInput(next)
-                      try {
-                        const parsed = JSON.parse(next)
-                        if (!Array.isArray(parsed)) {
-                          setListItemsError("items는 배열(JSON Array)이어야 합니다")
-                          return
-                        }
-                        setListItemsError(null)
-                        updateSelectedBlockContent("items", parsed)
-                      } catch {
-                        setListItemsError("유효한 JSON 형식으로 입력하세요")
-                      }
+              <div className="sticky top-0 z-10 space-y-2 border-b border-slate-700 bg-slate-900/95 pb-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-slate-100">속성 패널</p>
+                  {isNotebookWide ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      markEditorCanvasScrollForRestore()
+                      markEditorInteraction("panel")
+                      setIsNotebookPropertyPanelOpen(false)
                     }}
-                    rows={10}
-                    placeholder="items JSON"
-                    className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100"
-                  />
-                  {listItemsError ? (
-                    <p className="text-xs text-rose-300">{listItemsError}</p>
+                  >
+                    닫기
+                  </Button>
                   ) : null}
-                </>
-              ) : null}
+                </div>
+                {!selectedBlock ? <p className="text-sm text-slate-300">선택된 블록이 없습니다.</p> : null}
+                {selectedBlock ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                      <span className="rounded border border-slate-600 px-2 py-1">{BLOCK_LABEL[selectedBlock.type as SupportedBlockType] ?? selectedBlock.type}</span>
+                      <span className={`rounded border px-2 py-1 ${isDirty ? "border-amber-500/40 text-amber-200" : "border-emerald-500/40 text-emerald-200"}`}>
+                        {isDirty ? "미저장" : "저장됨"}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      <Button variant="outline" size="sm" onClick={() => duplicateBlock(selectedBlock.id)} disabled={!selectedBlockSupported}>복제</Button>
+                      <Button variant="outline" size="sm" onClick={() => toggleVisible(selectedBlock.id)} disabled={!selectedBlockSupported}>
+                        {selectedBlock.visible ? "숨김" : "표시"}
+                      </Button>
+                      <Button variant="outline" size="sm" onClick={() => deleteBlock(selectedBlock.id)} disabled={!selectedBlockSupported || blocks.length <= 1}>삭제</Button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
 
-              {selectedBlock && !SUPPORTED_BLOCK_TYPES.includes(selectedBlock.type as SupportedBlockType) ? (
-                <p className="text-xs text-slate-400">이 블록 타입은 현재 MVP 편집 범위 밖입니다.</p>
+              {selectedBlock ? (
+                <div className="space-y-2 pt-2">
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded border border-slate-700 bg-slate-900 px-3 py-2 text-left text-sm font-medium text-slate-100"
+                    onClick={() => togglePanelSection("content")}
+                  >
+                    <span>Content</span>
+                    <span className="text-xs text-slate-400">{panelSectionOpen.content ? "접기" : "펼치기"}</span>
+                  </button>
+                  {panelSectionOpen.content ? (
+                    <div className="space-y-2 rounded border border-slate-700 bg-slate-900/40 p-3">
+                      {selectedBlock.type === "hero" ? (
+                        <>
+                          <input value={String(selectedBlock.content.headline ?? "")} onChange={(event) => updateSelectedBlockContent("headline", event.target.value)} placeholder="headline" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <input value={String(selectedBlock.content.highlight ?? "")} onChange={(event) => updateSelectedBlockContent("highlight", event.target.value)} placeholder="highlight" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <textarea value={String(selectedBlock.content.description ?? "")} onChange={(event) => updateSelectedBlockContent("description", event.target.value)} rows={4} placeholder="description" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <input value={String(selectedBlock.content.contactEmail ?? "")} onChange={(event) => updateSelectedBlockContent("contactEmail", event.target.value)} placeholder="contactEmail" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                        </>
+                      ) : null}
+
+                      {selectedBlock.type === "rich_text" ? (
+                        <textarea value={String(selectedBlock.content.body ?? "")} onChange={(event) => updateSelectedBlockContent("body", event.target.value)} rows={8} placeholder="body" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                      ) : null}
+
+                      {selectedBlock.type === "image" ? (
+                        <>
+                          <input value={String(selectedBlock.content.src ?? "")} onChange={(event) => updateSelectedBlockContent("src", event.target.value)} placeholder="https://..." className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <input value={String(selectedBlock.content.alt ?? "")} onChange={(event) => updateSelectedBlockContent("alt", event.target.value)} placeholder="alt" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <textarea value={String(selectedBlock.content.caption ?? "")} onChange={(event) => updateSelectedBlockContent("caption", event.target.value)} rows={3} placeholder="caption" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                        </>
+                      ) : null}
+
+                      {selectedBlock.type === "cta" ? (
+                        <>
+                          <input value={String(selectedBlock.content.label ?? "")} onChange={(event) => updateSelectedBlockContent("label", event.target.value)} placeholder="label" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <input value={String(selectedBlock.content.href ?? "")} onChange={(event) => updateSelectedBlockContent("href", event.target.value)} placeholder="https://..." className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                          <input value={String(selectedBlock.content.style ?? "primary")} onChange={(event) => updateSelectedBlockContent("style", event.target.value)} placeholder="style" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+                        </>
+                      ) : null}
+
+                      {selectedBlock.type === "feature_list" || selectedBlock.type === "faq" ? (
+                        <>
+                          <textarea
+                            value={listItemsInput}
+                            onChange={(event) => {
+                              const next = event.target.value
+                              setListItemsInput(next)
+                              try {
+                                const parsed = JSON.parse(next)
+                                if (!Array.isArray(parsed)) {
+                                  setListItemsError("items는 배열(JSON Array)이어야 합니다")
+                                  return
+                                }
+                                setListItemsError(null)
+                                updateSelectedBlockContent("items", parsed)
+                              } catch {
+                                setListItemsError("유효한 JSON 형식으로 입력하세요")
+                              }
+                            }}
+                            rows={10}
+                            placeholder="items JSON"
+                            className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100"
+                          />
+                          {listItemsError ? (
+                            <p className="text-xs text-rose-300">{listItemsError}</p>
+                          ) : null}
+                        </>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded border border-slate-700 bg-slate-900 px-3 py-2 text-left text-sm font-medium text-slate-100"
+                    onClick={() => togglePanelSection("style")}
+                  >
+                    <span>Style</span>
+                    <span className="text-xs text-slate-400">{panelSectionOpen.style ? "접기" : "펼치기"}</span>
+                  </button>
+                  {panelSectionOpen.style ? (
+                    <div className="space-y-2 rounded border border-slate-700 bg-slate-900/40 p-3">
+                      <textarea
+                        value={styleInput}
+                        onChange={(event) => {
+                          const next = event.target.value
+                          setStyleInput(next)
+                          try {
+                            const parsed = JSON.parse(next)
+                            if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+                              setStyleInputError("style은 JSON object여야 합니다")
+                              return
+                            }
+                            setStyleInputError(null)
+                            updateSelectedBlockStyle(parsed as Record<string, unknown>)
+                          } catch {
+                            setStyleInputError("유효한 JSON 형식으로 입력하세요")
+                          }
+                        }}
+                        rows={6}
+                        placeholder="style JSON"
+                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-100"
+                      />
+                      {styleInputError ? <p className="text-xs text-rose-300">{styleInputError}</p> : null}
+                    </div>
+                  ) : null}
+
+                  <button
+                    type="button"
+                    className="flex w-full items-center justify-between rounded border border-slate-700 bg-slate-900 px-3 py-2 text-left text-sm font-medium text-slate-100"
+                    onClick={() => togglePanelSection("advanced")}
+                  >
+                    <span>Advanced</span>
+                    <span className="text-xs text-slate-400">{panelSectionOpen.advanced ? "접기" : "펼치기"}</span>
+                  </button>
+                  {panelSectionOpen.advanced ? (
+                    <div className="space-y-1 rounded border border-slate-700 bg-slate-900/40 p-3 text-xs text-slate-300">
+                      <p>id: {selectedBlock.id}</p>
+                      <p>order: {selectedBlock.order}</p>
+                      <p>visible: {selectedBlock.visible ? "true" : "false"}</p>
+                      <p>type: {selectedBlock.type}</p>
+                    </div>
+                  ) : null}
+
+                  {!selectedBlockSupported ? (
+                    <p className="text-xs text-slate-400">이 블록 타입은 현재 MVP 편집 범위 밖입니다.</p>
+                  ) : null}
+                </div>
               ) : null}
             </div>
-          </div>
+            </div>
+            {isNotebookWide && isNotebookPropertyPanelOpen ? (
+              <button
+                type="button"
+                aria-label="속성 패널 닫기"
+                className="fixed inset-0 z-30 bg-slate-950/70"
+                onClick={() => {
+                  markEditorCanvasScrollForRestore()
+                  markEditorInteraction("panel")
+                  setIsNotebookPropertyPanelOpen(false)
+                }}
+              />
+            ) : null}
+          </>
         ) : null}
 
         {activeTab === "preview" ? (

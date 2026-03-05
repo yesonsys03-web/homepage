@@ -257,12 +257,18 @@ PAGE_EDITOR_PERF_SCENARIOS: set[str] = {
     "editor_initial_load",
     "preview_switch",
     "draft_save_roundtrip",
+    "panel_canvas_roundtrip_count",
+    "edit_completion_time",
+    "editor_scroll_distance",
 }
 
 PAGE_EDITOR_PERF_SLO_P75_MS: dict[str, float] = {
     "editor_initial_load": 2500.0,
     "draft_save_roundtrip": 800.0,
     "preview_switch": 500.0,
+    "panel_canvas_roundtrip_count": 6.0,
+    "edit_completion_time": 180000.0,
+    "editor_scroll_distance": 6000.0,
 }
 
 
@@ -736,6 +742,9 @@ class AdminPagePerfEventRequest(BaseModel):
         "editor_initial_load",
         "preview_switch",
         "draft_save_roundtrip",
+        "panel_canvas_roundtrip_count",
+        "edit_completion_time",
+        "editor_scroll_distance",
     ]
     durationMs: float
     source: Optional[str] = None
