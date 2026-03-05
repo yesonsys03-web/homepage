@@ -797,7 +797,7 @@ export const api = {
       key,
       ADMIN_TAB_TTL_MS.pages,
       async (signal) => {
-        const res = await fetch(`${API_BASE}/api/content/about`, { signal })
+        const res = await fetch(`${API_BASE}/api/content/about`, { signal, cache: "no-store" })
         if (!res.ok) throw new Error("Failed to load about content")
         return res.json() as Promise<AboutContent>
       },

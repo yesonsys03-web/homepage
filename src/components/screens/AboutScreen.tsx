@@ -87,7 +87,7 @@ export function AboutScreen({ onNavigate }: ScreenProps) {
   useEffect(() => {
     const loadAboutContent = async () => {
       try {
-        const data = await api.getAboutContent()
+        const data = await api.getAboutContent({ force: true })
         setContent(data)
       } catch (error) {
         console.error("Failed to load about content:", error)

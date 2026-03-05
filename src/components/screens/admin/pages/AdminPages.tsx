@@ -19,6 +19,7 @@ import { validatePageDocument } from "./pageEditorGuardrails"
 const PAGE_ID = "about_page"
 const LOCAL_DRAFT_KEY = `page-editor-local-draft:${PAGE_ID}`
 const EDITOR_UI_VARIANT_STORAGE_KEY = `page-editor-ui-variant:${PAGE_ID}`
+const API_TARGET = import.meta.env.VITE_API_BASE || "http://localhost:8000"
 const DESKTOP_LAYOUT_MEDIA_QUERY = "(min-width: 1440px)"
 const NOTEBOOK_LAYOUT_MEDIA_QUERY = "(min-width: 1024px) and (max-width: 1439px)"
 const PROPERTY_PANEL_MIN_WIDTH = 320
@@ -65,6 +66,14 @@ const BLOCK_LABEL: Record<SupportedBlockType, string> = {
   feature_list: "FeatureList",
   faq: "FAQ",
   gallery: "Gallery",
+}
+
+function getAboutMappingTarget(block: Pick<PageBlock, "id" | "type"> | null): string | null {
+  if (!block) return null
+  if (block.id === "values" && block.type === "feature_list") return "About Values"
+  if (block.id === "team" && block.type === "feature_list") return "About Team"
+  if (block.id === "faq" && block.type === "faq") return "About FAQ"
+  return null
 }
 
 function createBlock(type: SupportedBlockType, order: number): PageBlock {
@@ -175,6 +184,9 @@ function parseErrorMessage(error: unknown): string {
     return `요청 실패 (${error.status})`
   }
   if (error instanceof Error) {
+    if (error.message === "Failed to fetch") {
+      return `서버 연결에 실패했습니다 (${API_TARGET}). API 서버 실행 상태와 네트워크/프록시 설정을 확인해 주세요.`
+    }
     return error.message
   }
   return "요청에 실패했습니다"
@@ -270,6 +282,10 @@ export function AdminPages() {
   const selectedBlock = useMemo(
     () => blocks.find((block) => block.id === selectedBlockId) ?? null,
     [blocks, selectedBlockId],
+  )
+  const selectedAboutMappingTarget = useMemo(
+    () => getAboutMappingTarget(selectedBlock),
+    [selectedBlock],
   )
   const selectedBlockSupported = useMemo(
     () =>
@@ -1174,6 +1190,52 @@ export function AdminPages() {
     )
   }
 
+  const updateSelectedFeatureListItems = (nextItems: Array<Record<string, unknown>>) => {
+    updateSelectedBlockContent("items", nextItems)
+    setListItemsInput(JSON.stringify(nextItems, null, 2))
+    setListItemsError(null)
+  }
+
+  const updateSelectedFeatureListItemField = (
+    index: number,
+    key: string,
+    value: string,
+  ) => {
+    if (!selectedBlock || selectedBlock.type !== "feature_list") return
+    const currentItems = Array.isArray(selectedBlock.content.items)
+      ? (selectedBlock.content.items as Array<Record<string, unknown>>)
+      : []
+    if (index < 0 || index >= currentItems.length) return
+    const nextItems = currentItems.map((item, itemIndex) =>
+      itemIndex === index ? { ...item, [key]: value } : item,
+    )
+    updateSelectedFeatureListItems(nextItems)
+  }
+
+  const addSelectedMappedFeatureListItem = () => {
+    if (!selectedBlock || selectedBlock.type !== "feature_list") return
+    const currentItems = Array.isArray(selectedBlock.content.items)
+      ? (selectedBlock.content.items as Array<Record<string, unknown>>)
+      : []
+    const template =
+      selectedBlock.id === "values"
+        ? { emoji: "", title: "", description: "" }
+        : selectedBlock.id === "team"
+          ? { name: "", role: "", description: "" }
+          : { title: "", description: "" }
+    updateSelectedFeatureListItems([...currentItems, template])
+  }
+
+  const removeSelectedMappedFeatureListItem = (index: number) => {
+    if (!selectedBlock || selectedBlock.type !== "feature_list") return
+    const currentItems = Array.isArray(selectedBlock.content.items)
+      ? (selectedBlock.content.items as Array<Record<string, unknown>>)
+      : []
+    if (index < 0 || index >= currentItems.length) return
+    const nextItems = currentItems.filter((_, itemIndex) => itemIndex !== index)
+    updateSelectedFeatureListItems(nextItems)
+  }
+
   const updateSelectedBlockStyle = (nextStyle: Record<string, unknown>) => {
     if (!selectedBlock) return
     markEditorCanvasScrollForRestore()
@@ -1284,6 +1346,7 @@ export function AdminPages() {
               <p className="text-sm font-medium text-slate-100">블록 목록</p>
               {normalizeBlocks(blocks).map((block, index) => {
                 const supported = SUPPORTED_BLOCK_TYPES.includes(block.type as SupportedBlockType)
+                const aboutMappingTarget = getAboutMappingTarget(block)
                 return (
                   <div
                     key={block.id}
@@ -1299,6 +1362,7 @@ export function AdminPages() {
                       type="button"
                     >
                       {index + 1}. {BLOCK_LABEL[block.type as SupportedBlockType] ?? block.type}
+                      {aboutMappingTarget ? ` (${aboutMappingTarget})` : ""}
                       {!supported ? " (읽기 전용)" : ""}
                     </button>
                     <div className="flex flex-wrap gap-1">
@@ -1436,6 +1500,9 @@ export function AdminPages() {
                   <>
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300">
                       <span className="rounded border border-slate-600 px-2 py-1">{BLOCK_LABEL[selectedBlock.type as SupportedBlockType] ?? selectedBlock.type}</span>
+                      {selectedAboutMappingTarget ? (
+                        <span className="rounded border border-cyan-500/50 px-2 py-1 text-cyan-200">{selectedAboutMappingTarget}</span>
+                      ) : null}
                       <span className={`rounded border px-2 py-1 ${isDirty ? "border-amber-500/40 text-amber-200" : "border-emerald-500/40 text-emerald-200"}`}>
                         {isDirty ? "미저장" : "저장됨"}
                       </span>
@@ -1494,6 +1561,94 @@ export function AdminPages() {
 
                       {selectedBlock.type === "feature_list" || selectedBlock.type === "faq" || selectedBlock.type === "gallery" ? (
                         <>
+                          {selectedBlock.type === "feature_list" && (selectedBlock.id === "values" || selectedBlock.id === "team") ? (
+                            <div className="space-y-2 rounded border border-slate-700 bg-slate-950/60 p-2">
+                              <p className="text-xs text-cyan-200">
+                                {selectedBlock.id === "values"
+                                  ? "About Values 블록입니다. 여기서 제목/설명을 바로 수정하면 됩니다."
+                                  : "About Team 블록입니다. name/role/description을 수정하세요."}
+                              </p>
+                              {Array.isArray(selectedBlock.content.items) &&
+                              selectedBlock.content.items.length > 0 ? (
+                                (selectedBlock.content.items as Array<Record<string, unknown>>).map((item, itemIndex) => (
+                                  <div key={`${selectedBlock.id}-mapped-item-${itemIndex}`} className="space-y-1 rounded border border-slate-700 p-2">
+                                    <div className="flex items-center justify-between">
+                                      <p className="text-xs text-slate-300">항목 {itemIndex + 1}</p>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => removeSelectedMappedFeatureListItem(itemIndex)}
+                                      >
+                                        항목 삭제
+                                      </Button>
+                                    </div>
+                                    {selectedBlock.id === "values" ? (
+                                      <>
+                                        <input
+                                          value={String(item.emoji ?? "")}
+                                          onChange={(event) =>
+                                            updateSelectedFeatureListItemField(itemIndex, "emoji", event.target.value)
+                                          }
+                                          placeholder="emoji"
+                                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                                        />
+                                        <input
+                                          value={String(item.title ?? "")}
+                                          onChange={(event) =>
+                                            updateSelectedFeatureListItemField(itemIndex, "title", event.target.value)
+                                          }
+                                          placeholder="title"
+                                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                                        />
+                                        <textarea
+                                          value={String(item.description ?? "")}
+                                          onChange={(event) =>
+                                            updateSelectedFeatureListItemField(itemIndex, "description", event.target.value)
+                                          }
+                                          rows={3}
+                                          placeholder="description"
+                                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                                        />
+                                      </>
+                                    ) : (
+                                      <>
+                                        <input
+                                          value={String(item.name ?? "")}
+                                          onChange={(event) =>
+                                            updateSelectedFeatureListItemField(itemIndex, "name", event.target.value)
+                                          }
+                                          placeholder="name"
+                                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                                        />
+                                        <input
+                                          value={String(item.role ?? "")}
+                                          onChange={(event) =>
+                                            updateSelectedFeatureListItemField(itemIndex, "role", event.target.value)
+                                          }
+                                          placeholder="role"
+                                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                                        />
+                                        <textarea
+                                          value={String(item.description ?? "")}
+                                          onChange={(event) =>
+                                            updateSelectedFeatureListItemField(itemIndex, "description", event.target.value)
+                                          }
+                                          rows={3}
+                                          placeholder="description"
+                                          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+                                        />
+                                      </>
+                                    )}
+                                  </div>
+                                ))
+                              ) : (
+                                <p className="text-xs text-slate-400">등록된 항목이 없습니다.</p>
+                              )}
+                              <Button variant="outline" size="sm" onClick={addSelectedMappedFeatureListItem}>
+                                항목 추가
+                              </Button>
+                            </div>
+                          ) : null}
                           <textarea
                             value={listItemsInput}
                             onChange={(event) => {
