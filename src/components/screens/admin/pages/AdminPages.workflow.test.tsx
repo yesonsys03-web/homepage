@@ -312,4 +312,32 @@ describe("AdminPages workflow regression", () => {
 
     expect(screen.queryByText("유효한 JSON 형식으로 입력하세요")).not.toBeInTheDocument()
   })
+
+  it("shows JSON validation error for invalid and non-array items", async () => {
+    render(<AdminPages />)
+
+    const heroTabButtons = screen.getAllByRole("button", { name: "Hero" })
+    fireEvent.click(heroTabButtons[0])
+
+    const featureButtons = await screen.findAllByRole("button", { name: /FeatureList/ })
+    fireEvent.click(featureButtons[0])
+
+    const itemsEditor = screen.getByPlaceholderText("items JSON")
+    fireEvent.change(itemsEditor, { target: { value: "{" } })
+    expect(screen.getByText("유효한 JSON 형식으로 입력하세요")).toBeInTheDocument()
+
+    fireEvent.change(itemsEditor, { target: { value: "{}" } })
+    expect(screen.getByText("items는 배열(JSON Array)이어야 합니다")).toBeInTheDocument()
+  })
+
+  it("blocks manual save without reason", async () => {
+    render(<AdminPages />)
+
+    const saveButtons = await screen.findAllByRole("button", { name: "Draft 저장" })
+    fireEvent.click(saveButtons[saveButtons.length - 1])
+
+    expect(screen.getByText("수동 저장은 수정 사유가 필요합니다")).toBeInTheDocument()
+    expect(mocks.updateAdminPageDraft).not.toHaveBeenCalled()
+  })
+
 })

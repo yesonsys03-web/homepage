@@ -369,6 +369,32 @@ export function AdminPages() {
   }, [activeTab, isNotebookWide])
 
   useEffect(() => {
+    if (!isNotebookWide || !isNotebookPropertyPanelOpen || activeTab !== "editor") {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return
+      }
+      markEditorCanvasScrollForRestore()
+      markEditorInteraction("panel")
+      setIsNotebookPropertyPanelOpen(false)
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [
+    activeTab,
+    isNotebookPropertyPanelOpen,
+    isNotebookWide,
+    markEditorCanvasScrollForRestore,
+    markEditorInteraction,
+  ])
+
+  useEffect(() => {
     if (activeTab !== "editor") {
       return
     }
