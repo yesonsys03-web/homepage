@@ -2124,3 +2124,61 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. `pytest` 실행 환경을 맞춘 뒤 `server/tests/test_admin_page_editor_api.py`를 재검증한다.
 2. U5-01 정책 비교안(최신 우선/수동 병합/락 방식)을 문서화해 U5-02 선행 기준으로 고정한다.
+
+## Session 2026-03-05-05
+
+### 1) Goal
+- U5-02 예약 발행을 예약/취소/실패 재처리까지 포함한 운영 가능한 흐름으로 구현한다.
+
+### 2) Inputs
+- U5 로드맵 우선순위(`docs/page_edit.md` 섹션 15)
+- 기존 즉시 publish 경로(`POST /api/admin/pages/{page_id}/publish`)
+
+### 3) Design Decisions
+- 예약 발행은 즉시 publish와 분리된 스케줄 엔드포인트로 구현해 운영 제어를 단순화한다.
+- 실패 재처리는 상태 기반(`failed` -> `scheduled`) 재시도 요청 + 처리 엔드포인트 실행으로 분리한다.
+- 처리 엔드포인트는 draft version 불일치 시 실패로 기록하고 재처리 가능 상태를 유지한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `page_publish_schedules` 테이블/인덱스 보장 로직 추가
+    - 스케줄 생성/조회/취소/재시도/처리 결과 반영 helper 추가
+  - `server/main.py`
+    - API 추가
+      - `GET /api/admin/pages/{page_id}/publish-schedules`
+      - `POST /api/admin/pages/{page_id}/publish-schedules`
+      - `POST /api/admin/pages/{page_id}/publish-schedules/{schedule_id}/cancel`
+      - `POST /api/admin/pages/{page_id}/publish-schedules/{schedule_id}/retry`
+      - `POST /api/admin/pages/{page_id}/publish-schedules/process`
+    - 예약 시각 파싱/직렬화 유틸 추가
+    - 처리 실행 시 `page_publish_scheduled_executed` / 실패 시 `page_publish_scheduled_failed` 로그 추가
+- 프론트
+  - `src/lib/api.ts`
+    - 예약 발행 타입/클라이언트 메서드 추가(생성/조회/취소/재시도/처리)
+  - `src/components/screens/admin/pages/AdminPages.tsx`
+    - 버전 탭에 `예약 게시` 운영 카드 추가
+    - 예약 등록/취소/재시도 요청/처리 실행 핸들러 연결
+    - 스케줄 목록, 상태, 에러 메시지 표시
+- 테스트
+  - `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
+    - 예약 게시 등록 시나리오 추가
+  - `server/tests/test_admin_page_editor_api.py`
+    - 예약 생성/취소/처리 실패 경로 테스트 추가
+
+### 5) Validation
+- `pnpm test src/components/screens/admin/pages/AdminPages.workflow.test.tsx` 통과(9/9)
+- `pnpm build` 통과
+- `uv run python -m py_compile server/main.py server/db.py` 통과
+- `uv run pytest server/tests/test_admin_page_editor_api.py`는 현 환경에서 `pytest` 실행 파일 부재로 미실행
+
+### 6) Outcome
+#### 잘된 점
+- 운영자가 버전 탭에서 예약 게시 라이프사이클(등록/취소/재시도/실행)을 한 화면에서 처리할 수 있게 됐다.
+
+#### 아쉬운 점
+- 예약 처리 자동 실행(cron/worker)은 아직 없고 수동 처리 엔드포인트 기반이다.
+
+#### 다음 액션
+1. 예약 처리 엔드포인트를 주기 실행하는 운영 작업(cron/worker)을 연결한다.
+2. U5-03(tablet preview) 착수 전 예약 실패 알림(슬랙/로그 대시보드) 정책을 정한다.

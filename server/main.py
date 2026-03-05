@@ -16,7 +16,7 @@ from typing import (
     TypedDict,
     cast,
 )
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import re
 import unicodedata
@@ -95,6 +95,13 @@ from db import (
     list_page_document_versions,
     get_page_document_version,
     rollback_page_document,
+    create_page_publish_schedule,
+    list_page_publish_schedules,
+    cancel_page_publish_schedule,
+    retry_page_publish_schedule,
+    list_due_page_publish_schedules,
+    mark_page_publish_schedule_published,
+    mark_page_publish_schedule_failed,
 )
 from auth import (
     verify_password,
@@ -798,6 +805,22 @@ class AdminPageDraftUpdateRequest(BaseModel):
 class AdminPagePublishRequest(BaseModel):
     reason: Optional[str] = None
     draftVersion: Optional[int] = None
+
+
+class AdminPagePublishScheduleCreateRequest(BaseModel):
+    publishAt: str
+    timezone: Optional[str] = "Asia/Seoul"
+    reason: Optional[str] = None
+    draftVersion: Optional[int] = None
+
+
+class AdminPagePublishScheduleActionRequest(BaseModel):
+    reason: Optional[str] = None
+
+
+class AdminPagePublishScheduleProcessRequest(BaseModel):
+    limit: int = 20
+    reason: Optional[str] = None
 
 
 class AdminPageRollbackRequest(BaseModel):
@@ -1549,6 +1572,60 @@ def page_action_target_id(page_id: str) -> str:
     if page_id == ABOUT_CONTENT_KEY:
         return ABOUT_CONTENT_TARGET_ID
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"vibecoder:page:{page_id}"))
+
+
+def parse_schedule_publish_at(raw: str) -> datetime:
+    normalized = raw.strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail="publishAt은 필수입니다")
+    try:
+        parsed = datetime.fromisoformat(normalized.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="publishAt 형식이 올바르지 않습니다"
+        ) from exc
+
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return parsed
+
+
+def serialize_publish_schedule(
+    record: Mapping[str, object],
+) -> dict[str, object]:
+    def to_int(value: object, default: int = 0) -> int:
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+        if isinstance(value, str):
+            try:
+                return int(value)
+            except ValueError:
+                return default
+        return default
+
+    return {
+        "scheduleId": str(record.get("schedule_id") or ""),
+        "pageId": str(record.get("page_id") or ""),
+        "draftVersion": to_int(record.get("draft_version"), 0),
+        "publishAt": str(record.get("publish_at") or ""),
+        "timezone": str(record.get("timezone") or "Asia/Seoul"),
+        "status": str(record.get("status") or "scheduled"),
+        "reason": str(record.get("reason") or ""),
+        "attemptCount": to_int(record.get("attempt_count"), 0),
+        "maxAttempts": to_int(record.get("max_attempts"), 3),
+        "lastError": str(record.get("last_error") or ""),
+        "nextRetryAt": str(record.get("next_retry_at") or ""),
+        "createdBy": str(record.get("created_by") or ""),
+        "createdAt": str(record.get("created_at") or ""),
+        "updatedAt": str(record.get("updated_at") or ""),
+        "cancelledAt": str(record.get("cancelled_at") or ""),
+        "publishedVersion": to_int(record.get("published_version"), 0),
+        "publishedAt": str(record.get("published_at") or ""),
+    }
 
 
 def normalize_text_for_filter(text: str) -> str:
@@ -3468,6 +3545,283 @@ def publish_admin_page(
 
     return {
         "publishedVersion": published_version,
+    }
+
+
+@app.get("/api/admin/pages/{page_id}/publish-schedules")
+def list_admin_page_publish_schedules(
+    page_id: str,
+    limit: int = 50,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    enforce_page_editor_rollout_access(current_user)
+    safe_limit = min(max(limit, 1), 100)
+    items = [
+        serialize_publish_schedule(item)
+        for item in list_page_publish_schedules(page_id=page_id, limit=safe_limit)
+    ]
+    return {
+        "pageId": page_id,
+        "count": len(items),
+        "items": items,
+    }
+
+
+@app.post("/api/admin/pages/{page_id}/publish-schedules")
+def create_admin_page_publish_schedule(
+    page_id: str,
+    payload: AdminPagePublishScheduleCreateRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    enforce_page_editor_rollout_access(current_user)
+    reason = require_action_reason(payload.reason)
+
+    current_draft = get_page_document_draft(page_id)
+    if not current_draft:
+        raise HTTPException(
+            status_code=404, detail="예약 게시 대상 draft를 찾을 수 없습니다"
+        )
+
+    current_draft_version = int(current_draft.get("draft_version", 0))
+    target_draft_version = (
+        int(payload.draftVersion)
+        if payload.draftVersion is not None
+        else current_draft_version
+    )
+    if target_draft_version <= 0:
+        raise HTTPException(
+            status_code=400, detail="예약 게시 대상 draftVersion이 올바르지 않습니다"
+        )
+    if target_draft_version != current_draft_version:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "page_publish_schedule_conflict",
+                "message": "최신 draft 버전과 예약 대상 버전이 다릅니다",
+                "current_version": current_draft_version,
+                "field_errors": [],
+            },
+        )
+
+    target_record = get_page_document_version(page_id, target_draft_version)
+    if not target_record or not target_record.get("document_json"):
+        raise HTTPException(
+            status_code=404, detail="예약 게시 대상 draft를 찾을 수 없습니다"
+        )
+
+    issues = collect_page_document_issues(
+        cast(dict[str, object], target_record["document_json"])
+    )
+    if issues["blocking"]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "page_validation_failed",
+                "message": "예약 게시 전 검증에 실패했습니다",
+                "field_errors": issues["blocking"],
+                "warnings": issues["warnings"],
+            },
+        )
+
+    publish_at = parse_schedule_publish_at(payload.publishAt)
+    now_utc = datetime.utcnow()
+    if publish_at <= now_utc:
+        raise HTTPException(
+            status_code=400, detail="publishAt은 현재 시각 이후여야 합니다"
+        )
+
+    schedule_id = f"ps_{int(time.time())}_{secrets.token_hex(4)}"
+    record = create_page_publish_schedule(
+        schedule_id=schedule_id,
+        page_id=page_id,
+        draft_version=target_draft_version,
+        publish_at=publish_at.isoformat(sep=" ", timespec="seconds"),
+        timezone=(payload.timezone or "Asia/Seoul").strip() or "Asia/Seoul",
+        actor_id=current_user["id"],
+        reason=reason,
+    )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="page_publish_scheduled",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=f"schedule_id={schedule_id}; draft_version={target_draft_version}; publish_at={publish_at.isoformat()}; {reason}",
+    )
+
+    return {
+        "scheduled": True,
+        "schedule": serialize_publish_schedule(
+            cast(Mapping[str, object], record or {})
+        ),
+    }
+
+
+@app.post("/api/admin/pages/{page_id}/publish-schedules/{schedule_id}/cancel")
+def cancel_admin_page_publish_schedule(
+    page_id: str,
+    schedule_id: str,
+    payload: AdminPagePublishScheduleActionRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    enforce_page_editor_rollout_access(current_user)
+    reason = require_action_reason(payload.reason)
+    cancelled = cancel_page_publish_schedule(
+        page_id=page_id,
+        schedule_id=schedule_id,
+        actor_id=current_user["id"],
+        reason=reason,
+    )
+    if not cancelled:
+        raise HTTPException(
+            status_code=404, detail="취소 가능한 예약 게시를 찾을 수 없습니다"
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="page_publish_schedule_cancelled",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=f"schedule_id={schedule_id}; {reason}",
+    )
+
+    return {
+        "cancelled": True,
+        "schedule": serialize_publish_schedule(cast(Mapping[str, object], cancelled)),
+    }
+
+
+@app.post("/api/admin/pages/{page_id}/publish-schedules/{schedule_id}/retry")
+def retry_admin_page_publish_schedule(
+    page_id: str,
+    schedule_id: str,
+    payload: AdminPagePublishScheduleActionRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    enforce_page_editor_rollout_access(current_user)
+    reason = require_action_reason(payload.reason)
+    retried = retry_page_publish_schedule(
+        page_id=page_id,
+        schedule_id=schedule_id,
+        actor_id=current_user["id"],
+        reason=reason,
+    )
+    if not retried:
+        raise HTTPException(
+            status_code=404, detail="재시도 가능한 예약 게시를 찾을 수 없습니다"
+        )
+
+    write_admin_action_log(
+        admin_id=current_user["id"],
+        action_type="page_publish_schedule_retry_requested",
+        target_type="page",
+        target_id=page_action_target_id(page_id),
+        reason=f"schedule_id={schedule_id}; {reason}",
+    )
+
+    return {
+        "retried": True,
+        "schedule": serialize_publish_schedule(cast(Mapping[str, object], retried)),
+    }
+
+
+@app.post("/api/admin/pages/{page_id}/publish-schedules/process")
+def process_admin_page_publish_schedules(
+    page_id: str,
+    payload: AdminPagePublishScheduleProcessRequest,
+    current_user: UserContext = Depends(require_super_admin),
+):
+    enforce_page_editor_rollout_access(current_user)
+    safe_limit = min(max(payload.limit, 1), 50)
+    process_reason = (payload.reason or "scheduled publish process").strip()
+
+    due_items = list_due_page_publish_schedules(page_id=page_id, limit=safe_limit)
+    published_count = 0
+    failed_count = 0
+    results: list[dict[str, object]] = []
+
+    for row in due_items:
+        schedule_id = str(row.get("schedule_id") or "")
+        draft_version = int(row.get("draft_version") or 0)
+
+        try:
+            current_draft = get_page_document_draft(page_id)
+            if not current_draft:
+                raise RuntimeError("draft_not_found")
+
+            current_draft_version = int(current_draft.get("draft_version", 0))
+            if current_draft_version != draft_version:
+                raise RuntimeError(
+                    f"draft_version_conflict: scheduled={draft_version}, current={current_draft_version}"
+                )
+
+            published = publish_page_document(
+                page_id=page_id,
+                actor_id=current_user["id"],
+                reason=f"scheduled_publish:{schedule_id}; {process_reason}",
+                draft_version=draft_version,
+            )
+            if not published:
+                raise RuntimeError("publish_failed")
+
+            published_version = int(published.get("published_version", 0))
+            if page_id == ABOUT_CONTENT_KEY:
+                published_doc = get_page_document_version(page_id, published_version)
+                if published_doc and published_doc.get("document_json"):
+                    about_payload = extract_about_content_from_page_document(
+                        cast(dict[str, object], published_doc["document_json"])
+                    )
+                    _ = upsert_site_content(ABOUT_CONTENT_KEY, about_payload)
+
+            _ = mark_page_publish_schedule_published(
+                page_id=page_id,
+                schedule_id=schedule_id,
+                published_version=published_version,
+            )
+            write_admin_action_log(
+                admin_id=current_user["id"],
+                action_type="page_publish_scheduled_executed",
+                target_type="page",
+                target_id=page_action_target_id(page_id),
+                reason=f"schedule_id={schedule_id}; published_version={published_version}; {process_reason}",
+            )
+            published_count += 1
+            results.append(
+                {
+                    "scheduleId": schedule_id,
+                    "status": "published",
+                    "publishedVersion": published_version,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            error_message = str(exc) or "unknown_error"
+            _ = mark_page_publish_schedule_failed(
+                page_id=page_id,
+                schedule_id=schedule_id,
+                error_message=error_message,
+            )
+            write_admin_action_log(
+                admin_id=current_user["id"],
+                action_type="page_publish_scheduled_failed",
+                target_type="page",
+                target_id=page_action_target_id(page_id),
+                reason=f"schedule_id={schedule_id}; error={error_message}; {process_reason}",
+            )
+            failed_count += 1
+            results.append(
+                {
+                    "scheduleId": schedule_id,
+                    "status": "failed",
+                    "error": error_message,
+                }
+            )
+
+    return {
+        "pageId": page_id,
+        "processed": len(results),
+        "published": published_count,
+        "failed": failed_count,
+        "items": results,
     }
 
 

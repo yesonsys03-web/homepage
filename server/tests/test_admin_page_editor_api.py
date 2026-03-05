@@ -232,6 +232,154 @@ def test_publish_admin_page_success(monkeypatch: Any) -> None:
     main.app.dependency_overrides.clear()
 
 
+def test_create_admin_page_publish_schedule_success(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+    monkeypatch.setattr(
+        main,
+        "get_page_document_draft",
+        lambda _page_id: {"draft_version": 2, "published_version": 1},
+    )
+    monkeypatch.setattr(
+        main,
+        "get_page_document_version",
+        lambda _page_id, _version: {"document_json": {"pageId": "about_page"}},
+    )
+    monkeypatch.setattr(
+        main,
+        "collect_page_document_issues",
+        lambda _doc: {"blocking": [], "warnings": []},
+    )
+    monkeypatch.setattr(
+        main,
+        "create_page_publish_schedule",
+        lambda **_: {
+            "schedule_id": "ps_123",
+            "page_id": "about_page",
+            "draft_version": 2,
+            "publish_at": "2099-01-01 10:00:00",
+            "timezone": "Asia/Seoul",
+            "status": "scheduled",
+            "reason": "campaign",
+            "attempt_count": 0,
+            "max_attempts": 3,
+            "last_error": "",
+            "next_retry_at": None,
+            "created_by": "11111111-1111-1111-1111-111111111111",
+            "created_at": "2099-01-01T00:00:00Z",
+            "updated_at": "2099-01-01T00:00:00Z",
+            "cancelled_at": None,
+            "published_version": 0,
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/pages/about_page/publish-schedules",
+        json={
+            "publishAt": "2099-01-01T10:00:00Z",
+            "timezone": "Asia/Seoul",
+            "reason": "campaign",
+            "draftVersion": 2,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["scheduled"] is True
+    assert body["schedule"]["scheduleId"] == "ps_123"
+    assert body["schedule"]["draftVersion"] == 2
+
+    main.app.dependency_overrides.clear()
+
+
+def test_cancel_admin_page_publish_schedule_success(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+    monkeypatch.setattr(
+        main,
+        "cancel_page_publish_schedule",
+        lambda **_: {
+            "schedule_id": "ps_123",
+            "page_id": "about_page",
+            "draft_version": 2,
+            "publish_at": "2099-01-01 10:00:00",
+            "timezone": "Asia/Seoul",
+            "status": "cancelled",
+            "reason": "cancel",
+            "attempt_count": 0,
+            "max_attempts": 3,
+            "last_error": "",
+            "next_retry_at": None,
+            "created_by": "11111111-1111-1111-1111-111111111111",
+            "created_at": "2099-01-01T00:00:00Z",
+            "updated_at": "2099-01-01T00:01:00Z",
+            "cancelled_at": "2099-01-01T00:01:00Z",
+            "published_version": 0,
+            "published_at": None,
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/pages/about_page/publish-schedules/ps_123/cancel",
+        json={"reason": "cancel"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["cancelled"] is True
+    assert body["schedule"]["status"] == "cancelled"
+
+    main.app.dependency_overrides.clear()
+
+
+def test_process_admin_page_publish_schedules_marks_failure(monkeypatch: Any) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        role="super_admin"
+    )
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+    monkeypatch.setattr(
+        main,
+        "list_due_page_publish_schedules",
+        lambda **_: [{"schedule_id": "ps_1", "draft_version": 2}],
+    )
+    monkeypatch.setattr(
+        main,
+        "get_page_document_draft",
+        lambda _page_id: {"draft_version": 3},
+    )
+
+    failed_ids: list[str] = []
+    monkeypatch.setattr(
+        main,
+        "mark_page_publish_schedule_failed",
+        lambda **kwargs: failed_ids.append(str(kwargs.get("schedule_id", ""))),
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/pages/about_page/publish-schedules/process",
+        json={"limit": 20, "reason": "process"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["failed"] == 1
+    assert body["processed"] == 1
+    assert "ps_1" in failed_ids
+
+    main.app.dependency_overrides.clear()
+
+
 def test_update_admin_page_draft_returns_validation_error_for_invalid_url(
     monkeypatch: Any,
 ) -> None:

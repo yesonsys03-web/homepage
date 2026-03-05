@@ -5,6 +5,7 @@ import {
   ApiRequestError,
   api,
   type AdminPageMigrationBackupListResponse,
+  type AdminPagePublishScheduleItem,
   type AdminPagePerfScenario,
   type AdminPageVersionCompareResponse,
   type AdminPageVersionListItem,
@@ -188,7 +189,10 @@ export function AdminPages() {
   const [publishing, setPublishing] = useState(false)
   const [loadingVersions, setLoadingVersions] = useState(false)
   const [loadingBackups, setLoadingBackups] = useState(false)
+  const [loadingSchedules, setLoadingSchedules] = useState(false)
   const [restoringBackup, setRestoringBackup] = useState(false)
+  const [schedulingPublish, setSchedulingPublish] = useState(false)
+  const [processingSchedules, setProcessingSchedules] = useState(false)
   const [comparing, setComparing] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [errorBanner, setErrorBanner] = useState<string | null>(null)
@@ -200,8 +204,11 @@ export function AdminPages() {
   const [compareToVersion, setCompareToVersion] = useState<number | null>(null)
   const [compareResult, setCompareResult] = useState<AdminPageVersionCompareResponse | null>(null)
   const [migrationBackups, setMigrationBackups] = useState<AdminPageMigrationBackupListResponse["items"]>([])
+  const [publishSchedules, setPublishSchedules] = useState<AdminPagePublishScheduleItem[]>([])
   const [selectedBackupKey, setSelectedBackupKey] = useState("")
   const [showDryRunBackupsOnly, setShowDryRunBackupsOnly] = useState(false)
+  const [scheduledPublishAt, setScheduledPublishAt] = useState("")
+  const [scheduleTimezone, setScheduleTimezone] = useState("Asia/Seoul")
 
   const [pageTitle, setPageTitle] = useState("About Page")
   const [metaTitle, setMetaTitle] = useState("")
@@ -596,6 +603,22 @@ export function AdminPages() {
     resetEditorSessionMetrics()
   }
 
+  const refreshPublishSchedules = async () => {
+    if (!isSuperAdmin) {
+      setPublishSchedules([])
+      return
+    }
+    setLoadingSchedules(true)
+    try {
+      const response = await api.getAdminPagePublishSchedules(PAGE_ID, 50)
+      setPublishSchedules(response.items)
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setLoadingSchedules(false)
+    }
+  }
+
   useEffect(() => {
     const load = async () => {
       setLoading(true)
@@ -616,10 +639,12 @@ export function AdminPages() {
     const loadVersions = async () => {
       setLoadingVersions(true)
       setLoadingBackups(true)
+      setLoadingSchedules(true)
       try {
-        const [response, backups] = await Promise.all([
+        const [response, backups, schedules] = await Promise.all([
           api.getAdminPageVersions(PAGE_ID, 50),
           isSuperAdmin ? api.getAdminPageMigrationBackups(PAGE_ID, 20) : Promise.resolve({ pageId: PAGE_ID, count: 0, items: [] }),
+          isSuperAdmin ? api.getAdminPagePublishSchedules(PAGE_ID, 50) : Promise.resolve({ pageId: PAGE_ID, count: 0, items: [] }),
         ])
         setVersions(response.items)
         if (response.items.length >= 2) {
@@ -633,11 +658,13 @@ export function AdminPages() {
           }
           return backups.items[0]?.backupKey ?? ""
         })
+        setPublishSchedules(schedules.items)
       } catch (error) {
         setErrorBanner(parseErrorMessage(error))
       } finally {
         setLoadingVersions(false)
         setLoadingBackups(false)
+        setLoadingSchedules(false)
       }
     }
     void loadVersions()
@@ -937,6 +964,105 @@ export function AdminPages() {
       setErrorBanner(parseErrorMessage(error))
     } finally {
       setRestoringBackup(false)
+    }
+  }
+
+  const schedulePublish = async () => {
+    if (!isSuperAdmin) return
+    if (!reason.trim()) {
+      setErrorBanner("예약 게시에는 사유 입력이 필요합니다")
+      return
+    }
+    if (!scheduledPublishAt.trim()) {
+      setErrorBanner("예약 게시 시각을 입력하세요")
+      return
+    }
+
+    const targetDate = new Date(scheduledPublishAt)
+    if (Number.isNaN(targetDate.getTime())) {
+      setErrorBanner("예약 게시 시각 형식이 올바르지 않습니다")
+      return
+    }
+
+    setSchedulingPublish(true)
+    setErrorBanner(null)
+    setNotice(null)
+    try {
+      await api.createAdminPagePublishSchedule(
+        PAGE_ID,
+        targetDate.toISOString(),
+        reason.trim(),
+        scheduleTimezone,
+        baseVersion,
+      )
+      setReason("")
+      setScheduledPublishAt("")
+      await Promise.all([refreshPublishSchedules(), api.getAdminPageVersions(PAGE_ID, 50).then((res) => setVersions(res.items))])
+      setNotice("예약 게시를 등록했습니다")
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setSchedulingPublish(false)
+    }
+  }
+
+  const cancelScheduledPublish = async (scheduleId: string) => {
+    if (!isSuperAdmin) return
+    if (!reason.trim()) {
+      setErrorBanner("예약 취소에는 사유 입력이 필요합니다")
+      return
+    }
+    setSchedulingPublish(true)
+    setErrorBanner(null)
+    try {
+      await api.cancelAdminPagePublishSchedule(PAGE_ID, scheduleId, reason.trim())
+      setReason("")
+      await refreshPublishSchedules()
+      setNotice("예약 게시를 취소했습니다")
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setSchedulingPublish(false)
+    }
+  }
+
+  const retryScheduledPublish = async (scheduleId: string) => {
+    if (!isSuperAdmin) return
+    if (!reason.trim()) {
+      setErrorBanner("재시도 요청에는 사유 입력이 필요합니다")
+      return
+    }
+    setSchedulingPublish(true)
+    setErrorBanner(null)
+    try {
+      await api.retryAdminPagePublishSchedule(PAGE_ID, scheduleId, reason.trim())
+      setReason("")
+      await refreshPublishSchedules()
+      setNotice("예약 게시 재시도를 요청했습니다")
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setSchedulingPublish(false)
+    }
+  }
+
+  const processDueSchedules = async () => {
+    if (!isSuperAdmin) return
+    setProcessingSchedules(true)
+    setErrorBanner(null)
+    setNotice(null)
+    try {
+      const result = await api.processAdminPagePublishSchedules(PAGE_ID, 20, reason.trim() || undefined)
+      await Promise.all([
+        refreshPublishSchedules(),
+        api.getAdminPageVersions(PAGE_ID, 50).then((res) => setVersions(res.items)),
+        reloadDraft("scheduled_publish_process", false),
+      ])
+      setNotice(`예약 게시 처리 완료: 성공 ${result.published} / 실패 ${result.failed}`)
+    } catch (error) {
+      setErrorBanner(parseErrorMessage(error))
+    } finally {
+      setProcessingSchedules(false)
     }
   }
 
@@ -1592,6 +1718,101 @@ export function AdminPages() {
                 </div>
               ) : null}
             </div>
+
+            {isSuperAdmin ? (
+              <div className="space-y-2 rounded border border-slate-700 bg-slate-900 p-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium text-slate-100">예약 게시</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void refreshPublishSchedules()}
+                    disabled={loadingSchedules || schedulingPublish || processingSchedules}
+                  >
+                    {loadingSchedules ? "로딩 중..." : "목록 새로고침"}
+                  </Button>
+                </div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  <input
+                    type="datetime-local"
+                    aria-label="예약 게시 시각"
+                    value={scheduledPublishAt}
+                    onChange={(event) => setScheduledPublishAt(event.target.value)}
+                    className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                  />
+                  <input
+                    aria-label="예약 게시 timezone"
+                    value={scheduleTimezone}
+                    onChange={(event) => setScheduleTimezone(event.target.value)}
+                    placeholder="timezone"
+                    className="rounded border border-slate-700 bg-slate-950 px-2 py-1 text-sm text-slate-100"
+                  />
+                  <Button
+                    onClick={() => void schedulePublish()}
+                    disabled={schedulingPublish || processingSchedules}
+                    className="bg-emerald-500 text-slate-900 hover:bg-emerald-400"
+                  >
+                    {schedulingPublish ? "처리 중..." : "예약 게시 등록"}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    onClick={() => void processDueSchedules()}
+                    disabled={processingSchedules || schedulingPublish}
+                  >
+                    {processingSchedules ? "처리 중..." : "예약 게시 처리 실행"}
+                  </Button>
+                </div>
+
+                {publishSchedules.length === 0 ? (
+                  <p className="text-xs text-slate-400">등록된 예약 게시가 없습니다.</p>
+                ) : (
+                  <div className="space-y-2 rounded border border-slate-700 bg-slate-950 p-2 text-xs text-slate-300">
+                    {publishSchedules.map((schedule) => (
+                      <div
+                        key={schedule.scheduleId}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-700 px-2 py-1"
+                      >
+                        <div>
+                          <p>
+                            {schedule.scheduleId} · draft v{schedule.draftVersion} · {schedule.status}
+                          </p>
+                          <p className="text-slate-400">
+                            publishAt: {schedule.publishAt} ({schedule.timezone})
+                          </p>
+                          {schedule.lastError ? (
+                            <p className="text-rose-300">error: {schedule.lastError}</p>
+                          ) : null}
+                        </div>
+                        <div className="flex gap-1">
+                          {(schedule.status === "scheduled" || schedule.status === "failed") ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void cancelScheduledPublish(schedule.scheduleId)}
+                              disabled={schedulingPublish || processingSchedules}
+                            >
+                              취소
+                            </Button>
+                          ) : null}
+                          {schedule.status === "failed" ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => void retryScheduledPublish(schedule.scheduleId)}
+                              disabled={schedulingPublish || processingSchedules}
+                            >
+                              재시도 요청
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : null}
 
             {loadingVersions ? <p className="text-slate-300">버전 로딩 중...</p> : null}
             {!loadingVersions && versions.length === 0 ? <p className="text-slate-300">버전 이력이 없습니다.</p> : null}

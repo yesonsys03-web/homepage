@@ -181,6 +181,45 @@ export interface AdminPageMigrationRestoreResponse {
   }
 }
 
+export interface AdminPagePublishScheduleItem {
+  scheduleId: string
+  pageId: string
+  draftVersion: number
+  publishAt: string
+  timezone: string
+  status: "scheduled" | "published" | "cancelled" | "failed"
+  reason: string
+  attemptCount: number
+  maxAttempts: number
+  lastError: string
+  nextRetryAt: string
+  createdBy: string
+  createdAt: string
+  updatedAt: string
+  cancelledAt: string
+  publishedVersion: number
+  publishedAt: string
+}
+
+export interface AdminPagePublishScheduleListResponse {
+  pageId: string
+  count: number
+  items: AdminPagePublishScheduleItem[]
+}
+
+export interface AdminPagePublishScheduleProcessResponse {
+  pageId: string
+  processed: number
+  published: number
+  failed: number
+  items: Array<{
+    scheduleId: string
+    status: "published" | "failed"
+    publishedVersion?: number
+    error?: string
+  }>
+}
+
 export interface AdminManagedUser {
   id: string
   email: string
@@ -1395,6 +1434,54 @@ export const api = {
       body: JSON.stringify({ backupKey, reason, dryRun }),
     })
     return res.json() as Promise<AdminPageMigrationRestoreResponse>
+  },
+
+  getAdminPagePublishSchedules: async (pageId: string, limit: number = 50) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/publish-schedules?${params.toString()}`)
+    return res.json() as Promise<AdminPagePublishScheduleListResponse>
+  },
+
+  createAdminPagePublishSchedule: async (
+    pageId: string,
+    publishAt: string,
+    reason: string,
+    timezone: string = "Asia/Seoul",
+    draftVersion?: number,
+  ) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/publish-schedules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ publishAt, reason, timezone, draftVersion }),
+    })
+    return res.json() as Promise<{ scheduled: boolean; schedule: AdminPagePublishScheduleItem }>
+  },
+
+  cancelAdminPagePublishSchedule: async (pageId: string, scheduleId: string, reason: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/publish-schedules/${scheduleId}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<{ cancelled: boolean; schedule: AdminPagePublishScheduleItem }>
+  },
+
+  retryAdminPagePublishSchedule: async (pageId: string, scheduleId: string, reason: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/publish-schedules/${scheduleId}/retry`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    })
+    return res.json() as Promise<{ retried: boolean; schedule: AdminPagePublishScheduleItem }>
+  },
+
+  processAdminPagePublishSchedules: async (pageId: string, limit: number = 20, reason?: string) => {
+    const res = await authFetch(`${API_BASE}/api/admin/pages/${pageId}/publish-schedules/process`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ limit, reason }),
+    })
+    return res.json() as Promise<AdminPagePublishScheduleProcessResponse>
   },
 
   rollbackAdminPage: async (pageId: string, targetVersion: number, reason: string, publishNow: boolean = false) => {

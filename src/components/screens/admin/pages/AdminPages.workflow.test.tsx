@@ -25,6 +25,11 @@ const mocks = vi.hoisted(() => {
     logAdminPagePerfEvent: vi.fn(),
     getAdminPageMigrationBackups: vi.fn(),
     restoreAdminPageMigration: vi.fn(),
+    getAdminPagePublishSchedules: vi.fn(),
+    createAdminPagePublishSchedule: vi.fn(),
+    cancelAdminPagePublishSchedule: vi.fn(),
+    retryAdminPagePublishSchedule: vi.fn(),
+    processAdminPagePublishSchedules: vi.fn(),
   }
 })
 
@@ -41,6 +46,11 @@ vi.mock("@/lib/api", () => ({
     logAdminPagePerfEvent: mocks.logAdminPagePerfEvent,
     getAdminPageMigrationBackups: mocks.getAdminPageMigrationBackups,
     restoreAdminPageMigration: mocks.restoreAdminPageMigration,
+    getAdminPagePublishSchedules: mocks.getAdminPagePublishSchedules,
+    createAdminPagePublishSchedule: mocks.createAdminPagePublishSchedule,
+    cancelAdminPagePublishSchedule: mocks.cancelAdminPagePublishSchedule,
+    retryAdminPagePublishSchedule: mocks.retryAdminPagePublishSchedule,
+    processAdminPagePublishSchedules: mocks.processAdminPagePublishSchedules,
   },
 }))
 
@@ -187,6 +197,41 @@ describe("AdminPages workflow regression", () => {
         warningCount: 0,
       },
     })
+    mocks.getAdminPagePublishSchedules.mockResolvedValue({
+      pageId: "about_page",
+      count: 1,
+      items: [
+        {
+          scheduleId: "ps_1",
+          pageId: "about_page",
+          draftVersion: 2,
+          publishAt: "2026-03-10T10:00:00",
+          timezone: "Asia/Seoul",
+          status: "scheduled",
+          reason: "campaign",
+          attemptCount: 0,
+          maxAttempts: 3,
+          lastError: "",
+          nextRetryAt: "",
+          createdBy: "admin-1",
+          createdAt: "2026-03-05T00:00:00Z",
+          updatedAt: "2026-03-05T00:00:00Z",
+          cancelledAt: "",
+          publishedVersion: 0,
+          publishedAt: "",
+        },
+      ],
+    })
+    mocks.createAdminPagePublishSchedule.mockResolvedValue({ scheduled: true, schedule: {} })
+    mocks.cancelAdminPagePublishSchedule.mockResolvedValue({ cancelled: true, schedule: {} })
+    mocks.retryAdminPagePublishSchedule.mockResolvedValue({ retried: true, schedule: {} })
+    mocks.processAdminPagePublishSchedules.mockResolvedValue({
+      pageId: "about_page",
+      processed: 1,
+      published: 1,
+      failed: 0,
+      items: [{ scheduleId: "ps_1", status: "published", publishedVersion: 3 }],
+    })
   })
 
   it("shows compare diff result in versions tab", async () => {
@@ -275,6 +320,25 @@ describe("AdminPages workflow regression", () => {
     await screen.findByText("capturedAt: 2026-03-04T11:00:00Z")
     expect(screen.getByText("reason: dry run")).toBeInTheDocument()
     expect(screen.getByText("type: dry-run backup")).toBeInTheDocument()
+  })
+
+  it("creates scheduled publish from versions tab", async () => {
+    render(<AdminPages />)
+
+    const versionTabButtons = await screen.findAllByRole("button", { name: "버전" })
+    fireEvent.click(versionTabButtons[0])
+    await screen.findByText("예약 게시")
+
+    const reasonInputs = screen.getAllByPlaceholderText("수정 사유 (수동 저장/게시/복원 시 필수)")
+    fireEvent.change(reasonInputs[reasonInputs.length - 1], { target: { value: "schedule publish" } })
+
+    fireEvent.change(screen.getByLabelText("예약 게시 시각"), { target: { value: "2026-03-10T10:00" } })
+
+    fireEvent.click(screen.getByRole("button", { name: "예약 게시 등록" }))
+
+    await waitFor(() => {
+      expect(mocks.createAdminPagePublishSchedule).toHaveBeenCalled()
+    })
   })
 
   it("allows editing feature_list block in Hero tab", async () => {

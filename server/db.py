@@ -456,6 +456,41 @@ def ensure_page_documents_tables(cur):
         )
         """
     )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS page_publish_schedules (
+            schedule_id VARCHAR(64) PRIMARY KEY,
+            page_id VARCHAR(100) NOT NULL,
+            draft_version INTEGER NOT NULL,
+            publish_at TIMESTAMP NOT NULL,
+            timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Seoul',
+            status VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+            reason TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            last_error TEXT,
+            next_retry_at TIMESTAMP,
+            created_by UUID REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            cancelled_at TIMESTAMP,
+            published_version INTEGER,
+            published_at TIMESTAMP
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_page_publish_schedules_page_status
+        ON page_publish_schedules (page_id, status, publish_at)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_page_publish_schedules_due
+        ON page_publish_schedules (status, next_retry_at, publish_at)
+        """
+    )
 
 
 def get_projects(
@@ -1957,6 +1992,205 @@ def get_page_document_version(page_id: str, version: int):
                 (page_id, version),
             )
             return cur.fetchone()
+
+
+def create_page_publish_schedule(
+    schedule_id: str,
+    page_id: str,
+    draft_version: int,
+    publish_at: str,
+    timezone: str,
+    actor_id: str,
+    reason: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                INSERT INTO page_publish_schedules (
+                    schedule_id,
+                    page_id,
+                    draft_version,
+                    publish_at,
+                    timezone,
+                    status,
+                    reason,
+                    created_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, 'scheduled', %s, %s, NOW(), NOW())
+                RETURNING *
+                """,
+                (
+                    schedule_id,
+                    page_id,
+                    draft_version,
+                    publish_at,
+                    timezone,
+                    reason,
+                    actor_id,
+                ),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def list_page_publish_schedules(page_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT *
+                FROM page_publish_schedules
+                WHERE page_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (page_id, limit),
+            )
+            return cur.fetchall()
+
+
+def cancel_page_publish_schedule(
+    page_id: str,
+    schedule_id: str,
+    actor_id: str,
+    reason: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET status = 'cancelled',
+                    cancelled_at = NOW(),
+                    updated_at = NOW(),
+                    last_error = %s
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                  AND status IN ('scheduled', 'failed')
+                RETURNING *
+                """,
+                (f"cancelled_by={actor_id}; reason={reason}", page_id, schedule_id),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def retry_page_publish_schedule(
+    page_id: str,
+    schedule_id: str,
+    actor_id: str,
+    reason: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET status = 'scheduled',
+                    next_retry_at = NOW(),
+                    updated_at = NOW(),
+                    last_error = %s
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                  AND status = 'failed'
+                RETURNING *
+                """,
+                (
+                    f"retry_requested_by={actor_id}; reason={reason}",
+                    page_id,
+                    schedule_id,
+                ),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def list_due_page_publish_schedules(page_id: str, limit: int = 20):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT *
+                FROM page_publish_schedules
+                WHERE page_id = %s
+                  AND status IN ('scheduled', 'failed')
+                  AND attempt_count < max_attempts
+                  AND COALESCE(next_retry_at, publish_at) <= NOW()
+                ORDER BY COALESCE(next_retry_at, publish_at) ASC, created_at ASC
+                LIMIT %s
+                """,
+                (page_id, limit),
+            )
+            return cur.fetchall()
+
+
+def mark_page_publish_schedule_published(
+    page_id: str,
+    schedule_id: str,
+    published_version: int,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET status = 'published',
+                    published_version = %s,
+                    published_at = NOW(),
+                    updated_at = NOW(),
+                    next_retry_at = NULL,
+                    last_error = NULL
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                RETURNING *
+                """,
+                (published_version, page_id, schedule_id),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def mark_page_publish_schedule_failed(
+    page_id: str,
+    schedule_id: str,
+    error_message: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET attempt_count = attempt_count + 1,
+                    status = 'failed',
+                    updated_at = NOW(),
+                    last_error = %s,
+                    next_retry_at = CASE
+                        WHEN (attempt_count + 1) >= max_attempts THEN NULL
+                        ELSE NOW() + INTERVAL '5 minutes'
+                    END
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                RETURNING *
+                """,
+                (error_message, page_id, schedule_id),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
 
 
 def rollback_page_document(
