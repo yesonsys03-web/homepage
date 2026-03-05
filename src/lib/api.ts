@@ -112,10 +112,18 @@ export interface AdminPagePerfMetric {
   within_slo: boolean
 }
 
+export type AdminPagePerfVariant = "baseline" | "enhanced"
+
+export interface AdminPagePerfVariantSnapshot {
+  sample_count: number
+  metrics: Record<AdminPagePerfScenario, AdminPagePerfMetric>
+}
+
 export interface AdminPagePerfSnapshot {
   window_size: number
   sample_count: number
   metrics: Record<AdminPagePerfScenario, AdminPagePerfMetric>
+  variants: Record<AdminPagePerfVariant, AdminPagePerfVariantSnapshot>
 }
 
 export interface AdminPageMigrationPreviewResponse {

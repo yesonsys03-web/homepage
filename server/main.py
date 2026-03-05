@@ -164,7 +164,7 @@ _project_perf_samples: deque[tuple[float, float, int]] = deque(
     maxlen=PROJECT_PERF_WINDOW_SIZE
 )
 _project_perf_lock = Lock()
-_page_editor_perf_samples: deque[tuple[str, float]] = deque(
+_page_editor_perf_samples: deque[tuple[str, float, str]] = deque(
     maxlen=PAGE_EDITOR_PERF_WINDOW_SIZE
 )
 _page_editor_perf_lock = Lock()
@@ -272,9 +272,35 @@ PAGE_EDITOR_PERF_SLO_P75_MS: dict[str, float] = {
 }
 
 
-def _record_page_editor_perf(scenario: str, duration_ms: float) -> None:
+def _record_page_editor_perf(
+    scenario: str,
+    duration_ms: float,
+    source: Optional[str] = None,
+) -> None:
     with _page_editor_perf_lock:
-        _page_editor_perf_samples.append((scenario, duration_ms))
+        _page_editor_perf_samples.append((scenario, duration_ms, str(source or "")))
+
+
+def _parse_perf_source_tags(source: str) -> dict[str, str]:
+    tags: dict[str, str] = {}
+    for segment in source.split(";"):
+        item = segment.strip()
+        if not item or "=" not in item:
+            continue
+        key, value = item.split("=", 1)
+        tag_key = key.strip()
+        tag_value = value.strip()
+        if tag_key and tag_value:
+            tags[tag_key] = tag_value
+    return tags
+
+
+def _resolve_editor_ui_variant(source: str) -> str:
+    tags = _parse_perf_source_tags(source)
+    variant = tags.get("ui_variant", "").strip().lower()
+    if variant in {"enhanced", "baseline"}:
+        return variant
+    return "baseline"
 
 
 def _page_editor_perf_snapshot() -> dict[str, object]:
@@ -295,6 +321,34 @@ def _page_editor_perf_snapshot() -> dict[str, object]:
                 }
                 for scenario in sorted(PAGE_EDITOR_PERF_SCENARIOS)
             },
+            "variants": {
+                "baseline": {
+                    "sample_count": 0,
+                    "metrics": {
+                        scenario: {
+                            "sample_count": 0,
+                            "p75_ms": 0.0,
+                            "p95_ms": 0.0,
+                            "slo_p75_ms": PAGE_EDITOR_PERF_SLO_P75_MS[scenario],
+                            "within_slo": True,
+                        }
+                        for scenario in sorted(PAGE_EDITOR_PERF_SCENARIOS)
+                    },
+                },
+                "enhanced": {
+                    "sample_count": 0,
+                    "metrics": {
+                        scenario: {
+                            "sample_count": 0,
+                            "p75_ms": 0.0,
+                            "p95_ms": 0.0,
+                            "slo_p75_ms": PAGE_EDITOR_PERF_SLO_P75_MS[scenario],
+                            "within_slo": True,
+                        }
+                        for scenario in sorted(PAGE_EDITOR_PERF_SCENARIOS)
+                    },
+                },
+            },
         }
 
     metrics: dict[str, dict[str, object]] = {}
@@ -311,10 +365,37 @@ def _page_editor_perf_snapshot() -> dict[str, object]:
             "within_slo": p75_ms <= slo_p75_ms,
         }
 
+    variants: dict[str, dict[str, object]] = {
+        "baseline": {"sample_count": 0, "metrics": {}},
+        "enhanced": {"sample_count": 0, "metrics": {}},
+    }
+
+    for variant in ("baseline", "enhanced"):
+        variant_samples = [
+            row for row in samples if _resolve_editor_ui_variant(row[2]) == variant
+        ]
+        variants[variant]["sample_count"] = len(variant_samples)
+
+        variant_metric_map: dict[str, dict[str, object]] = {}
+        for scenario in sorted(PAGE_EDITOR_PERF_SCENARIOS):
+            durations = [row[1] for row in variant_samples if row[0] == scenario]
+            p75_ms = round(_percentile(durations, 0.75), 2)
+            p95_ms = round(_percentile(durations, 0.95), 2)
+            slo_p75_ms = PAGE_EDITOR_PERF_SLO_P75_MS[scenario]
+            variant_metric_map[scenario] = {
+                "sample_count": len(durations),
+                "p75_ms": p75_ms,
+                "p95_ms": p95_ms,
+                "slo_p75_ms": slo_p75_ms,
+                "within_slo": p75_ms <= slo_p75_ms,
+            }
+        variants[variant]["metrics"] = variant_metric_map
+
     return {
         "window_size": PAGE_EDITOR_PERF_WINDOW_SIZE,
         "sample_count": len(samples),
         "metrics": metrics,
+        "variants": variants,
     }
 
 
@@ -2334,7 +2415,11 @@ def create_page_editor_perf_event(
     if scenario not in PAGE_EDITOR_PERF_SCENARIOS:
         raise HTTPException(status_code=400, detail="지원하지 않는 성능 시나리오입니다")
 
-    _record_page_editor_perf(scenario=scenario, duration_ms=duration_ms)
+    _record_page_editor_perf(
+        scenario=scenario,
+        duration_ms=duration_ms,
+        source=payload.source,
+    )
     source = (payload.source or "ui").strip() or "ui"
     write_admin_action_log(
         admin_id=current_user["id"],

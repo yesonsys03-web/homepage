@@ -17,6 +17,7 @@ import { validatePageDocument } from "./pageEditorGuardrails"
 
 const PAGE_ID = "about_page"
 const LOCAL_DRAFT_KEY = `page-editor-local-draft:${PAGE_ID}`
+const EDITOR_UI_VARIANT_STORAGE_KEY = `page-editor-ui-variant:${PAGE_ID}`
 const DESKTOP_LAYOUT_MEDIA_QUERY = "(min-width: 1440px)"
 const NOTEBOOK_LAYOUT_MEDIA_QUERY = "(min-width: 1024px) and (max-width: 1439px)"
 const PROPERTY_PANEL_MIN_WIDTH = 320
@@ -27,9 +28,17 @@ type EditorTab = "overview" | "editor" | "preview" | "versions" | "settings"
 type PreviewDevice = "desktop" | "mobile"
 type EditorZoom = 80 | 100 | 120
 type EditorInteractionSurface = "panel" | "canvas"
+type EditorUiVariant = "baseline" | "enhanced"
 type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq"
 
 const SUPPORTED_BLOCK_TYPES: SupportedBlockType[] = ["hero", "rich_text", "image", "cta"]
+
+function normalizeEditorUiVariant(value: string | null | undefined): EditorUiVariant {
+  if (value === "baseline") {
+    return "baseline"
+  }
+  return "enhanced"
+}
 
 const BLOCK_LABEL: Record<SupportedBlockType, string> = {
   hero: "Hero",
@@ -147,6 +156,20 @@ export function AdminPages() {
   const [activeTab, setActiveTab] = useState<EditorTab>("overview")
   const [previewDevice, setPreviewDevice] = useState<PreviewDevice>("desktop")
   const [editorZoom, setEditorZoom] = useState<EditorZoom>(100)
+  const [editorUiVariant, setEditorUiVariant] = useState<EditorUiVariant>(() => {
+    if (typeof window === "undefined") {
+      return "enhanced"
+    }
+    const queryVariant = new URLSearchParams(window.location.search).get("editor_ui_variant")
+    if (queryVariant) {
+      return normalizeEditorUiVariant(queryVariant)
+    }
+    try {
+      return normalizeEditorUiVariant(localStorage.getItem(EDITOR_UI_VARIANT_STORAGE_KEY))
+    } catch {
+      return "enhanced"
+    }
+  })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [autoSaving, setAutoSaving] = useState(false)
@@ -272,9 +295,16 @@ export function AdminPages() {
 
   const buildEditorMetricSource = useCallback(
     (label: string) =>
-      `${label};tab=editor;device=${getCurrentEditorDevice()};mode=${getCurrentEditorMode()};zoom=${editorZoom}`,
-    [editorZoom, getCurrentEditorDevice, getCurrentEditorMode],
+      `${label};tab=editor;device=${getCurrentEditorDevice()};mode=${getCurrentEditorMode()};zoom=${editorZoom};ui_variant=${editorUiVariant}`,
+    [editorUiVariant, editorZoom, getCurrentEditorDevice, getCurrentEditorMode],
   )
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EDITOR_UI_VARIANT_STORAGE_KEY, editorUiVariant)
+    } catch {
+    }
+  }, [editorUiVariant])
 
   const handleEditorCanvasScroll = useCallback(() => {
     const container = editorCanvasScrollContainerRef.current
@@ -1072,21 +1102,39 @@ export function AdminPages() {
             <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium text-slate-100">캔버스 미리보기</p>
-                <div className="flex items-center gap-1">
-                  {[80, 100, 120].map((zoom) => (
-                    <Button
-                      key={zoom}
-                      variant={editorZoom === zoom ? "default" : "outline"}
-                      size="sm"
-                      onClick={() => {
-                        markEditorCanvasScrollForRestore()
-                        markEditorInteraction("panel")
-                        setEditorZoom(zoom as EditorZoom)
-                      }}
-                    >
-                      {zoom}%
-                    </Button>
-                  ))}
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  <div className="flex items-center gap-1">
+                    <span className="px-1 text-[11px] text-slate-400">A/B</span>
+                    {(["baseline", "enhanced"] as const).map((variant) => (
+                      <Button
+                        key={variant}
+                        variant={editorUiVariant === variant ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => {
+                          markEditorInteraction("panel")
+                          setEditorUiVariant(variant)
+                        }}
+                      >
+                        {variant === "baseline" ? "A" : "B"}
+                      </Button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {[80, 100, 120].map((zoom) => (
+                      <Button
+                        key={zoom}
+                        variant={editorZoom === zoom ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => {
+                          markEditorCanvasScrollForRestore()
+                          markEditorInteraction("panel")
+                          setEditorZoom(zoom as EditorZoom)
+                        }}
+                      >
+                        {zoom}%
+                      </Button>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div
