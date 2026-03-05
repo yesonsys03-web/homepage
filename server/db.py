@@ -5,7 +5,7 @@ import hashlib
 from psycopg2.extras import Json, RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 from contextlib import contextmanager
-from typing import Mapping, Optional
+from typing import Mapping, Optional, cast
 from dotenv import load_dotenv
 from threading import Lock
 
@@ -1939,7 +1939,7 @@ def publish_page_document(
                 (
                     page_id,
                     published_version,
-                    source["document_json"],
+                    Json(cast(Mapping[str, object], source["document_json"])),
                     reason,
                     actor_id,
                 ),
@@ -2240,7 +2240,7 @@ def rollback_page_document(
                 (
                     page_id,
                     next_version,
-                    source["document_json"],
+                    Json(cast(Mapping[str, object], source["document_json"])),
                     reason,
                     actor_id,
                 ),
@@ -2258,7 +2258,7 @@ def rollback_page_document(
                     (
                         page_id,
                         publish_version,
-                        source["document_json"],
+                        Json(cast(Mapping[str, object], source["document_json"])),
                         reason,
                         actor_id,
                     ),
