@@ -1625,10 +1625,7 @@ curl -X POST http://localhost:8000/api/auth/login \
 
 ### 2) Inputs
 - 참고 문서:
-  - `docs/page_edit_spec_c3_version_rollback.md`
-  - `docs/page_edit_spec_d1_test_strategy.md`
-  - `docs/page_edit_spec_d2_audit_observability.md`
-  - `docs/page_edit_sprint3_index.md`
+  - `docs/page_edit.md`
 - 사용자 피드백/이슈:
   - "한글로 설명"
   - "계속 진행"
@@ -1680,14 +1677,12 @@ curl -X POST http://localhost:8000/api/auth/login \
 ## Session 2026-03-04-02
 
 ### 1) Goal
-- `page_edit_spec` 기준 미착수 영역 중 D-3(성능 기준선)를 실제 계측 코드로 시작한다.
+- `page_edit` 통합 문서 기준 미착수 영역 중 D-3(성능 기준선)를 실제 계측 코드로 시작한다.
 - 문서상의 기준선을 코드로 수집/관측 가능 상태로 연결한다.
 
 ### 2) Inputs
 - 참고 문서:
-  - `docs/page_edit_spec_d3_performance_baseline.md`
-  - `docs/page_edit_sprint3_index.md`
-  - `docs/page_edit_tasks.md`
+  - `docs/page_edit.md`
 - 코드베이스 팩트:
   - Sprint 3의 C-3/D-1/D-2는 이미 반영 완료
   - D-3은 문서 초안만 있고 성능 이벤트 계측 API는 미구현
@@ -1731,13 +1726,12 @@ curl -X POST http://localhost:8000/api/auth/login \
 ## Session 2026-03-04-03
 
 ### 1) Goal
-- `page_edit_spec_e1_rollout_plan.md` 기준으로 단계적 롤아웃 제어를 코드에 반영한다.
+- `page_edit.md` 기준으로 단계적 롤아웃 제어를 코드에 반영한다.
 - 토글 off, QA/파일럿/전체 오픈 단계를 백엔드 접근 제어와 Admin 정책 UI에 연결한다.
 
 ### 2) Inputs
 - 참고 문서:
-  - `docs/page_edit_spec_e1_rollout_plan.md`
-  - `docs/page_edit_sprint3_index.md`
+  - `docs/page_edit.md`
 - 기존 코드:
   - `server/db.py` moderation_settings
   - `server/main.py` 정책 API + 페이지 에디터 API
@@ -1801,8 +1795,7 @@ curl -X POST http://localhost:8000/api/auth/login \
 
 ### 2) Inputs
 - 참고 문서:
-  - `docs/page_edit_spec_e2_migration_plan.md`
-  - `docs/page_edit_sprint3_index.md`
+  - `docs/page_edit.md`
 - 기존 코드:
   - `get_about_content_payload`, `build_page_document_from_about_content`, `collect_page_document_issues`
   - page document draft/version 저장 계층(`save_page_document_draft`)
@@ -1853,9 +1846,7 @@ curl -X POST http://localhost:8000/api/auth/login \
 
 ### 2) Inputs
 - 참고 문서:
-  - `docs/page_edit_spec_e3_operations_guide.md`
-  - `docs/page_edit_spec_e1_rollout_plan.md`
-  - `docs/page_edit_spec_e2_migration_plan.md`
+  - `docs/page_edit.md`
 - 기존 구현:
   - E-1 롤아웃 제어(`page_editor_enabled`, stage/pilot)
   - E-2 migration preview/execute + backup 생성
@@ -1878,7 +1869,7 @@ curl -X POST http://localhost:8000/api/auth/login \
   - `server/tests/test_admin_page_editor_api.py`
     - restore dry-run 엔드포인트 테스트 추가
 - 문서
-  - `docs/page_edit_spec_e3_operations_guide.md`
+  - `docs/page_edit.md`
     - 즉시 대응 runbook, 배포 전/후/주간 체크리스트, 60분 온보딩, FAQ, 운영 API 레퍼런스 보강
 
 ### 5) Validation
