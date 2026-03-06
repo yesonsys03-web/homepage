@@ -172,19 +172,21 @@ export function AboutScreen({ onNavigate }: ScreenProps) {
           </div>
         </section>
 
-        <section className="py-12">
-          <h2 className="font-display text-3xl font-bold text-[#F4F7FF] text-center mb-8">
-            ❓ FAQ
-          </h2>
-          <div className="max-w-2xl mx-auto space-y-4">
-            {content.faqs.map((faq) => (
-              <div key={faq.question} className="bg-[#161F42] p-6 rounded-xl border border-[#111936]">
-                <h3 className="font-display font-bold text-[#F4F7FF] mb-2">{faq.question}</h3>
-                <p className="text-[#B8C3E6]">{faq.answer}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+        {content.faqs.length > 0 ? (
+          <section className="py-12">
+            <h2 className="font-display text-3xl font-bold text-[#F4F7FF] text-center mb-8">
+              ❓ FAQ
+            </h2>
+            <div className="max-w-2xl mx-auto space-y-4">
+              {content.faqs.map((faq) => (
+                <div key={faq.question} className="bg-[#161F42] p-6 rounded-xl border border-[#111936]">
+                  <h3 className="font-display font-bold text-[#F4F7FF] mb-2">{faq.question}</h3>
+                  <p className="text-[#B8C3E6]">{faq.answer}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
         <section className="py-12 text-center">
           <h2 className="font-display text-3xl font-bold text-[#F4F7FF] mb-4">

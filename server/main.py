@@ -1384,6 +1384,7 @@ def extract_about_content_from_page_document(
     )
     team_content = cast(dict[str, object], team.get("content", {})) if team else {}
     faq_content = cast(dict[str, object], faq.get("content", {})) if faq else {}
+    faq_visible = bool(faq.get("visible", True)) if faq else True
 
     return {
         "hero_title": str(hero_content.get("headline", "")),
@@ -1392,7 +1393,9 @@ def extract_about_content_from_page_document(
         "contact_email": str(hero_content.get("contactEmail", "")),
         "values": cast(list[dict[str, object]], values_content.get("items", [])),
         "team_members": cast(list[dict[str, object]], team_content.get("items", [])),
-        "faqs": cast(list[dict[str, object]], faq_content.get("items", [])),
+        "faqs": cast(list[dict[str, object]], faq_content.get("items", []))
+        if faq_visible
+        else [],
     }
 
 
@@ -3695,7 +3698,7 @@ def create_admin_page_publish_schedule(
         )
 
     publish_at = parse_schedule_publish_at(payload.publishAt)
-    now_utc = datetime.utcnow()
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     if publish_at <= now_utc:
         raise HTTPException(
             status_code=400, detail="publishAt은 현재 시각 이후여야 합니다"

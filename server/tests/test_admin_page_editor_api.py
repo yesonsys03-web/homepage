@@ -233,6 +233,43 @@ def test_publish_admin_page_success(monkeypatch: Any) -> None:
     main.app.dependency_overrides.clear()
 
 
+def test_extract_about_content_omits_hidden_faq_block() -> None:
+    document = {
+        "blocks": [
+            {
+                "id": "hero",
+                "type": "hero",
+                "order": 0,
+                "visible": True,
+                "content": {
+                    "headline": "About",
+                    "highlight": "Hi",
+                    "description": "Desc",
+                    "contactEmail": "hello@example.com",
+                },
+            },
+            {
+                "id": "faq",
+                "type": "faq",
+                "order": 3,
+                "visible": False,
+                "content": {
+                    "items": [
+                        {
+                            "question": "Should be hidden?",
+                            "answer": "Yes",
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    extracted = main.extract_about_content_from_page_document(document)
+
+    assert extracted["faqs"] == []
+
+
 def test_create_admin_page_publish_schedule_success(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
