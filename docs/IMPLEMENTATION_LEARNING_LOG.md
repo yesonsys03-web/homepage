@@ -2429,3 +2429,88 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. 다음 운영일에 18.4 절차를 그대로 수행해 18.1 행을 갱신한다.
 2. `pending` 상태가 해소되는 시점에 18.2 결정을 확정하고 승인자를 기록한다.
+
+## Session 2026-03-06-04
+
+### 1) Goal
+- About 페이지 블록 숨김 동작을 FAQ뿐 아니라 Hero/Values/Team까지 일관되게 반영한다.
+
+### 2) Inputs
+- 사용자 요청: "나머지 개선 작업 있으면 순서대로 진행"
+- 선행 이슈: FAQ 숨김 퍼블리시 불일치 수정 완료
+- 제약 조건: 기존 AboutContent API 계약을 유지하면서 표시/비표시 결과만 정확히 맞출 것
+
+### 3) Design Decisions
+- 서버 변환(`extract_about_content_from_page_document`)에서 블록별 `visible`을 직접 반영한다.
+- 프론트 렌더는 비어 있는 섹션을 출력하지 않도록 조건부 렌더로 정리한다.
+
+### 4) Implementation Notes
+- `server/main.py`
+  - `hero_visible`, `values_visible`, `team_visible`, `faq_visible`를 계산
+  - 숨김 블록은 AboutContent로 변환 시 빈 값으로 매핑(문자열 빈값/배열 빈값)
+- `src/components/screens/AboutScreen.tsx`
+  - Hero/Values/Team/Contact를 데이터 존재 조건으로 렌더
+  - FAQ는 기존 조건부 렌더를 유지
+- `server/tests/test_admin_page_editor_api.py`
+  - `test_extract_about_content_omits_all_hidden_blocks` 추가
+
+### 5) Validation
+- LSP: `src/components/screens/AboutScreen.tsx` diagnostics 0
+- 서버 검증
+  - `uv run python -m py_compile main.py` 통과
+  - `uv run pytest tests/test_admin_page_editor_api.py::test_extract_about_content_omits_hidden_faq_block tests/test_admin_page_editor_api.py::test_extract_about_content_omits_all_hidden_blocks` 통과(2 passed)
+- 프론트 검증
+  - `pnpm build` 통과
+
+### 6) Outcome
+#### 잘된 점
+- About 편집기의 숨김 상태가 퍼블리시 후 실제 사용자 화면까지 일관되게 이어진다.
+
+#### 아쉬운 점
+- 섹션별 explicit visibility 메타를 AboutContent API에 별도 노출하지는 않았다.
+
+#### 다음 액션
+1. 필요 시 AboutContent 응답에 섹션 visibility 메타를 추가해 클라이언트 판단을 더 명시화한다.
+2. AboutScreen 렌더 회귀 테스트를 별도 프론트 테스트 파일로 보강한다.
+
+## Session 2026-03-06-05
+
+### 1) Goal
+- About 숨김 퍼블리시 동작을 운영 관점에서 재검증하고, 점검 로그를 문서에 남긴다.
+
+### 2) Inputs
+- 사용자 요청: "진행해"
+- 선행 변경: Hero/Values/Team/FAQ 숨김 매핑 반영 완료
+- 제약 조건: 허위 운영 결과를 기록하지 않고 자동화/수동 증빙을 분리 기록
+
+### 3) Design Decisions
+- 프론트 회귀 테스트를 추가해 숨김 payload 렌더 가드를 코드 레벨에서 고정한다.
+- 운영 문서(`docs/page_edit.md`)에 자동화 pass와 수동 점검 pending을 함께 기록한다.
+
+### 4) Implementation Notes
+- `src/components/screens/AboutScreen.visibility.test.tsx` 신규 추가
+  - 숨김 payload에서 Hero/Values/Team/FAQ/Contact 미노출 검증
+  - 표시 payload에서 섹션 정상 노출 + FAQ JSON-LD 생성 검증
+- `docs/page_edit.md`
+  - 18.6 `숨김 퍼블리시 점검 로그` 섹션 추가
+  - local/dev 자동화 pass 3건 + staging/prod-like 수동 점검 pending 1건 기록
+
+### 5) Validation
+- 프론트 테스트
+  - `pnpm test -- src/components/screens/AboutScreen.visibility.test.tsx` 통과 (신규 2 tests)
+- 서버 테스트
+  - `uv run pytest tests/test_admin_page_editor_api.py::test_extract_about_content_omits_hidden_faq_block tests/test_admin_page_editor_api.py::test_extract_about_content_omits_all_hidden_blocks` 통과
+- 빌드/컴파일
+  - `pnpm build` 통과
+  - `uv run python -m py_compile main.py` 통과
+
+### 6) Outcome
+#### 잘된 점
+- About 숨김 퍼블리시 동작이 서버/프론트/운영 문서까지 동일 기준으로 맞춰졌다.
+
+#### 아쉬운 점
+- staging/prod-like 실브라우저 수동 점검은 아직 수행 전이다.
+
+#### 다음 액션
+1. 배포 직전 staging에서 숨김 퍼블리시 수동 점검 1회 수행 및 캡처 링크 기록
+2. 결과에 따라 18.2 게이트 `pending` 항목을 갱신
