@@ -814,6 +814,97 @@ U1~U4 범위가 완료되어, 이후 항목은 확장 과제로 분리해 순차
 - `pnpm test -- src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
 - `pnpm test -- src/components/screens/admin/pages/pageEditorGuardrails.test.ts`
 
+### 18.1 U3-02 실행 기록 시트 (A/B 비교)
+
+아래 표를 파일럿 기간 동안 일자별로 누적한다. 행 단위 누적이 최소 14일이 되기 전까지는 U3-02를 완료로 판정하지 않는다.
+
+| date | cohort | participant_count | task_count | improved_kpi_count | worst_regression_pct | decision | note |
+| --- | --- | ---: | ---: | ---: | ---: | --- | --- |
+| 2026-03-06 | take2 pilot | 0 | 0 | 0 | 0 | collecting | 기술 게이트 선행 완료(테스트/빌드 통과), 운영 데이터 수집 전 |
+
+`판정 규칙`
+- `participant_count >= 3`
+- `task_count >= 30`
+- 누적 기간 `>= 14일`
+- `improved_kpi_count >= 3`
+- `worst_regression_pct <= 10`
+
+### 18.2 U4-01 파일럿 게이트 결정 시트
+
+Go/Hold/No-Go 판단은 아래 단일 표만 사용한다. 중복 문서에 분산 기록하지 않는다.
+
+| check_item | status | evidence |
+| --- | --- | --- |
+| KPI 4종 계측 가능 (`Take2-U3-01`) | pass | `src/components/screens/admin/pages/AdminPages.tsx` 계측 이벤트 연결 완료 |
+| 접근성 회귀 차단 이슈 0건 (`Take2-U3-03`) | pass | 레일 키보드 탐색(`Up/Down`,`Enter/Space`) + `Esc` 닫기 구현 및 테스트 검증 |
+| 회귀 테스트 `AdminPages.workflow` | pass | `pnpm test -- src/components/screens/admin/pages/AdminPages.workflow.test.tsx src/components/screens/admin/pages/pageEditorGuardrails.test.ts` (28 passed) |
+| 프로덕션 빌드 | pass | `pnpm build` 통과 |
+| 파일럿 조건(참여자 3명+, 14일+, 30태스크+) | pending | 운영 데이터 수집 전 |
+| Go 기준(4 KPI 중 3개 개선 + 악화 10% 이내) | pending | U3-02 수집 완료 후 판정 |
+
+`결정 규칙`
+- 위 표에서 `pending`이 하나라도 남아 있으면 `open` 전환 금지
+- `pending`이 0이고 `fail`이 0이면 `Go` 검토 가능
+- `fail` 1개 이상이면 즉시 `No-Go` 또는 `Hold`
+
+### 18.3 U4-02 온보딩 완료 체크 시트
+
+신규 운영자 온보딩은 아래 체크 시트로 기록한다.
+
+| onboarding_date | operator | completed_60m | notes | approver |
+| --- | --- | --- | --- | --- |
+| 2026-03-06 | TBD | no | 문서 갱신 완료, 실제 운영자 세션 미실행 | TBD |
+
+`완료 조건`
+- 60분 시나리오(14.2) 전 단계 수행
+- `completed_60m=yes` 기록 1건 이상
+- 승인자(`approver`) 실명 기록
+
+### 18.4 파일럿 일일 실행 절차 (운영 입력 순서)
+
+아래 순서를 매일 동일하게 수행하고, 18.1/18.2 표를 즉시 갱신한다.
+
+1. 회귀/빌드 상태 확인
+   - `pnpm test -- src/components/screens/admin/pages/AdminPages.workflow.test.tsx src/components/screens/admin/pages/pageEditorGuardrails.test.ts`
+   - `pnpm build`
+2. KPI 수집
+   - `GET /api/admin/perf/page-editor`로 당일 p75 값 수집
+   - 전일 대비 변화율(%) 계산 후 `improved_kpi_count`, `worst_regression_pct` 산출
+3. 운영 입력
+   - 18.1 표에 `date/cohort/participant_count/task_count/improved_kpi_count/worst_regression_pct/decision/note` 입력
+4. 게이트 판정
+   - 18.2의 `pending` 항목 재평가
+   - `fail` 발생 시 즉시 `Hold` 또는 `No-Go`로 전환
+5. 온보딩 반영
+   - 신규 운영자 세션이 있으면 18.3에 `completed_60m`/`approver` 기록
+
+### 18.5 Go/Hold/No-Go 판정 계산식 (운영 고정)
+
+운영자가 판단을 다르게 해석하지 않도록 아래 계산식을 고정한다.
+
+`용어`
+- `improved_kpi_count`: 기준 KPI 4개 중 baseline 대비 개선된 항목 수
+- `worst_regression_pct`: baseline 대비 악화된 항목 중 최대 악화율(%)
+
+`규칙`
+- `Go`:
+  - `improved_kpi_count >= 3`
+  - `worst_regression_pct <= 10`
+  - 회귀 테스트/빌드 `pass`
+  - 파일럿 조건(참여자 3+, 14일+, 30태스크+) 충족
+- `Hold`:
+  - `Go` 미충족이지만 롤백 트리거 미충족
+  - 48시간 내 원인/재평가 계획을 `note`에 기록
+- `No-Go`:
+  - 롤백 트리거 1개 이상 충족
+  - 즉시 `page_editor_enabled=false` 전환 검토
+
+`롤백 트리거`
+- `edit_completion_time` p75 15% 이상 악화가 2회 연속
+- `draft_save_roundtrip` p75 15% 이상 악화가 2회 연속
+- `U3-03` 회귀 체크리스트 `Fail >= 1`
+- 운영 차단 이슈(P0/P1) 발생
+
 <a id="sec-19"></a>
 ## 19) Take2 Jira 템플릿 바로가기
 

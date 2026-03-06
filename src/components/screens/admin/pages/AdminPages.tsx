@@ -25,13 +25,30 @@ const NOTEBOOK_LAYOUT_MEDIA_QUERY = "(min-width: 1024px) and (max-width: 1439px)
 const PROPERTY_PANEL_MIN_WIDTH = 320
 const PROPERTY_PANEL_MAX_WIDTH = 440
 const PROPERTY_PANEL_DEFAULT_WIDTH = 360
+const SIDE_RAIL_STORAGE_KEY = "page_editor_rail_width"
+const SIDE_RAIL_MIN_WIDTH = 160
+const SIDE_RAIL_MAX_WIDTH = 220
+const SIDE_RAIL_DEFAULT_WIDTH = 176
+const SIDE_RAIL_COLLAPSED_WIDTH = 48
 
 type EditorTab = "overview" | "editor" | "preview" | "versions" | "settings"
 type PreviewDevice = "desktop" | "tablet" | "mobile"
 type EditorZoom = 80 | 100 | 120
 type EditorInteractionSurface = "panel" | "canvas"
 type EditorUiVariant = "baseline" | "enhanced"
+type EditorPanel = "blocks" | "canvas" | "properties"
 type SupportedBlockType = "hero" | "rich_text" | "image" | "cta" | "feature_list" | "faq" | "gallery"
+
+const SIDE_RAIL_ITEMS: Array<{
+  panel: EditorPanel
+  label: string
+  shortLabel: string
+  ariaLabel: string
+}> = [
+  { panel: "blocks", label: "블록", shortLabel: "B", ariaLabel: "블록 목록" },
+  { panel: "canvas", label: "캔버스", shortLabel: "C", ariaLabel: "캔버스 미리보기" },
+  { panel: "properties", label: "속성", shortLabel: "P", ariaLabel: "속성 패널" },
+]
 
 type PageConflictDetail = {
   current_version?: number
@@ -260,16 +277,43 @@ export function AdminPages() {
     style: false,
     advanced: false,
   })
+  const [activeEditorPanel, setActiveEditorPanel] = useState<EditorPanel>("blocks")
+  const [autoSwitchToProperties, setAutoSwitchToProperties] = useState(true)
   const [isDesktopWide, setIsDesktopWide] = useState(false)
   const [isNotebookWide, setIsNotebookWide] = useState(false)
+  const [isMobileItemsOpen, setIsMobileItemsOpen] = useState(false)
+  const [isSideRailCollapsed, setIsSideRailCollapsed] = useState(false)
+  const [focusedSideRailIndex, setFocusedSideRailIndex] = useState(0)
+  const [sideRailWidth, setSideRailWidth] = useState(() => {
+    if (typeof window === "undefined") {
+      return SIDE_RAIL_DEFAULT_WIDTH
+    }
+    try {
+      const stored = Number(localStorage.getItem(SIDE_RAIL_STORAGE_KEY))
+      if (Number.isFinite(stored)) {
+        return Math.max(SIDE_RAIL_MIN_WIDTH, Math.min(SIDE_RAIL_MAX_WIDTH, stored))
+      }
+    } catch {
+    }
+    return SIDE_RAIL_DEFAULT_WIDTH
+  })
+  const [isResizingSideRail, setIsResizingSideRail] = useState(false)
   const [propertyPanelWidth, setPropertyPanelWidth] = useState(PROPERTY_PANEL_DEFAULT_WIDTH)
   const [isResizingPropertyPanel, setIsResizingPropertyPanel] = useState(false)
   const [isNotebookPropertyPanelOpen, setIsNotebookPropertyPanelOpen] = useState(false)
+  const [pendingEditorAction, setPendingEditorAction] = useState<
+    { kind: "select_block"; blockId: string }
+    | { kind: "switch_tab"; tab: EditorTab }
+    | null
+  >(null)
 
   const lastSavedSnapshotRef = useRef<string>("")
   const previewSwitchStartedRef = useRef<number | null>(null)
+  const panelSwitchStartedAtRef = useRef<number | null>(null)
   const resizeStartXRef = useRef<number | null>(null)
   const resizeStartWidthRef = useRef<number>(PROPERTY_PANEL_DEFAULT_WIDTH)
+  const sideRailResizeStartXRef = useRef<number | null>(null)
+  const sideRailResizeStartWidthRef = useRef<number>(SIDE_RAIL_DEFAULT_WIDTH)
   const editorCanvasScrollContainerRef = useRef<HTMLDivElement | null>(null)
   const editorCanvasScrollTopRef = useRef(0)
   const shouldRestoreEditorCanvasScrollRef = useRef(false)
@@ -278,6 +322,9 @@ export function AdminPages() {
   const lastEditorInteractionSurfaceRef = useRef<EditorInteractionSurface | null>(null)
   const editorCanvasScrollDistanceRef = useRef(0)
   const lastEditorCanvasScrollTopRef = useRef<number | null>(null)
+  const firstFieldInputStartedAtRef = useRef<number | null>(null)
+  const lastSavedDocumentRef = useRef<PageDocument | null>(null)
+  const sideRailItemButtonsRef = useRef<Array<HTMLButtonElement | null>>([])
 
   const selectedBlock = useMemo(
     () => blocks.find((block) => block.id === selectedBlockId) ?? null,
@@ -608,7 +655,9 @@ export function AdminPages() {
     setSelectedBlockId(normalizedBlocks[0]?.id ?? "")
 
     if (markAsSaved) {
-      lastSavedSnapshotRef.current = snapshotOf({ ...document, blocks: normalizedBlocks })
+      const savedDocument = cloneDocument({ ...document, blocks: normalizedBlocks })
+      lastSavedSnapshotRef.current = snapshotOf(savedDocument)
+      lastSavedDocumentRef.current = savedDocument
     }
   }
 
@@ -745,6 +794,7 @@ export function AdminPages() {
         version: nextVersion,
       }
       lastSavedSnapshotRef.current = snapshotOf(savedDocument)
+      lastSavedDocumentRef.current = cloneDocument(savedDocument)
       setConflictVersion(null)
       setConflictUpdatedBy(null)
       setConflictUpdatedAt(null)
@@ -829,6 +879,122 @@ export function AdminPages() {
     }
   }
 
+  const switchEditorPanel = useCallback((panel: EditorPanel, source: EditorInteractionSurface = "panel") => {
+    const previousPanel = activeEditorPanel
+    if (previousPanel === panel) {
+      return
+    }
+    panelSwitchStartedAtRef.current = performance.now()
+    markEditorInteraction(source)
+    setActiveEditorPanel(panel)
+    if (panel !== "canvas") {
+      markEditorCanvasScrollForRestore()
+    }
+    const frame = window.requestAnimationFrame(() => {
+      if (panelSwitchStartedAtRef.current === null) {
+        return
+      }
+      const durationMs = performance.now() - panelSwitchStartedAtRef.current
+      panelSwitchStartedAtRef.current = null
+      logPerfEvent(
+        "preview_switch",
+        durationMs,
+        buildEditorMetricSource(`panel_switch:${previousPanel}->${panel}`),
+      )
+    })
+    window.setTimeout(() => {
+      window.cancelAnimationFrame(frame)
+    }, 0)
+  }, [activeEditorPanel, buildEditorMetricSource, logPerfEvent, markEditorCanvasScrollForRestore, markEditorInteraction])
+
+  const requestTabSwitch = useCallback((nextTab: EditorTab) => {
+    if (nextTab === activeTab) {
+      return
+    }
+    if (activeTab === "editor" && isDirty) {
+      setPendingEditorAction({ kind: "switch_tab", tab: nextTab })
+      return
+    }
+    setActiveTab(nextTab)
+  }, [activeTab, isDirty])
+
+  const requestBlockSelect = useCallback((blockId: string, source: EditorInteractionSurface) => {
+    if (blockId === selectedBlockId) {
+      return
+    }
+    markEditorInteraction(source)
+    markEditorCanvasScrollForRestore()
+    if (isDirty) {
+      setPendingEditorAction({ kind: "select_block", blockId })
+      return
+    }
+    setSelectedBlockId(blockId)
+    firstFieldInputStartedAtRef.current = performance.now()
+    if (autoSwitchToProperties) {
+      setActiveEditorPanel("properties")
+    }
+  }, [autoSwitchToProperties, isDirty, markEditorCanvasScrollForRestore, markEditorInteraction, selectedBlockId])
+
+  useEffect(() => {
+    const activeIndex = SIDE_RAIL_ITEMS.findIndex((item) => item.panel === activeEditorPanel)
+    if (activeIndex >= 0) {
+      setFocusedSideRailIndex(activeIndex)
+    }
+  }, [activeEditorPanel])
+
+  const activateSideRailByIndex = useCallback((index: number) => {
+    const clamped = Math.max(0, Math.min(SIDE_RAIL_ITEMS.length - 1, index))
+    const target = SIDE_RAIL_ITEMS[clamped]
+    setFocusedSideRailIndex(clamped)
+    sideRailItemButtonsRef.current[clamped]?.focus()
+    switchEditorPanel(target.panel)
+  }, [switchEditorPanel])
+
+  const discardDirtyChangesAndContinue = useCallback(async () => {
+    const saved = lastSavedDocumentRef.current
+    if (saved) {
+      applyDocument(cloneDocument(saved), true)
+    } else {
+      await reloadDraft("discard_unsaved")
+    }
+
+    if (!pendingEditorAction) {
+      return
+    }
+    if (pendingEditorAction.kind === "select_block") {
+      setSelectedBlockId(pendingEditorAction.blockId)
+      firstFieldInputStartedAtRef.current = performance.now()
+      if (autoSwitchToProperties) {
+        setActiveEditorPanel("properties")
+      }
+    }
+    if (pendingEditorAction.kind === "switch_tab") {
+      setActiveTab(pendingEditorAction.tab)
+    }
+    setPendingEditorAction(null)
+  }, [autoSwitchToProperties, pendingEditorAction])
+
+  const saveDirtyChangesAndContinue = useCallback(async () => {
+    await saveInternal("auto")
+    if (blockingIssues.length > 0) {
+      return
+    }
+    if (!pendingEditorAction) {
+      return
+    }
+    if (pendingEditorAction.kind === "select_block") {
+      setSelectedBlockId(pendingEditorAction.blockId)
+      firstFieldInputStartedAtRef.current = performance.now()
+      if (autoSwitchToProperties) {
+        setActiveEditorPanel("properties")
+      }
+    }
+    if (pendingEditorAction.kind === "switch_tab") {
+      setActiveTab(pendingEditorAction.tab)
+    }
+    setPendingEditorAction(null)
+  }, [autoSwitchToProperties, blockingIssues.length, pendingEditorAction])
+
   useEffect(() => {
     if (loading || saving || autoSaving || publishing) return
     if (!isDirty) return
@@ -840,6 +1006,91 @@ export function AdminPages() {
 
     return () => window.clearTimeout(timer)
   }, [autoSaving, blockingIssues.length, isDirty, loading, publishing, saving, buildDocument])
+
+  useEffect(() => {
+    if (!isDesktopWide && !isNotebookWide) {
+      setIsMobileItemsOpen(false)
+      setIsSideRailCollapsed(false)
+    }
+  }, [isDesktopWide, isNotebookWide])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDE_RAIL_STORAGE_KEY, String(sideRailWidth))
+    } catch {
+    }
+  }, [sideRailWidth])
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) {
+        return
+      }
+      event.preventDefault()
+      event.returnValue = ""
+    }
+    window.addEventListener("beforeunload", handleBeforeUnload)
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload)
+    }
+  }, [isDirty])
+
+  useEffect(() => {
+    if (!isMobileItemsOpen) {
+      return
+    }
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") {
+        return
+      }
+      setIsMobileItemsOpen(false)
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => {
+      window.removeEventListener("keydown", onKeyDown)
+    }
+  }, [isMobileItemsOpen])
+
+  const startSideRailResize = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if ((!isDesktopWide && !isNotebookWide) || event.button !== 0 || isSideRailCollapsed) {
+      return
+    }
+    sideRailResizeStartXRef.current = event.clientX
+    sideRailResizeStartWidthRef.current = sideRailWidth
+    setIsResizingSideRail(true)
+    event.preventDefault()
+  }, [isDesktopWide, isNotebookWide, isSideRailCollapsed, sideRailWidth])
+
+  useEffect(() => {
+    if (!isResizingSideRail) {
+      return
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      if (sideRailResizeStartXRef.current === null) {
+        return
+      }
+      const deltaX = event.clientX - sideRailResizeStartXRef.current
+      const nextWidth = Math.max(
+        SIDE_RAIL_MIN_WIDTH,
+        Math.min(SIDE_RAIL_MAX_WIDTH, sideRailResizeStartWidthRef.current + deltaX),
+      )
+      setSideRailWidth(nextWidth)
+    }
+
+    const handleMouseUp = () => {
+      setIsResizingSideRail(false)
+      sideRailResizeStartXRef.current = null
+    }
+
+    window.addEventListener("mousemove", handleMouseMove)
+    window.addEventListener("mouseup", handleMouseUp)
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove)
+      window.removeEventListener("mouseup", handleMouseUp)
+    }
+  }, [isResizingSideRail])
 
   useEffect(() => {
     if (activeTab !== "preview") return
@@ -1175,6 +1426,14 @@ export function AdminPages() {
     if (!selectedBlock) return
     markEditorCanvasScrollForRestore()
     markEditorInteraction("panel")
+    if (firstFieldInputStartedAtRef.current !== null) {
+      logPerfEvent(
+        "edit_completion_time",
+        performance.now() - firstFieldInputStartedAtRef.current,
+        buildEditorMetricSource("first_field_input"),
+      )
+      firstFieldInputStartedAtRef.current = null
+    }
     setBlocks((prev) =>
       prev.map((block) =>
         block.id === selectedBlock.id
@@ -1279,11 +1538,11 @@ export function AdminPages() {
       ) : null}
 
       <div className="flex flex-wrap gap-2">
-        <Button variant={activeTab === "overview" ? "default" : "outline"} onClick={() => setActiveTab("overview")}>개요</Button>
-        <Button variant={activeTab === "editor" ? "default" : "outline"} onClick={() => setActiveTab("editor")}>Hero</Button>
-        <Button variant={activeTab === "preview" ? "default" : "outline"} onClick={() => setActiveTab("preview")}>미리보기</Button>
-        <Button variant={activeTab === "versions" ? "default" : "outline"} onClick={() => setActiveTab("versions")}>버전</Button>
-        <Button variant={activeTab === "settings" ? "default" : "outline"} onClick={() => setActiveTab("settings")}>About</Button>
+        <Button variant={activeTab === "overview" ? "default" : "outline"} onClick={() => requestTabSwitch("overview")}>개요</Button>
+        <Button variant={activeTab === "editor" ? "default" : "outline"} onClick={() => requestTabSwitch("editor")}>Hero</Button>
+        <Button variant={activeTab === "preview" ? "default" : "outline"} onClick={() => requestTabSwitch("preview")}>미리보기</Button>
+        <Button variant={activeTab === "versions" ? "default" : "outline"} onClick={() => requestTabSwitch("versions")}>버전</Button>
+        <Button variant={activeTab === "settings" ? "default" : "outline"} onClick={() => requestTabSwitch("settings")}>About</Button>
       </div>
 
       <div className="space-y-4 rounded-xl border border-slate-700 bg-slate-800 p-5">
@@ -1317,32 +1576,79 @@ export function AdminPages() {
 
         {activeTab === "editor" ? (
           <>
-            {isNotebookWide ? (
-              <div className="mb-2 flex justify-end">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    markEditorCanvasScrollForRestore()
-                    markEditorInteraction("panel")
-                    setIsNotebookPropertyPanelOpen(true)
+            <div className="mb-2 flex flex-wrap items-center gap-2">
+              {(isDesktopWide || isNotebookWide) ? (
+                <div
+                  className="relative flex items-center gap-1 rounded-lg border border-slate-700 bg-slate-900/70 p-1"
+                  style={{ width: isSideRailCollapsed ? SIDE_RAIL_COLLAPSED_WIDTH : sideRailWidth }}
+                  onKeyDown={(event) => {
+                    if (event.key === "ArrowDown") {
+                      event.preventDefault()
+                      activateSideRailByIndex(focusedSideRailIndex + 1)
+                      return
+                    }
+                    if (event.key === "ArrowUp") {
+                      event.preventDefault()
+                      activateSideRailByIndex(focusedSideRailIndex - 1)
+                      return
+                    }
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault()
+                      activateSideRailByIndex(focusedSideRailIndex)
+                    }
                   }}
                 >
-                  속성 패널 열기
-                </Button>
+                  <button
+                    type="button"
+                    className="rounded border border-slate-700 px-2 py-1 text-xs text-slate-200"
+                    aria-label={isSideRailCollapsed ? "레일 펼치기" : "레일 접기"}
+                    onClick={() => setIsSideRailCollapsed((prev) => !prev)}
+                  >
+                    {isSideRailCollapsed ? ">" : "<"}
+                  </button>
+                  <div className="flex flex-1 gap-1 overflow-hidden">
+                    {SIDE_RAIL_ITEMS.map((item, index) => (
+                      <button
+                        key={item.panel}
+                        ref={(node) => {
+                          sideRailItemButtonsRef.current[index] = node
+                        }}
+                        type="button"
+                        aria-label={item.ariaLabel}
+                        className={`rounded px-2 py-1 text-xs ${activeEditorPanel === item.panel ? "bg-emerald-500/20 text-emerald-200" : "text-slate-300"}`}
+                        onFocus={() => setFocusedSideRailIndex(index)}
+                        onClick={() => activateSideRailByIndex(index)}
+                      >
+                        {isSideRailCollapsed ? item.shortLabel : item.label}
+                      </button>
+                    ))}
+                  </div>
+                  {!isSideRailCollapsed ? (
+                    <button
+                      type="button"
+                      aria-label="레일 너비 조절"
+                      onMouseDown={startSideRailResize}
+                      className={`absolute -right-1 top-0 h-full w-1 cursor-col-resize rounded ${isResizingSideRail ? "bg-emerald-400/80" : "bg-slate-600/40"}`}
+                    />
+                  ) : null}
+                </div>
+              ) : (
+                <Button variant="outline" size="sm" onClick={() => setIsMobileItemsOpen((prev) => !prev)}>Items</Button>
+              )}
+              <label className="ml-auto flex items-center gap-1 text-xs text-slate-300">
+                <input type="checkbox" checked={autoSwitchToProperties} onChange={(event) => setAutoSwitchToProperties(event.target.checked)} />
+                블록 선택 시 속성 자동 전환
+              </label>
+            </div>
+            {!(isDesktopWide || isNotebookWide) && isMobileItemsOpen ? (
+              <div className="mb-2 flex flex-wrap gap-1 rounded-lg border border-slate-700 bg-slate-900/70 p-2">
+                <Button size="sm" variant={activeEditorPanel === "blocks" ? "default" : "outline"} onClick={() => { switchEditorPanel("blocks"); setIsMobileItemsOpen(false) }}>블록 목록</Button>
+                <Button size="sm" variant={activeEditorPanel === "canvas" ? "default" : "outline"} onClick={() => { switchEditorPanel("canvas"); setIsMobileItemsOpen(false) }}>캔버스</Button>
+                <Button size="sm" variant={activeEditorPanel === "properties" ? "default" : "outline"} onClick={() => { switchEditorPanel("properties"); setIsMobileItemsOpen(false) }}>속성 패널</Button>
               </div>
             ) : null}
-            <div
-              className={`grid gap-4 ${isDesktopWide ? "items-start" : "lg:grid-cols-2"}`}
-              style={
-                isDesktopWide
-                  ? {
-                      gridTemplateColumns: `minmax(240px, 300px) minmax(720px, 1fr) ${propertyPanelWidth}px`,
-                    }
-                  : undefined
-              }
-            >
-            <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+            <div className="grid gap-4">
+            <div className={`space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3 ${activeEditorPanel === "blocks" ? "" : "hidden"}`}>
               <p className="text-sm font-medium text-slate-100">블록 목록</p>
               {normalizeBlocks(blocks).map((block, index) => {
                 const supported = SUPPORTED_BLOCK_TYPES.includes(block.type as SupportedBlockType)
@@ -1354,11 +1660,7 @@ export function AdminPages() {
                   >
                     <button
                       className="w-full text-left text-sm text-slate-100"
-                      onClick={() => {
-                        markEditorCanvasScrollForRestore()
-                        markEditorInteraction("panel")
-                        setSelectedBlockId(block.id)
-                      }}
+                      onClick={() => requestBlockSelect(block.id, "panel")}
                       type="button"
                     >
                       {index + 1}. {BLOCK_LABEL[block.type as SupportedBlockType] ?? block.type}
@@ -1386,7 +1688,7 @@ export function AdminPages() {
               </div>
             </div>
 
-            <div className="space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+            <div className={`space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3 ${activeEditorPanel === "canvas" ? "" : "hidden"}`}>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium text-slate-100">캔버스 미리보기</p>
                 <div className="flex flex-wrap items-center justify-end gap-1">
@@ -1442,11 +1744,7 @@ export function AdminPages() {
                       <button
                         key={block.id}
                         type="button"
-                      onClick={() => {
-                        markEditorCanvasScrollForRestore()
-                        markEditorInteraction("canvas")
-                        setSelectedBlockId(block.id)
-                      }}
+                      onClick={() => requestBlockSelect(block.id, "canvas")}
                         className={`w-full rounded border px-3 py-2 text-left text-sm ${
                           selectedBlockId === block.id
                             ? "border-emerald-400 bg-emerald-500/10 text-slate-100"
@@ -1461,15 +1759,7 @@ export function AdminPages() {
               </div>
             </div>
 
-            <div
-              className={`relative space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3 ${
-                isNotebookWide
-                  ? `fixed right-0 top-0 z-40 h-full w-[min(420px,92vw)] overflow-auto rounded-none border-l border-slate-700 transition-transform ${
-                      isNotebookPropertyPanelOpen ? "translate-x-0" : "translate-x-full"
-                    }`
-                  : ""
-              }`}
-            >
+            <div className={`relative space-y-2 rounded-lg border border-slate-700 bg-slate-900/60 p-3 ${activeEditorPanel === "properties" ? "" : "hidden"}`}>
               {isDesktopWide ? (
                 <button
                   type="button"
@@ -1481,19 +1771,6 @@ export function AdminPages() {
               <div className="sticky top-0 z-10 space-y-2 border-b border-slate-700 bg-slate-900/95 pb-3">
                 <div className="flex items-center justify-between">
                   <p className="text-sm font-medium text-slate-100">속성 패널</p>
-                  {isNotebookWide ? (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      markEditorCanvasScrollForRestore()
-                      markEditorInteraction("panel")
-                      setIsNotebookPropertyPanelOpen(false)
-                    }}
-                  >
-                    닫기
-                  </Button>
-                  ) : null}
                 </div>
                 {!selectedBlock ? <p className="text-sm text-slate-300">선택된 블록이 없습니다.</p> : null}
                 {selectedBlock ? (
@@ -1745,18 +2022,6 @@ export function AdminPages() {
               ) : null}
             </div>
             </div>
-            {isNotebookWide && isNotebookPropertyPanelOpen ? (
-              <button
-                type="button"
-                aria-label="속성 패널 닫기"
-                className="fixed inset-0 z-30 bg-slate-950/70"
-                onClick={() => {
-                  markEditorCanvasScrollForRestore()
-                  markEditorInteraction("panel")
-                  setIsNotebookPropertyPanelOpen(false)
-                }}
-              />
-            ) : null}
           </>
         ) : null}
 
@@ -2118,6 +2383,23 @@ export function AdminPages() {
             <input value={metaTitle} onChange={(event) => setMetaTitle(event.target.value)} placeholder="SEO title" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
             <textarea value={metaDescription} onChange={(event) => setMetaDescription(event.target.value)} rows={3} placeholder="SEO description" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
             <input value={ogImage} onChange={(event) => setOgImage(event.target.value)} placeholder="OG image URL" className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100" />
+          </div>
+        ) : null}
+
+        {pendingEditorAction ? (
+          <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-950/30 p-3">
+            <p className="text-sm text-amber-100">미저장 변경이 있습니다. 이동 전에 처리하세요.</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" onClick={() => void saveDirtyChangesAndContinue()} className="bg-emerald-500 text-slate-900 hover:bg-emerald-400">
+                저장 후 이동
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => void discardDirtyChangesAndContinue()}>
+                폐기 후 이동
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setPendingEditorAction(null)}>
+                취소
+              </Button>
+            </div>
           </div>
         ) : null}
 

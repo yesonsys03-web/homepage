@@ -2269,3 +2269,163 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. gallery `layout`별 렌더링 차별화(특히 carousel)와 접근성 점검을 추가한다.
 2. `pytest` 실행 환경 정비 후 서버 테스트를 CI 경로에서 재검증한다.
+
+## Session 2026-03-05-08
+
+### 1) Goal
+- `datetime.utcnow()` 경로를 제거해 deprecation 경고를 해소하고 UTC 비교/직렬화 동작을 유지한다.
+
+### 2) Inputs
+- 사용자 요청: "Continue if you have next steps"
+- 최근 후속 과제: `server/main.py`의 `datetime.utcnow()` 경고 정리
+
+### 3) Design Decisions
+- 예약 게시 시간 비교 로직은 기존과 동일한 naive-UTC 기준을 유지한다.
+- 문자열 타임스탬프(`...Z`) 포맷을 유지해 API 응답 호환성을 보존한다.
+
+### 4) Implementation Notes
+- `app/main.py`
+  - `datetime.utcnow().isoformat() + "Z"`를 `datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"`로 교체
+  - `timezone` import 추가
+- `server/main.py`
+  - 예약 게시 검증 시 `now_utc = datetime.now(timezone.utc).replace(tzinfo=None)`로 교체
+
+### 5) Validation
+- `uv run python -m py_compile app/main.py server/main.py` 통과
+- `uv run pytest tests/test_admin_page_editor_api.py` (workdir=`server`) 통과(22 passed)
+- LSP diagnostics는 `basedpyright-langserver` 미설치로 실행 불가(환경 제약)
+
+### 6) Outcome
+#### 잘된 점
+- UTC 경고 경로를 제거하면서 기존 API/비교 semantics를 깨지 않고 유지했다.
+
+#### 아쉬운 점
+- Python LSP 진단은 로컬 도구 미설치 상태라 대체 검증(py_compile+pytest)에 의존했다.
+
+#### 다음 액션
+1. `basedpyright`를 dev dependency로 고정해 LSP 진단 공백을 제거한다.
+2. 시간 포맷 생성을 공용 유틸로 묶어 중복 코드를 추가 정리한다.
+
+## Session 2026-03-06-01
+
+### 1) Goal
+- `docs/page_edit.md`, `docs/page_edit_take2.md` 기준으로 Take2 개선 순서를 실제 AdminPages 편집 UX에 반영한다.
+
+### 2) Inputs
+- 참고 문서: `docs/page_edit.md` (섹션 16~18), `docs/page_edit_take2.md` (섹션 11~13)
+- 사용자 요청: "참고해서 개선 작업 순서대로 진행"
+- 제약 조건: 기존 API 계약과 회귀 테스트를 유지하면서 UI 전환 흐름을 개선
+
+### 3) Design Decisions
+- 기존 다중 패널 동시 노출 대신 Side Rail + Single Visible 패턴을 우선 적용한다.
+- Dirty 상태 전환은 조용한 폐기를 금지하고 `저장 후 이동 / 폐기 후 이동 / 취소` 3분기만 허용한다.
+- KPI/운영 계측은 기존 성능 이벤트 파이프라인을 재사용하고, panel switch/first input 같은 컨텍스트를 source 태그로 기록한다.
+
+### 4) Implementation Notes
+- `src/components/screens/admin/pages/AdminPages.tsx`
+  - Side Rail 상수/상태 추가: 접힘/펼침, 레일 폭(160~220), `localStorage(page_editor_rail_width)` 복원
+  - Single Visible 패널 전환(`blocks/canvas/properties`) 도입
+  - 모바일 `Items` 진입 패턴 추가 및 `Esc` 닫기 동작 반영
+  - 키보드 접근성 강화: Side Rail에서 `Up/Down` 이동, `Enter/Space` 활성화
+  - Dirty 전환 가드 추가: 탭/블록 전환 시 확인 패널(`저장 후 이동 / 폐기 후 이동 / 취소`)
+  - `beforeunload` 보호 및 panel switch/first field interaction 계측 추가
+- `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`
+  - Dirty 전환 가드 시나리오 테스트 추가
+  - gallery preview 시나리오에서 새 Dirty 전환 흐름(저장 후 이동)을 반영
+
+### 5) Validation
+- LSP diagnostics
+  - `src/components/screens/admin/pages/AdminPages.tsx`: error 0
+  - `src/components/screens/admin/pages/AdminPages.workflow.test.tsx`: error 0
+- 테스트
+  - `pnpm test -- src/components/screens/admin/pages/AdminPages.workflow.test.tsx src/components/screens/admin/pages/pageEditorGuardrails.test.ts` 통과 (28 passed)
+- 빌드
+  - `pnpm build` 통과
+
+### 6) Outcome
+#### 잘된 점
+- 문서의 Take2 우선순위(U1/U2 중심)가 코드와 회귀 테스트에 실제로 연결되었다.
+
+#### 아쉬운 점
+- KPI 4종 전체를 별도 시나리오 타입으로 분리하지는 못했고, 일부는 source 태그 기반 계측으로 우회했다.
+
+#### 다음 액션
+1. U3-02 운영 A/B 검증 산출물(참여자/기간/태스크 수)을 문서로 고정한다.
+2. U4-01/02 롤아웃 게이트와 온보딩 항목을 운영 문서(`docs/page_edit.md`)에 실행 결과 중심으로 반영한다.
+
+## Session 2026-03-06-02
+
+### 1) Goal
+- Take2의 남은 운영 단계(U3-02/U4-01/U4-02)를 실행 가능한 증빙 템플릿 형태로 문서에 고정한다.
+
+### 2) Inputs
+- 참고 문서: `docs/page_edit.md`, `docs/page_edit_take2.md`
+- 사용자 요청: "진행해"
+- 제약 조건: 실제 파일럿 데이터가 아직 없으므로 허위 수치 없이 `pending/collecting` 상태를 명시
+
+### 3) Design Decisions
+- U3-02 A/B 결과, U4-01 게이트 판정, U4-02 온보딩 완료를 각각 독립 시트로 분리한다.
+- 운영 증빙 단일 소스를 `docs/page_edit.md` 섹션 18.1~18.3으로 고정하고, `page_edit_take2.md`는 참조 링크만 유지한다.
+
+### 4) Implementation Notes
+- `docs/page_edit.md`
+  - 18.1 `U3-02 실행 기록 시트` 추가(일자/참여자/태스크/KPI/판정)
+  - 18.2 `U4-01 파일럿 게이트 결정 시트` 추가(pass/pending 기반 판정)
+  - 18.3 `U4-02 온보딩 완료 체크 시트` 추가(60분 완료 기록)
+- `docs/page_edit_take2.md`
+  - 운영 증빙 단일 소스를 `docs/page_edit.md` 18.1~18.3으로 참조 고정
+
+### 5) Validation
+- `grep`로 신규 섹션/참조 문구 존재 확인
+  - `docs/page_edit.md`: 18.1/18.2/18.3 섹션 검출
+  - `docs/page_edit_take2.md`: 18.1~18.3 단일 소스 참조 검출
+- `git diff -- docs/page_edit.md docs/page_edit_take2.md`로 변경 범위 확인
+
+### 6) Outcome
+#### 잘된 점
+- U3-02/U4 운영 단계가 "나중에 하자" 수준이 아니라 즉시 기록 가능한 실무 포맷으로 전환됐다.
+
+#### 아쉬운 점
+- 파일럿 실측 데이터(참여자/기간/태스크)는 아직 수집 전이라 `collecting/pending` 상태다.
+
+#### 다음 액션
+1. 파일럿 시작 당일부터 18.1 시트에 일자별 행을 누적한다.
+2. 14일/30태스크 충족 시 18.2의 `pending` 항목을 Go/Hold/No-Go로 확정한다.
+
+## Session 2026-03-06-03
+
+### 1) Goal
+- U3-02/U4 운영 문서의 다음 실행 순서를 고정해, 운영자가 매일 동일한 절차로 게이트를 갱신할 수 있게 한다.
+
+### 2) Inputs
+- 참고 문서: `docs/page_edit.md`, `docs/page_edit_take2.md`
+- 사용자 요청: "이제 다음 순서 진행해"
+- 제약 조건: 실제 파일럿 수치 없이도 절차/판정 기준은 즉시 실행 가능해야 함
+
+### 3) Design Decisions
+- 운영 판단 일관성을 위해 절차(입력 순서)와 판정식(Go/Hold/No-Go)을 분리해 고정한다.
+- Take2 문서는 중복 정의를 피하고 `page_edit.md` 섹션 18.1~18.5를 단일 소스로 참조한다.
+
+### 4) Implementation Notes
+- `docs/page_edit.md`
+  - 18.4 `파일럿 일일 실행 절차` 추가(테스트/빌드 -> KPI 수집 -> 시트 입력 -> 게이트 판정 -> 온보딩 반영)
+  - 18.5 `Go/Hold/No-Go 판정 계산식` 추가(개선 수, 최악 악화율, 롤백 트리거)
+- `docs/page_edit_take2.md`
+  - 운영 증빙 단일 소스 참조 범위를 18.1~18.5로 확장
+
+### 5) Validation
+- `grep`으로 신규 섹션/참조 문구 검출
+  - `docs/page_edit.md`: 18.4, 18.5 존재 확인
+  - `docs/page_edit_take2.md`: 18.1~18.5 참조 문구 확인
+- `git diff -- docs/page_edit.md docs/page_edit_take2.md`로 변경 범위 검증
+
+### 6) Outcome
+#### 잘된 점
+- 운영 단계가 "기록 시트"에서 끝나지 않고, 매일 수행 가능한 실행 절차까지 닫혔다.
+
+#### 아쉬운 점
+- 파일럿 실제 데이터 입력/판정은 운영 시작 이후에만 채울 수 있다.
+
+#### 다음 액션
+1. 다음 운영일에 18.4 절차를 그대로 수행해 18.1 행을 갱신한다.
+2. `pending` 상태가 해소되는 시점에 18.2 결정을 확정하고 승인자를 기록한다.

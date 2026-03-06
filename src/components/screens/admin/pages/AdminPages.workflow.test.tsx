@@ -419,6 +419,10 @@ describe("AdminPages workflow regression", () => {
 
     const previewTabButtons = await screen.findAllByRole("button", { name: "미리보기" })
     fireEvent.click(previewTabButtons[0])
+    const dirtyTransitionSaveButton = screen.queryByRole("button", { name: "저장 후 이동" })
+    if (dirtyTransitionSaveButton) {
+      fireEvent.click(dirtyTransitionSaveButton)
+    }
     expect(await screen.findByText(/Gallery \(1\)/)).toBeInTheDocument()
   })
 
@@ -447,6 +451,22 @@ describe("AdminPages workflow regression", () => {
 
     expect(screen.getByText("수동 저장은 수정 사유가 필요합니다")).toBeInTheDocument()
     expect(mocks.updateAdminPageDraft).not.toHaveBeenCalled()
+  })
+
+  it("shows dirty transition guard when leaving editor tab", async () => {
+    render(<AdminPages />)
+
+    const heroTabButtons = await screen.findAllByRole("button", { name: "Hero" })
+    fireEvent.click(heroTabButtons[0])
+
+    fireEvent.click(screen.getByRole("button", { name: "+ Gallery" }))
+
+    const previewTabButtons = screen.getAllByRole("button", { name: "미리보기" })
+    fireEvent.click(previewTabButtons[0])
+
+    expect(screen.getByText("미저장 변경이 있습니다. 이동 전에 처리하세요.")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "취소" }))
+    expect(screen.getByRole("button", { name: "+ Gallery" })).toBeInTheDocument()
   })
 
 })
