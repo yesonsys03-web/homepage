@@ -270,6 +270,79 @@ def test_extract_about_content_omits_hidden_faq_block() -> None:
     assert extracted["faqs"] == []
 
 
+def test_extract_about_content_omits_all_hidden_blocks() -> None:
+    document = {
+        "blocks": [
+            {
+                "id": "hero",
+                "type": "hero",
+                "order": 0,
+                "visible": False,
+                "content": {
+                    "headline": "Hidden hero",
+                    "highlight": "Hidden",
+                    "description": "Hidden desc",
+                    "contactEmail": "hidden@example.com",
+                },
+            },
+            {
+                "id": "values",
+                "type": "feature_list",
+                "order": 1,
+                "visible": False,
+                "content": {
+                    "items": [
+                        {
+                            "emoji": "🎨",
+                            "title": "Hidden value",
+                            "description": "Hidden value description",
+                        }
+                    ]
+                },
+            },
+            {
+                "id": "team",
+                "type": "feature_list",
+                "order": 2,
+                "visible": False,
+                "content": {
+                    "items": [
+                        {
+                            "name": "hidden-member",
+                            "role": "Hidden role",
+                            "description": "Hidden team description",
+                        }
+                    ]
+                },
+            },
+            {
+                "id": "faq",
+                "type": "faq",
+                "order": 3,
+                "visible": False,
+                "content": {
+                    "items": [
+                        {
+                            "question": "Hidden question",
+                            "answer": "Hidden answer",
+                        }
+                    ]
+                },
+            },
+        ]
+    }
+
+    extracted = main.extract_about_content_from_page_document(document)
+
+    assert extracted["hero_title"] == ""
+    assert extracted["hero_highlight"] == ""
+    assert extracted["hero_description"] == ""
+    assert extracted["contact_email"] == ""
+    assert extracted["values"] == []
+    assert extracted["team_members"] == []
+    assert extracted["faqs"] == []
+
+
 def test_create_admin_page_publish_schedule_success(monkeypatch: Any) -> None:
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(

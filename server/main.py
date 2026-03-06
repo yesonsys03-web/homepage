@@ -1384,15 +1384,28 @@ def extract_about_content_from_page_document(
     )
     team_content = cast(dict[str, object], team.get("content", {})) if team else {}
     faq_content = cast(dict[str, object], faq.get("content", {})) if faq else {}
+    hero_visible = bool(hero.get("visible", True)) if hero else True
+    values_visible = bool(values.get("visible", True)) if values else True
+    team_visible = bool(team.get("visible", True)) if team else True
     faq_visible = bool(faq.get("visible", True)) if faq else True
 
     return {
-        "hero_title": str(hero_content.get("headline", "")),
-        "hero_highlight": str(hero_content.get("highlight", "")),
-        "hero_description": str(hero_content.get("description", "")),
-        "contact_email": str(hero_content.get("contactEmail", "")),
-        "values": cast(list[dict[str, object]], values_content.get("items", [])),
-        "team_members": cast(list[dict[str, object]], team_content.get("items", [])),
+        "hero_title": str(hero_content.get("headline", "")) if hero_visible else "",
+        "hero_highlight": str(hero_content.get("highlight", ""))
+        if hero_visible
+        else "",
+        "hero_description": str(hero_content.get("description", ""))
+        if hero_visible
+        else "",
+        "contact_email": str(hero_content.get("contactEmail", ""))
+        if hero_visible
+        else "",
+        "values": cast(list[dict[str, object]], values_content.get("items", []))
+        if values_visible
+        else [],
+        "team_members": cast(list[dict[str, object]], team_content.get("items", []))
+        if team_visible
+        else [],
         "faqs": cast(list[dict[str, object]], faq_content.get("items", []))
         if faq_visible
         else [],
