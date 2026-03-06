@@ -7,7 +7,9 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import (
+    Awaitable,
     AsyncIterator,
+    Callable,
     Literal,
     Optional,
     Mapping,
@@ -23,6 +25,7 @@ import unicodedata
 import time
 import os
 import json
+import hashlib
 import secrets
 import uuid
 from xml.sax.saxutils import escape as xml_escape
@@ -102,12 +105,37 @@ from db import (
     list_due_page_publish_schedules,
     mark_page_publish_schedule_published,
     mark_page_publish_schedule_failed,
+    list_curated_content,
+    get_curated_content_count,
+    get_curated_content_by_id,
+    list_admin_curated_content,
+    get_admin_curated_content_count,
+    create_or_update_curated_content,
+    update_curated_content_admin,
+    delete_curated_content,
+    get_error_solution,
+    upsert_error_solution,
+    increment_error_solution_feedback,
+    create_glossary_term_request,
+    create_curated_related_click,
 )
 from auth import (
     verify_password,
     get_password_hash,
     create_access_token,
     decode_token,
+)
+from github_collector import (
+    GitHubCollectorConfig,
+    build_search_query,
+    normalize_github_repo_url,
+    reached_daily_collect_limit,
+)
+from gemini_curator import (
+    QualityInputs,
+    calc_quality_score,
+    fallback_summary_template,
+    should_auto_reject,
 )
 
 
@@ -133,7 +161,9 @@ app = FastAPI(title="VibeCoder Playground API", lifespan=lifespan)
 
 
 @app.middleware("http")
-async def enforce_https_and_security_headers(request, call_next):
+async def enforce_https_and_security_headers(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+):
     forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
     request_scheme = str(request.scope.get("scheme") or "http")
     request_is_https = request_scheme == "https" or forwarded_proto == "https"
@@ -575,6 +605,41 @@ class ReportCreate(BaseModel):
     memo: Optional[str] = None
 
 
+class CuratedAdminUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    category: Optional[str] = None
+    summary_beginner: Optional[str] = None
+    summary_mid: Optional[str] = None
+    summary_expert: Optional[str] = None
+    tags: Optional[list[str]] = None
+    status: Optional[Literal["pending", "approved", "rejected", "auto_rejected"]] = None
+    reject_reason: Optional[str] = None
+    quality_score: Optional[int] = None
+    relevance_score: Optional[int] = None
+    beginner_value: Optional[int] = None
+    license: Optional[str] = None
+
+
+class ErrorTranslateRequest(BaseModel):
+    error_message: str
+
+
+class ErrorTranslateFeedbackRequest(BaseModel):
+    error_hash: str
+    solved: bool
+
+
+class GlossaryTermRequestCreate(BaseModel):
+    requested_term: str
+    context_note: Optional[str] = None
+
+
+class CuratedRelatedClickCreate(BaseModel):
+    source_content_id: int
+    target_content_id: int
+    reason: Optional[str] = None
+
+
 class RegisterRequest(BaseModel):
     email: str
     nickname: str
@@ -627,6 +692,21 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 LOGIN_IP_LIMIT_PER_MINUTE = 10
 LOGIN_ACCOUNT_LIMIT_PER_HOUR = 20
 REGISTER_IP_LIMIT_PER_HOUR = 5
+ERROR_TRANSLATE_IP_LIMIT_PER_MINUTE = int(
+    os.getenv("ERROR_TRANSLATE_IP_LIMIT_PER_MINUTE", "20")
+)
+GLOSSARY_TERM_REQUEST_IP_LIMIT_PER_HOUR = int(
+    os.getenv("GLOSSARY_TERM_REQUEST_IP_LIMIT_PER_HOUR", "10")
+)
+DAILY_COLLECT_LIMIT = int(os.getenv("DAILY_COLLECT_LIMIT", "5"))
+GITHUB_SEARCH_TOPICS = [
+    topic.strip()
+    for topic in os.getenv(
+        "GITHUB_SEARCH_TOPICS", "vibe-coding,cursor-ai,claude-mcp"
+    ).split(",")
+    if topic.strip()
+]
+GITHUB_MIN_STARS = int(os.getenv("GITHUB_MIN_STARS", "30"))
 _RATE_LIMIT_BUCKETS: dict[str, deque[float]] = {}
 _RATE_LIMIT_LOCK = Lock()
 
@@ -1760,7 +1840,7 @@ def get_blocked_user_message(user_status: str) -> str:
     return "활성화되지 않은 계정입니다"
 
 
-def _extract_client_ip(request) -> str:
+def _extract_client_ip(request: Request) -> str:
     forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     if forwarded_for:
         return forwarded_for
@@ -1788,6 +1868,115 @@ def enforce_rate_limit(
         if len(samples) >= limit:
             raise HTTPException(status_code=429, detail=detail)
         samples.append(now)
+
+
+DANGEROUS_COMMAND_TOKENS = ["rm -rf", "sudo", "curl |", "curl|", "chmod 777"]
+PROMPT_INJECTION_TOKENS = [
+    "ignore previous",
+    "위 지시",
+    "시스템 프롬프트",
+    "system prompt",
+]
+
+
+def classify_error_type(error_message: str) -> str:
+    lowered = error_message.lower()
+    if "pnpm" in lowered or "node_modules" in lowered:
+        return "pnpm"
+    if "python" in lowered or "traceback" in lowered or "pip" in lowered:
+        return "python"
+    if "git" in lowered:
+        return "git"
+    if "vite" in lowered:
+        return "vite"
+    return "general"
+
+
+def contains_prompt_injection(text: str) -> bool:
+    lowered = text.lower()
+    return any(token in lowered for token in PROMPT_INJECTION_TOKENS)
+
+
+def is_dangerous_command(command: str) -> bool:
+    lowered = command.lower()
+    return any(token in lowered for token in DANGEROUS_COMMAND_TOKENS)
+
+
+def build_error_solution_fallback(error_message: str) -> dict[str, object]:
+    error_type = classify_error_type(error_message)
+    if error_type == "pnpm":
+        fix_steps = [
+            {
+                "description": "필요한 파일들을 다시 설치해요",
+                "command": "pnpm install",
+            }
+        ]
+        plan_b = {
+            "description": "설치 파일이 꼬였을 때 초기화 후 다시 설치",
+            "command": "rm -rf node_modules && pnpm install",
+        }
+        what_happened = "앱 실행에 필요한 파일이 없거나 깨진 상태예요."
+    elif error_type == "python":
+        fix_steps = [
+            {
+                "description": "가상환경 기준 의존성을 다시 맞춰요",
+                "command": "uv sync --frozen",
+            }
+        ]
+        plan_b = {
+            "description": "가상환경을 다시 만들고 동기화해요",
+            "command": "uv sync",
+        }
+        what_happened = "파이썬 실행에 필요한 패키지 버전이 맞지 않아요."
+    elif error_type == "git":
+        fix_steps = [
+            {
+                "description": "현재 변경 상태를 먼저 확인해요",
+                "command": "git status",
+            }
+        ]
+        plan_b = {
+            "description": "원격/브랜치 연결 상태를 점검해요",
+            "command": "git remote -v",
+        }
+        what_happened = "Git 작업 순서나 브랜치 상태가 맞지 않아 멈춘 상태예요."
+    elif error_type == "vite":
+        fix_steps = [
+            {
+                "description": "개발 서버를 다시 시작해요",
+                "command": "pnpm dev",
+            }
+        ]
+        plan_b = {
+            "description": "캐시 영향을 줄이기 위해 재설치 후 다시 실행해요",
+            "command": "pnpm install && pnpm dev",
+        }
+        what_happened = "프론트 개발 서버가 필요한 파일을 읽지 못한 상태예요."
+    else:
+        fix_steps = [
+            {
+                "description": "의존성/실행 상태를 기본 명령으로 점검해요",
+                "command": "pnpm install",
+            }
+        ]
+        plan_b = {
+            "description": "환경 재동기화 후 다시 시도해요",
+            "command": "uv sync --frozen",
+        }
+        what_happened = "실행에 필요한 환경이나 설정 중 일부가 맞지 않는 상태예요."
+
+    safe_fix_steps = [
+        step
+        for step in fix_steps
+        if not is_dangerous_command(str(step.get("command") or ""))
+    ]
+
+    return {
+        "what_happened": what_happened,
+        "fix_steps": safe_fix_steps,
+        "plan_b": plan_b,
+        "error_type": error_type,
+    }
 
 
 def normalize_filter_tabs(
@@ -2264,6 +2453,406 @@ def get_filter_tabs_endpoint() -> dict[str, list[dict[str, str]]]:
             list[dict[str, str]],
             settings["explore_filter_tabs"],
         ),
+    }
+
+
+def safe_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def require_admin_from_request(request: Request) -> UserContext:
+    auth_header = request.headers.get("authorization", "")
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+
+    if not token:
+        raise HTTPException(status_code=401, detail="로그인이 필요합니다")
+
+    decoded = decode_token(token)
+    user_id = decoded.get("sub") if decoded else None
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(status_code=401, detail="유효하지 않은 토큰입니다")
+
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="사용자를 찾을 수 없습니다")
+    user = ensure_bootstrap_super_admin(user)
+
+    role = str(user.get("role") or "")
+    if role not in ADMIN_ALLOWED_ROLES:
+        raise HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
+    return build_user_context(user)
+
+
+def serialize_curated_content(row: Mapping[str, object]) -> dict[str, object]:
+    return {
+        "id": safe_int(row.get("id"), 0),
+        "source_type": str(row.get("source_type") or "github"),
+        "source_url": str(row.get("source_url") or ""),
+        "canonical_url": str(row.get("canonical_url") or ""),
+        "repo_name": str(row.get("repo_name") or ""),
+        "repo_owner": str(row.get("repo_owner") or ""),
+        "title": str(row.get("title") or ""),
+        "category": str(row.get("category") or ""),
+        "language": str(row.get("language") or ""),
+        "is_korean_dev": bool(row.get("is_korean_dev") or False),
+        "stars": safe_int(row.get("stars"), 0),
+        "license": str(row.get("license") or ""),
+        "relevance_score": row.get("relevance_score"),
+        "beginner_value": row.get("beginner_value"),
+        "quality_score": row.get("quality_score"),
+        "summary_beginner": str(row.get("summary_beginner") or ""),
+        "summary_mid": str(row.get("summary_mid") or ""),
+        "summary_expert": str(row.get("summary_expert") or ""),
+        "tags": cast(list[str], row.get("tags") or []),
+        "status": str(row.get("status") or "pending"),
+        "reject_reason": str(row.get("reject_reason") or ""),
+        "approved_at": str(row.get("approved_at") or ""),
+        "approved_by": str(row.get("approved_by") or ""),
+        "github_pushed_at": str(row.get("github_pushed_at") or ""),
+        "collected_at": str(row.get("collected_at") or ""),
+        "updated_at": str(row.get("updated_at") or ""),
+    }
+
+
+@app.get("/api/curated")
+def list_curated_endpoint(
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    is_korean_dev: Optional[bool] = None,
+    sort: str = "latest",
+    limit: int = 20,
+    offset: int = 0,
+):
+    curated_items = list_curated_content(
+        status="approved",
+        category=category,
+        search=search,
+        is_korean_dev=is_korean_dev,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+    total = get_curated_content_count(
+        status="approved",
+        category=category,
+        search=search,
+        is_korean_dev=is_korean_dev,
+    )
+    return {
+        "items": [serialize_curated_content(item) for item in curated_items],
+        "total": total,
+        "next_cursor": None,
+    }
+
+
+@app.get("/api/curated/{content_id}")
+def get_curated_detail_endpoint(content_id: int):
+    item = get_curated_content_by_id(content_id)
+    if not item or str(item.get("status") or "") != "approved":
+        raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+    return serialize_curated_content(item)
+
+
+@app.post("/api/curated/related-clicks")
+def create_curated_related_click_endpoint(
+    payload: CuratedRelatedClickCreate,
+    request: Request,
+):
+    source_id = safe_int(payload.source_content_id, 0)
+    target_id = safe_int(payload.target_content_id, 0)
+
+    if source_id <= 0 or target_id <= 0:
+        raise HTTPException(status_code=400, detail="유효하지 않은 콘텐츠 ID입니다")
+    if source_id == target_id:
+        raise HTTPException(
+            status_code=400, detail="동일 콘텐츠 클릭은 기록할 수 없습니다"
+        )
+
+    source_item = get_curated_content_by_id(source_id)
+    target_item = get_curated_content_by_id(target_id)
+    if not source_item or str(source_item.get("status") or "") != "approved":
+        raise HTTPException(status_code=404, detail="기준 콘텐츠를 찾을 수 없습니다")
+    if not target_item or str(target_item.get("status") or "") != "approved":
+        raise HTTPException(status_code=404, detail="대상 콘텐츠를 찾을 수 없습니다")
+
+    cleaned_reason = (payload.reason or "").strip()
+    if len(cleaned_reason) > 200:
+        cleaned_reason = cleaned_reason[:200]
+
+    saved = create_curated_related_click(
+        source_content_id=source_id,
+        target_content_id=target_id,
+        reason=cleaned_reason or None,
+        client_ip=_extract_client_ip(request),
+    )
+    return {
+        "ok": True,
+        "id": safe_int(saved.get("id") if saved else None, 0),
+    }
+
+
+@app.get("/api/admin/curated")
+def list_admin_curated_endpoint(
+    request: Request,
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    _ = require_admin_from_request(request)
+    items = list_admin_curated_content(status=status, limit=limit, offset=offset)
+    total = get_admin_curated_content_count(status=status)
+    return {
+        "items": [serialize_curated_content(item) for item in items],
+        "total": total,
+        "next_cursor": None,
+    }
+
+
+@app.patch("/api/admin/curated/{content_id}")
+def update_admin_curated_endpoint(
+    content_id: int,
+    payload: CuratedAdminUpdateRequest,
+    request: Request,
+):
+    current_user = require_admin_from_request(request)
+    updates = payload.model_dump(exclude_none=True)
+    if not updates:
+        raise HTTPException(status_code=400, detail="변경할 필드가 없습니다")
+
+    if updates.get("status") == "approved":
+        updates["approved_by"] = current_user["id"]
+        if "reject_reason" not in updates:
+            updates["reject_reason"] = None
+
+    updated = update_curated_content_admin(content_id, updates)
+    if not updated:
+        raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+    return serialize_curated_content(updated)
+
+
+@app.post("/api/admin/curated/run")
+def run_curated_collection_endpoint(
+    request: Request,
+):
+    _ = require_admin_from_request(request)
+
+    config = GitHubCollectorConfig(
+        search_topics=GITHUB_SEARCH_TOPICS,
+        min_stars=GITHUB_MIN_STARS,
+        daily_collect_limit=DAILY_COLLECT_LIMIT,
+    )
+    _ = build_search_query(config)
+
+    existing = list_admin_curated_content(status=None, limit=500, offset=0)
+    today = datetime.now(timezone.utc).date()
+    collected_today = sum(
+        1
+        for row in existing
+        if str(row.get("collected_at") or "").startswith(str(today))
+    )
+
+    if reached_daily_collect_limit(collected_today, config):
+        return {
+            "created": 0,
+            "message": "오늘 수집 한도에 도달했습니다",
+            "daily_limit": config.daily_collect_limit,
+            "collected_today": collected_today,
+        }
+
+    samples: list[dict[str, object]] = [
+        {
+            "source_type": "github",
+            "source_url": "https://github.com/example/claude-mcp-starter",
+            "canonical_url": normalize_github_repo_url(
+                "https://github.com/example/claude-mcp-starter.git"
+            ),
+            "repo_name": "claude-mcp-starter",
+            "repo_owner": "example",
+            "title": "Claude MCP Starter",
+            "category": "tool",
+            "language": "TypeScript",
+            "is_korean_dev": True,
+            "stars": 420,
+            "license": "MIT",
+            "relevance_score": 8,
+            "beginner_value": 8,
+            "tags": ["MCP", "Claude", "Starter"],
+        },
+        {
+            "source_type": "github",
+            "source_url": "https://github.com/example/vibe-template-kit",
+            "canonical_url": normalize_github_repo_url(
+                "https://github.com/example/vibe-template-kit"
+            ),
+            "repo_name": "vibe-template-kit",
+            "repo_owner": "example",
+            "title": "Vibe Template Kit",
+            "category": "template",
+            "language": "JavaScript",
+            "is_korean_dev": False,
+            "stars": 190,
+            "license": "Apache-2.0",
+            "relevance_score": 7,
+            "beginner_value": 7,
+            "tags": ["Template", "VibeCoding"],
+        },
+    ]
+
+    created_count = 0
+    for repo in samples:
+        if reached_daily_collect_limit(collected_today + created_count, config):
+            break
+
+        summary = fallback_summary_template(str(repo.get("title") or "GitHub Repo"))
+        quality_score = calc_quality_score(
+            QualityInputs(
+                stars=safe_int(repo.get("stars"), 0),
+                is_korean_dev=bool(repo.get("is_korean_dev") or False),
+                has_readme=True,
+                relevance_score=safe_int(repo.get("relevance_score"), 0),
+                beginner_value=safe_int(repo.get("beginner_value"), 0),
+            )
+        )
+        status = (
+            "auto_rejected"
+            if should_auto_reject(
+                quality_score, safe_int(repo.get("relevance_score"), 0)
+            )
+            else "pending"
+        )
+
+        payload = {
+            **repo,
+            "summary_beginner": summary.beginner,
+            "summary_mid": summary.mid,
+            "summary_expert": summary.expert,
+            "quality_score": quality_score,
+            "status": status,
+            "reject_reason": "auto_cutoff" if status == "auto_rejected" else None,
+            "github_pushed_at": datetime.now(timezone.utc),
+        }
+        saved = create_or_update_curated_content(payload)
+        if saved:
+            created_count += 1
+
+    return {
+        "created": created_count,
+        "daily_limit": config.daily_collect_limit,
+        "collected_today": collected_today + created_count,
+    }
+
+
+@app.delete("/api/admin/curated/{content_id}")
+def delete_admin_curated_endpoint(
+    content_id: int,
+    request: Request,
+):
+    _ = require_admin_from_request(request)
+    deleted = delete_curated_content(content_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+    return {"deleted": True, "id": content_id}
+
+
+@app.post("/api/error-translate")
+def error_translate_endpoint(payload: ErrorTranslateRequest, request: Request):
+    client_ip = _extract_client_ip(request)
+    enforce_rate_limit(
+        "error_translate_ip",
+        client_ip,
+        limit=ERROR_TRANSLATE_IP_LIMIT_PER_MINUTE,
+        window_seconds=60.0,
+        detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+
+    message = payload.error_message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="에러 메시지를 입력해 주세요")
+    if len(message) > 2000:
+        raise HTTPException(
+            status_code=400, detail="에러 메시지는 2000자 이하로 입력해 주세요"
+        )
+
+    normalized = message
+    if contains_prompt_injection(normalized):
+        normalized = "[prompt-injection-filtered] " + normalized
+
+    error_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    cached = get_error_solution(error_hash)
+    if cached:
+        solution = cast(dict[str, object], cached.get("solution") or {})
+        solution["error_hash"] = error_hash
+        solution["source"] = "cache"
+        return solution
+
+    solution = build_error_solution_fallback(message)
+    saved = upsert_error_solution(
+        error_hash=error_hash,
+        error_type=str(solution.get("error_type") or "general"),
+        error_excerpt=message[:200],
+        solution=solution,
+    )
+    _ = saved
+    solution["error_hash"] = error_hash
+    solution["source"] = "fallback"
+    return solution
+
+
+@app.post("/api/error-translate/feedback")
+def error_translate_feedback_endpoint(payload: ErrorTranslateFeedbackRequest):
+    updated = increment_error_solution_feedback(
+        error_hash=payload.error_hash,
+        solved=payload.solved,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="해당 에러 기록을 찾을 수 없습니다")
+    return {"ok": True}
+
+
+@app.post("/api/glossary/term-requests")
+def create_glossary_term_request_endpoint(
+    payload: GlossaryTermRequestCreate,
+    request: Request,
+):
+    client_ip = _extract_client_ip(request)
+    enforce_rate_limit(
+        "glossary_term_request_ip",
+        client_ip,
+        limit=GLOSSARY_TERM_REQUEST_IP_LIMIT_PER_HOUR,
+        window_seconds=60.0 * 60.0,
+        detail="용어 요청이 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+
+    requested_term = payload.requested_term.strip()
+    if len(requested_term) < 2:
+        raise HTTPException(status_code=400, detail="용어는 2자 이상 입력해 주세요")
+    if len(requested_term) > 80:
+        raise HTTPException(status_code=400, detail="용어는 80자 이하로 입력해 주세요")
+
+    saved = create_glossary_term_request(
+        requested_term=requested_term,
+        context_note=(payload.context_note or "").strip() or None,
+        requester_ip=client_ip,
+        requester_id=None,
+    )
+    return {
+        "id": safe_int(saved.get("id"), 0),
+        "requested_term": str(saved.get("requested_term") or ""),
+        "status": str(saved.get("status") or "pending"),
+        "created_at": str(saved.get("created_at") or ""),
     }
 
 

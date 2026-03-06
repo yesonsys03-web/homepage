@@ -9,7 +9,7 @@ import aboutMasterImage from "../../../img/About_master.webp"
 import aboutTabletImage from "../../../img/About_tablet.webp"
 import aboutMobileImage from "../../../img/About_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void

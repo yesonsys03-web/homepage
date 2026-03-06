@@ -45,6 +45,61 @@ export interface Project {
   updated_at: string
 }
 
+export interface CuratedContent {
+  id: number
+  source_type: string
+  source_url: string
+  canonical_url: string
+  repo_name: string
+  repo_owner: string
+  title: string
+  category: string
+  language: string
+  is_korean_dev: boolean
+  stars: number
+  license: string
+  relevance_score?: number | null
+  beginner_value?: number | null
+  quality_score?: number | null
+  summary_beginner: string
+  summary_mid: string
+  summary_expert: string
+  tags: string[]
+  status: "pending" | "approved" | "rejected" | "auto_rejected" | string
+  reject_reason: string
+  approved_at: string
+  approved_by: string
+  github_pushed_at: string
+  collected_at: string
+  updated_at: string
+}
+
+export interface ErrorTranslateStep {
+  description: string
+  command: string
+}
+
+export interface ErrorTranslateResponse {
+  what_happened: string
+  fix_steps: ErrorTranslateStep[]
+  plan_b: ErrorTranslateStep
+  error_type: "pnpm" | "python" | "git" | "vite" | "general" | string
+  error_hash: string
+  source: "cache" | "fallback" | string
+}
+
+export interface GlossaryTermRequestResponse {
+  id: number
+  requested_term: string
+  status: string
+  created_at: string
+}
+
+export interface CuratedRelatedClickResponse {
+  ok: boolean
+  id: number
+}
+
 export interface Comment {
   id: string
   project_id: string
@@ -427,6 +482,7 @@ export interface AdminStats {
 type AdminReportsResponse = { items: Report[]; total: number }
 type AdminListResponse<T> = { items: T[] }
 type ProjectsResponse = { items: Project[] }
+type CuratedContentResponse = { items: CuratedContent[]; total?: number }
 type CommentsResponse = { items: Comment[] }
 type ProfileCommentsResponse = { items: ProfileComment[] }
 
@@ -843,6 +899,144 @@ export const api = {
       },
       options,
     )
+  },
+
+  getCuratedContent: async (
+    params?: {
+      category?: string
+      search?: string
+      is_korean_dev?: boolean
+      sort?: "latest" | "quality"
+      limit?: number
+      offset?: number
+    },
+  ) => {
+    const searchParams = new URLSearchParams()
+    if (params?.category) searchParams.set("category", params.category)
+    if (params?.search) searchParams.set("search", params.search)
+    if (typeof params?.is_korean_dev === "boolean") {
+      searchParams.set("is_korean_dev", String(params.is_korean_dev))
+    }
+    if (params?.sort) searchParams.set("sort", params.sort)
+    if (typeof params?.limit === "number") searchParams.set("limit", String(params.limit))
+    if (typeof params?.offset === "number") searchParams.set("offset", String(params.offset))
+
+    const query = searchParams.toString()
+    const res = await fetch(query ? `${API_BASE}/api/curated?${query}` : `${API_BASE}/api/curated`)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "큐레이션 목록 조회에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "큐레이션 목록 조회에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<CuratedContentResponse>
+  },
+
+  getCuratedContentDetail: async (contentId: number) => {
+    const res = await fetch(`${API_BASE}/api/curated/${contentId}`)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "큐레이션 상세 조회에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "큐레이션 상세 조회에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<CuratedContent>
+  },
+
+  trackCuratedRelatedClick: async (source_content_id: number, target_content_id: number, reason?: string) => {
+    const res = await fetch(`${API_BASE}/api/curated/related-clicks`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source_content_id, target_content_id, reason }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "추천 클릭 기록에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "추천 클릭 기록에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<CuratedRelatedClickResponse>
+  },
+
+  getAdminCuratedContent: async (status?: string, limit: number = 50, offset: number = 0) => {
+    const searchParams = new URLSearchParams({ limit: String(limit), offset: String(offset) })
+    if (status) searchParams.set("status", status)
+    const res = await authFetch(`${API_BASE}/api/admin/curated?${searchParams.toString()}`)
+    return res.json() as Promise<CuratedContentResponse>
+  },
+
+  updateAdminCuratedContent: async (
+    contentId: number,
+    updates: {
+      title?: string
+      category?: string
+      summary_beginner?: string
+      summary_mid?: string
+      summary_expert?: string
+      tags?: string[]
+      status?: string
+      reject_reason?: string
+      quality_score?: number
+      relevance_score?: number
+      beginner_value?: number
+      license?: string
+    },
+  ) => {
+    const res = await authFetch(`${API_BASE}/api/admin/curated/${contentId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(updates),
+    })
+    return res.json() as Promise<CuratedContent>
+  },
+
+  runAdminCuratedCollection: async () => {
+    const res = await authFetch(`${API_BASE}/api/admin/curated/run`, { method: "POST" })
+    return res.json() as Promise<{ created: number; daily_limit: number; collected_today: number; message?: string }>
+  },
+
+  deleteAdminCuratedContent: async (contentId: number) => {
+    const res = await authFetch(`${API_BASE}/api/admin/curated/${contentId}`, { method: "DELETE" })
+    return res.json() as Promise<{ deleted: boolean; id: number }>
+  },
+
+  errorTranslate: async (error_message: string) => {
+    const res = await fetch(`${API_BASE}/api/error-translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error_message }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "에러 번역에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "에러 번역에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<ErrorTranslateResponse>
+  },
+
+  sendErrorTranslateFeedback: async (error_hash: string, solved: boolean) => {
+    const res = await fetch(`${API_BASE}/api/error-translate/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ error_hash, solved }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "피드백 전송에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "피드백 전송에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<{ ok: boolean }>
+  },
+
+  requestGlossaryTerm: async (requested_term: string, context_note?: string) => {
+    const res = await fetch(`${API_BASE}/api/glossary/term-requests`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requested_term, context_note }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "용어 요청에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "용어 요청에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<GlossaryTermRequestResponse>
   },
 
   getProject: async (id: string, options?: SWRFetchOptions<Project>) => {

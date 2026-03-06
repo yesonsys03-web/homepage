@@ -13,6 +13,7 @@ const COMMAND_KEYS: AdminRouteKey[] = [
   "dashboard",
   "users",
   "content",
+  "curated",
   "reports",
   "pages",
   "policies",

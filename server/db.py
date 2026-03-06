@@ -23,6 +23,21 @@ if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set. Please check server/.env file")
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
 @contextmanager
 def get_db_connection():
     """데이터베이스 연결 컨텍스트 매니저"""
@@ -205,6 +220,70 @@ def init_db():
                     expires_at TIMESTAMP NOT NULL,
                     consumed_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS curated_content (
+                    id SERIAL PRIMARY KEY,
+                    source_type TEXT NOT NULL DEFAULT 'github',
+                    source_url TEXT UNIQUE NOT NULL,
+                    canonical_url TEXT UNIQUE NOT NULL,
+                    repo_name TEXT,
+                    repo_owner TEXT,
+                    title TEXT NOT NULL,
+                    category TEXT,
+                    language TEXT,
+                    is_korean_dev BOOLEAN DEFAULT FALSE,
+                    stars INTEGER DEFAULT 0,
+                    license TEXT,
+                    relevance_score INTEGER,
+                    beginner_value INTEGER,
+                    quality_score INTEGER,
+                    summary_beginner TEXT,
+                    summary_mid TEXT,
+                    summary_expert TEXT,
+                    tags TEXT[] DEFAULT '{}',
+                    status TEXT DEFAULT 'pending',
+                    reject_reason TEXT,
+                    approved_at TIMESTAMP,
+                    approved_by UUID REFERENCES users(id),
+                    github_pushed_at TIMESTAMP,
+                    collected_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS error_solutions (
+                    id SERIAL PRIMARY KEY,
+                    error_hash TEXT UNIQUE NOT NULL,
+                    error_type TEXT NOT NULL,
+                    error_excerpt TEXT,
+                    solution JSONB NOT NULL,
+                    solved_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS glossary_term_requests (
+                    id SERIAL PRIMARY KEY,
+                    requested_term TEXT NOT NULL,
+                    context_note TEXT,
+                    requester_id UUID REFERENCES users(id),
+                    requester_ip TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS curated_related_clicks (
+                    id SERIAL PRIMARY KEY,
+                    source_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
+                    target_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
+                    reason TEXT,
+                    clicked_at TIMESTAMP DEFAULT NOW(),
+                    client_ip TEXT
                 )
             """)
 
@@ -412,6 +491,38 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_page_document_versions_page_created_at
                 ON page_document_versions (page_id, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_status
+                ON curated_content (status)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_category
+                ON curated_content (category)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_score
+                ON curated_content (quality_score DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_approved
+                ON curated_content (approved_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_error_solutions_hash
+                ON error_solutions (error_hash)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_glossary_term_requests_status
+                ON glossary_term_requests (status, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_source_target
+                ON curated_related_clicks (source_content_id, target_content_id)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_clicked_at
+                ON curated_related_clicks (clicked_at DESC)
             """)
 
             conn.commit()
@@ -907,6 +1018,369 @@ def get_reports_count(status: Optional[str] = None):
 
             result = cur.fetchone()
             return int(result["count"]) if result else 0
+
+
+def list_curated_content(
+    status: str = "approved",
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    is_korean_dev: Optional[bool] = None,
+    sort: str = "latest",
+    limit: int = 20,
+    offset: int = 0,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                SELECT *
+                FROM curated_content
+                WHERE status = %s
+            """
+            params: list[object] = [status]
+
+            if category and category != "all":
+                query += " AND category = %s"
+                params.append(category)
+
+            if is_korean_dev is not None:
+                query += " AND is_korean_dev = %s"
+                params.append(is_korean_dev)
+
+            if search:
+                query += (
+                    " AND (title ILIKE %s OR COALESCE(summary_beginner, '') ILIKE %s)"
+                )
+                params.extend([f"%{search}%", f"%{search}%"])
+
+            if sort == "quality":
+                query += " ORDER BY quality_score DESC NULLS LAST, approved_at DESC NULLS LAST"
+            else:
+                query += " ORDER BY approved_at DESC NULLS LAST, collected_at DESC"
+
+            safe_limit = max(1, min(limit, 100))
+            safe_offset = max(0, offset)
+            query += " LIMIT %s OFFSET %s"
+            params.extend([safe_limit, safe_offset])
+
+            cur.execute(query, params)
+            return cur.fetchall()
+
+
+def get_curated_content_count(
+    status: str = "approved",
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    is_korean_dev: Optional[bool] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = "SELECT COUNT(*) AS count FROM curated_content WHERE status = %s"
+            params: list[object] = [status]
+
+            if category and category != "all":
+                query += " AND category = %s"
+                params.append(category)
+
+            if is_korean_dev is not None:
+                query += " AND is_korean_dev = %s"
+                params.append(is_korean_dev)
+
+            if search:
+                query += (
+                    " AND (title ILIKE %s OR COALESCE(summary_beginner, '') ILIKE %s)"
+                )
+                params.extend([f"%{search}%", f"%{search}%"])
+
+            cur.execute(query, params)
+            result = cur.fetchone()
+            return int(result["count"]) if result else 0
+
+
+def get_curated_content_by_id(content_id: int):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM curated_content WHERE id = %s", (content_id,))
+            return cur.fetchone()
+
+
+def list_admin_curated_content(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = "SELECT * FROM curated_content"
+            params: list[object] = []
+
+            if status and status != "all":
+                query += " WHERE status = %s"
+                params.append(status)
+
+            query += " ORDER BY collected_at DESC LIMIT %s OFFSET %s"
+            params.extend([max(1, min(limit, 200)), max(0, offset)])
+            cur.execute(query, params)
+            return cur.fetchall()
+
+
+def get_admin_curated_content_count(status: Optional[str] = None):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if status and status != "all":
+                cur.execute(
+                    "SELECT COUNT(*) AS count FROM curated_content WHERE status = %s",
+                    (status,),
+                )
+            else:
+                cur.execute("SELECT COUNT(*) AS count FROM curated_content")
+            result = cur.fetchone()
+            return int(result["count"]) if result else 0
+
+
+def create_or_update_curated_content(payload: Mapping[str, object]):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO curated_content (
+                    source_type,
+                    source_url,
+                    canonical_url,
+                    repo_name,
+                    repo_owner,
+                    title,
+                    category,
+                    language,
+                    is_korean_dev,
+                    stars,
+                    license,
+                    relevance_score,
+                    beginner_value,
+                    quality_score,
+                    summary_beginner,
+                    summary_mid,
+                    summary_expert,
+                    tags,
+                    status,
+                    reject_reason,
+                    github_pushed_at
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (canonical_url)
+                DO UPDATE SET
+                    source_type = EXCLUDED.source_type,
+                    source_url = EXCLUDED.source_url,
+                    repo_name = EXCLUDED.repo_name,
+                    repo_owner = EXCLUDED.repo_owner,
+                    title = EXCLUDED.title,
+                    category = EXCLUDED.category,
+                    language = EXCLUDED.language,
+                    is_korean_dev = EXCLUDED.is_korean_dev,
+                    stars = EXCLUDED.stars,
+                    license = EXCLUDED.license,
+                    relevance_score = EXCLUDED.relevance_score,
+                    beginner_value = EXCLUDED.beginner_value,
+                    quality_score = EXCLUDED.quality_score,
+                    summary_beginner = EXCLUDED.summary_beginner,
+                    summary_mid = EXCLUDED.summary_mid,
+                    summary_expert = EXCLUDED.summary_expert,
+                    tags = EXCLUDED.tags,
+                    status = EXCLUDED.status,
+                    reject_reason = EXCLUDED.reject_reason,
+                    github_pushed_at = EXCLUDED.github_pushed_at,
+                    updated_at = NOW()
+                RETURNING *
+                """,
+                (
+                    payload.get("source_type", "github"),
+                    payload.get("source_url"),
+                    payload.get("canonical_url"),
+                    payload.get("repo_name"),
+                    payload.get("repo_owner"),
+                    payload.get("title"),
+                    payload.get("category"),
+                    payload.get("language"),
+                    bool(payload.get("is_korean_dev", False)),
+                    _safe_int(payload.get("stars"), 0),
+                    payload.get("license"),
+                    payload.get("relevance_score"),
+                    payload.get("beginner_value"),
+                    payload.get("quality_score"),
+                    payload.get("summary_beginner"),
+                    payload.get("summary_mid"),
+                    payload.get("summary_expert"),
+                    payload.get("tags", []),
+                    payload.get("status", "pending"),
+                    payload.get("reject_reason"),
+                    payload.get("github_pushed_at"),
+                ),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def update_curated_content_admin(content_id: int, updates: Mapping[str, object]):
+    allowed_fields = [
+        "title",
+        "category",
+        "summary_beginner",
+        "summary_mid",
+        "summary_expert",
+        "tags",
+        "status",
+        "reject_reason",
+        "quality_score",
+        "relevance_score",
+        "beginner_value",
+        "license",
+    ]
+    fields_to_update: list[str] = []
+    params: list[object] = []
+
+    for field in allowed_fields:
+        if field in updates:
+            fields_to_update.append(f"{field} = %s")
+            params.append(updates[field])
+
+    if updates.get("status") == "approved":
+        fields_to_update.append("approved_at = NOW()")
+        if "approved_by" in updates:
+            fields_to_update.append("approved_by = %s")
+            params.append(updates["approved_by"])
+
+    if not fields_to_update:
+        return None
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+                UPDATE curated_content
+                SET {", ".join(fields_to_update)}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+            """
+            params.append(content_id)
+            cur.execute(query, params)
+            conn.commit()
+            return cur.fetchone()
+
+
+def delete_curated_content(content_id: int):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "DELETE FROM curated_content WHERE id = %s RETURNING id",
+                (content_id,),
+            )
+            deleted = cur.fetchone()
+            conn.commit()
+            return deleted
+
+
+def get_error_solution(error_hash: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM error_solutions WHERE error_hash = %s",
+                (error_hash,),
+            )
+            return cur.fetchone()
+
+
+def upsert_error_solution(
+    error_hash: str,
+    error_type: str,
+    error_excerpt: str,
+    solution: Mapping[str, object],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO error_solutions (error_hash, error_type, error_excerpt, solution)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (error_hash)
+                DO UPDATE SET
+                    error_type = EXCLUDED.error_type,
+                    error_excerpt = EXCLUDED.error_excerpt,
+                    solution = EXCLUDED.solution,
+                    updated_at = NOW()
+                RETURNING *
+                """,
+                (error_hash, error_type, error_excerpt, Json(solution)),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def increment_error_solution_feedback(error_hash: str, solved: bool):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            field = "solved_count" if solved else "failed_count"
+            cur.execute(
+                f"""
+                UPDATE error_solutions
+                SET {field} = {field} + 1, updated_at = NOW()
+                WHERE error_hash = %s
+                RETURNING *
+                """,
+                (error_hash,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def create_glossary_term_request(
+    requested_term: str,
+    context_note: Optional[str],
+    requester_ip: str,
+    requester_id: Optional[str] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO glossary_term_requests (
+                    requested_term,
+                    context_note,
+                    requester_id,
+                    requester_ip
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+                """,
+                (requested_term, context_note, requester_id, requester_ip),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def create_curated_related_click(
+    source_content_id: int,
+    target_content_id: int,
+    reason: Optional[str],
+    client_ip: Optional[str],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO curated_related_clicks (
+                    source_content_id,
+                    target_content_id,
+                    reason,
+                    client_ip
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+                """,
+                (source_content_id, target_content_id, reason, client_ip),
+            )
+            conn.commit()
+            return cur.fetchone()
 
 
 def get_admin_stats():

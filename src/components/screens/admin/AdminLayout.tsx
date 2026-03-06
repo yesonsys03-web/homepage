@@ -26,6 +26,11 @@ export function AdminLayout() {
     queryFn: async () => api.getAdminUsers(300),
     enabled: isAdminRole(user?.role),
   })
+  const curatedQuery = useQuery({
+    queryKey: ["admin-layout", "curated-pending"],
+    queryFn: async () => api.getAdminCuratedContent("pending", 1, 0),
+    enabled: isAdminRole(user?.role),
+  })
 
   if (isLoading) {
     return (
@@ -50,6 +55,7 @@ export function AdminLayout() {
           badges={{
             reports: reportsQuery.data?.total ?? 0,
             users: pendingApprovals,
+            curated: curatedQuery.data?.total ?? 0,
           }}
         />
       </div>
@@ -60,6 +66,7 @@ export function AdminLayout() {
             badges={{
               reports: reportsQuery.data?.total ?? 0,
               users: pendingApprovals,
+              curated: curatedQuery.data?.total ?? 0,
             }}
             onNavigate={() => setMobileNavOpen(false)}
           />

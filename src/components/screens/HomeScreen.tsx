@@ -12,7 +12,7 @@ import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
 import heroMobileImage from "../../../img/master_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface HomeScreenProps {
   onNavigate?: (screen: Screen) => void

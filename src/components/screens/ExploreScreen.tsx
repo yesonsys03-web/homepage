@@ -7,7 +7,7 @@ import { ProjectMeta } from "@/components/ProjectMeta"
 import { Button } from "@/components/ui/button"
 import { api, type FilterTab, type Project } from "@/lib/api"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 const HOT_PROJECT_THRESHOLD = 30
 

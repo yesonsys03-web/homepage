@@ -2514,3 +2514,352 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. 배포 직전 staging에서 숨김 퍼블리시 수동 점검 1회 수행 및 캡처 링크 기록
 2. 결과에 따라 18.2 게이트 `pending` 항목을 갱신
+
+## Session 2026-03-06-06
+
+### 1) Goal
+- `VIBE_01_github_content` → `VIBE_02_playground` → `VIBE_03_glossary` 순서로 MVP 기반 구조를 실제 코드에 반영한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`, `docs/VIBE_02_playground.md`, `docs/VIBE_03_glossary.md`
+- 사용자 요청: "VIBE_01_github_content VIBE_02_playground VIBE_03_glossary 기획안 순서대로 진행"
+- 제약 조건: 기존 코드 패턴 유지, 비밀값은 `.env.example`만 추가, 전체 빌드/테스트로 검증
+
+### 3) Design Decisions
+- VIBE_01은 즉시 통합 가능한 기초 계층(환경변수 템플릿, 수집/큐레이션 유틸 모듈)부터 구현한다.
+- VIBE_02는 에러 응급실 + 레시피북을 포함한 `PlaygroundScreen` MVP를 별도 라우트로 분리한다.
+- VIBE_03은 `glossary.json`(MVP 20개)과 `GlossaryScreen`을 도입해 검색/카테고리 흐름을 우선 완성한다.
+
+### 4) Implementation Notes
+- 백엔드(FastAPI)
+  - `server/.env.example`: Gemini/GitHub 키 및 호출 상한, 수집 제한 변수 추가
+  - `server/github_collector.py`: URL 정규화, 최근 업데이트 판별, 일일 한도 판별, 검색 쿼리 생성 유틸 추가
+  - `server/gemini_curator.py`: 품질 점수 계산, 자동 컷오프 판정, 3레벨 요약 품질 검증, fallback 템플릿 추가
+- 프론트(React)
+  - `src/components/screens/PlaygroundScreen.tsx`: 에러 응급실 입력(2,000자 제한), plan B 숨김 토글, 레시피 검색/카드 구현
+  - `src/components/screens/GlossaryScreen.tsx`: 용어 검색, 카테고리 필터, 비유 카드 목록 구현
+  - `src/data/glossary.ts`, `src/data/glossary.json`: MVP 20개 용어 데이터 추가
+  - `src/components/TopNav.tsx`, `src/App.tsx`: `playground`, `glossary` 라우트/네비게이션 연결
+  - 기존 화면 타입(`Screen`)을 신규 네비게이션 타입과 호환되도록 확장
+
+### 5) Validation
+- 정적 진단
+  - 변경 파일 대상 `lsp_diagnostics` 확인: 오류 없음
+- 프론트 빌드
+  - `pnpm build` 통과
+- 프론트 테스트
+  - `pnpm test`는 `.claude/worktrees/silly-wilbur` 경로 테스트가 함께 실행되어 기존 Invalid hook call로 실패(이번 변경과 무관)
+  - `pnpm exec vitest run src/App.admin-guard.smoke.test.tsx src/App.oauth-regression.test.tsx src/components/screens/AboutScreen.visibility.test.tsx --exclude ".claude/**"` 통과 (8 passed)
+- 백엔드 테스트
+  - `uv run pytest` 통과 (46 passed)
+
+### 6) Outcome
+#### 잘된 점
+- 세 기획안을 요청 순서대로 코드에 반영할 수 있는 MVP 구조(백엔드 기반 + 프론트 라우트 + 용어 데이터)를 한 번에 연결했다.
+
+#### 아쉬운 점
+- VIBE_01의 DB/스케줄러/실제 Gemini 호출 및 VIBE_02의 API 연동은 후속 단계로 남아 있다.
+
+#### 다음 액션
+1. VIBE_01 `curated_content` DB 마이그레이션과 `/api/curated` API를 실제로 연결한다.
+2. VIBE_02 `PlaygroundScreen`을 `/api/error-translate`와 연결해 fallback/rate limit 정책을 서버와 일치시킨다.
+3. VIBE_03 용어 신청 버튼 + 연관 용어 라우팅을 추가해 사전 UX를 완성한다.
+
+## Session 2026-03-06-07
+
+### 1) Goal
+- VIBE 후속 미완 항목을 마무리해 `GlossaryScreen` UX(연관 용어 이동, 용어 신청)와 `server/main.py` 타입/임포트 정리를 완료한다.
+
+### 2) Inputs
+- 직전 세션 인수인계: `GlossaryScreen`의 연관 용어 클릭/신청 흐름 미완
+- 안정화 필요 지점: `server/main.py`의 unused import 및 일부 타입 경고
+
+### 3) Design Decisions
+- 연관 용어 클릭 시 단순 태그 표시가 아니라 즉시 검색/포커스 흐름으로 전환한다.
+- 용어 신청은 별도 모달 대신 화면 하단 인라인 폼으로 배치해 탐색 맥락을 유지한다.
+- 서버는 동작 변경 없이 타입/임포트 정리만 수행해 리스크를 최소화한다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/GlossaryScreen.tsx`
+    - 연관 용어 태그를 버튼화하고 클릭 시 해당 용어 검색/강조(`activeTermId`) 적용
+    - 없는 용어 신청 폼 추가(용어/상황 메모)
+    - `api.requestGlossaryTerm` 연동 및 성공/실패 토스트 피드백 추가
+    - 신청 유효성(2~80자) 및 전송 중 상태 처리 추가
+- 백엔드
+  - `server/main.py`
+    - 미사용 import `ThreeLevelSummary` 제거
+    - `enforce_https_and_security_headers`, `_extract_client_ip`에 타입 주석 추가
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/GlossaryScreen.tsx` 오류 없음
+  - `lsp_diagnostics`: `server/main.py` 오류 없음(기존 warning 일부는 유지)
+- 프론트 빌드
+  - `pnpm build` 통과
+- 프론트 테스트
+  - `pnpm exec vitest run --exclude ".claude/**"` 통과 (10 files, 30 tests)
+- 백엔드 테스트
+  - 루트에서 `uv run pytest`는 pytest 미탑재 환경으로 실패
+  - `server/`에서 `uv run pytest` 통과 (46 passed)
+
+### 6) Outcome
+#### 잘된 점
+- VIBE_03의 핵심 미완 UX(연관 용어 이동, 용어 신청)를 실제 API 연동까지 포함해 닫았다.
+- 서버 코드는 동작 리스크 없이 타입/임포트 정리로 유지보수성을 높였다.
+
+#### 아쉬운 점
+- `server/main.py`에는 기존 기반 경고(미사용 변수/unused call result 등)가 일부 남아 있다.
+
+#### 다음 액션
+1. `server/main.py`의 기존 warning 구간을 별도 리팩터링 세션으로 정리
+2. `/api/curated` 공개/관리자 화면 연결(리스트/상세/승인) UI 완료
+
+## Session 2026-03-06-08
+
+### 1) Goal
+- VIBE_01의 미연결 구간인 큐레이션 공개 화면(리스트/상세)과 관리자 승인 화면을 실제 라우트/메뉴에 연결한다.
+
+### 2) Inputs
+- 기존 구현 상태: `/api/curated`, `/api/admin/curated*` API는 구현되어 있었지만 프론트 UI 연결이 없었음.
+- 사용자 지시: "진행해" (이전 분석 결과를 바로 구현으로 전환)
+
+### 3) Design Decisions
+- 공개 UX는 `/curated`(목록), `/curated/:contentId`(상세) 2단 구조로 분리.
+- 관리자 UX는 기존 Admin 패턴(DataTable + RowActions + EditDrawer)을 재사용해 리스크를 최소화.
+- 전역 내비게이션은 기존 `TopNav`/Quick Nav 흐름을 유지하되 `Curated` 진입점을 추가.
+
+### 4) Implementation Notes
+- 공개 화면
+  - 신규: `src/components/screens/CuratedScreen.tsx`
+    - 검색/카테고리/정렬/한국 개발자 필터
+    - `api.getCuratedContent` 연동
+    - 카드에서 상세 이동(`onOpenCurated`)
+  - 신규: `src/components/screens/CuratedDetailScreen.tsx`
+    - `api.getCuratedContentDetail` 연동
+    - 3단계 요약(초보/중급/전문가) 분리 표시
+- 라우팅/내비
+  - `src/App.tsx`
+    - Screen 타입에 `curated` 추가
+    - `/curated`, `/curated/:contentId` 라우트 추가
+    - Admin 라우트에 `/admin/curated` 추가
+    - Quick navigation에 `Curated` 버튼 추가
+  - `src/components/TopNav.tsx`
+    - `NavScreen` 및 `active`에 `curated` 추가
+    - 상단 메뉴에 `Curated` 버튼 추가
+  - 기존 주요 screen 타입에 `curated`를 포함하도록 확장
+- 관리자 화면
+  - 신규: `src/components/screens/admin/pages/AdminCurated.tsx`
+    - 상태 필터/검색/대기건 표시
+    - 승인/반려/요약편집/삭제 액션
+    - 수집 실행(`api.runAdminCuratedCollection`) 버튼
+  - `src/components/screens/admin/constants.ts`
+    - `AdminRouteKey`에 `curated`, 메타(`/admin/curated`) 추가
+  - `src/components/screens/admin/components/AdminSidebar.tsx`
+    - 큐레이션 메뉴 항목 추가
+  - `src/components/screens/admin/components/AdminHeader.tsx`
+    - breadcrumb에 `curated` 처리 추가
+  - `src/components/screens/admin/components/AdminCommandPalette.tsx`
+    - 커맨드 목록에 `curated` 추가
+  - `src/components/screens/admin/AdminLayout.tsx`
+    - pending 큐레이션 count 배지 조회/표시 추가
+
+### 5) Validation
+- 정적 진단
+  - 주요 변경 파일 대상 `lsp_diagnostics`: 오류 없음
+- 프론트 빌드
+  - `pnpm build` 통과
+- 프론트 테스트
+  - `pnpm exec vitest run --exclude ".claude/**"` 통과 (10 files, 30 tests)
+- 백엔드 테스트
+  - `server/`에서 `uv run pytest` 통과 (46 passed)
+
+### 6) Outcome
+#### 잘된 점
+- VIBE_01의 API-only 상태를 실제 사용자/관리자 화면까지 연결해 end-to-end 흐름을 닫았다.
+- 기존 Admin 패턴을 재사용해 구현 일관성과 유지보수성을 확보했다.
+
+#### 아쉬운 점
+- 큐레이션 화면 전용 테스트(리스트 필터/액션 시나리오)는 아직 추가하지 못했다.
+
+#### 다음 액션
+1. `CuratedScreen`/`AdminCurated`에 대한 smoke test 추가
+2. 큐레이션 상세에서 관련 항목 추천(동일 category/tag) 섹션 확장
+
+## Session 2026-03-06-09
+
+### 1) Goal
+- 직전 액션 아이템 2개를 즉시 완료한다.
+  - `CuratedScreen`/`AdminCurated` smoke test 추가
+  - 큐레이션 상세 관련 항목 추천 섹션 확장
+
+### 2) Inputs
+- 직전 구현: `/curated`, `/curated/:contentId`, `/admin/curated` 라우트 및 기본 UI 완성
+- 사용자 지시: "진행해"
+
+### 3) Design Decisions
+- 테스트는 기존 스타일(hoisted mock + RTL)과 동일하게 유지한다.
+- 관련 항목 추천은 서버 스키마 변경 없이 클라이언트 조합으로 구현한다.
+  - 동일 category 우선 조회
+  - tag overlap + quality/relevance를 합산한 점수로 정렬
+
+### 4) Implementation Notes
+- 추천 섹션 확장
+  - `src/components/screens/CuratedDetailScreen.tsx`
+    - 상세 로드 후 `api.getCuratedContent`를 추가 호출해 관련 항목 조회
+    - 현재 항목 제외 + 태그 겹침/점수 기반 정렬 후 상위 4개 노출
+    - 로딩/빈 상태 메시지 처리
+- 테스트 추가
+  - 신규: `src/components/screens/CuratedScreen.smoke.test.tsx`
+    - 목록 로드 및 상세 콜백(`onOpenCurated`) 호출 검증
+  - 신규: `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - 승인 액션 호출 검증
+    - 수집 실행 버튼 호출 검증
+    - 테스트 간 DOM 누수 방지를 위해 `cleanup()` 추가
+
+### 5) Validation
+- 정적 진단
+  - 신규/수정 테스트 파일 및 상세 화면 대상 `lsp_diagnostics` 오류 없음
+- 프론트 빌드
+  - `pnpm build` 통과
+- 프론트 테스트
+  - `pnpm exec vitest run --exclude ".claude/**"` 통과 (12 files, 33 tests)
+- 백엔드 테스트
+  - `server/`에서 `uv run pytest` 통과 (46 passed)
+
+### 6) Outcome
+#### 잘된 점
+- 직전 세션의 다음 액션 2개를 바로 소화해 기능과 검증 커버리지를 함께 확장했다.
+
+#### 아쉬운 점
+- 추천 랭킹은 현재 단순 가중치 기반이라 향후 클릭/피드백 기반 개선 여지가 있다.
+
+#### 다음 액션
+1. 추천 랭킹 실험(가중치 튜닝 + 클릭 이벤트 수집)
+2. `AdminCurated` 액션별 실패 시나리오 테스트 케이스 추가
+
+## Session 2026-03-06-10
+
+### 1) Goal
+- 추천 랭킹 가중치 튜닝과 `AdminCurated` 실패 시나리오 테스트 확장을 완료한다.
+
+### 2) Inputs
+- 사용자 지시: "진행해"
+- 직전 액션: 랭킹 튜닝 + 실패 테스트 보강
+
+### 3) Design Decisions
+- 추천 랭킹에 최신성(freshness)을 포함해 오래된 항목 과도 노출을 완화한다.
+- 유사도는 단일 지표 대신 복합 가중치로 계산한다.
+  - tag overlap
+  - quality/relevance
+  - freshness
+  - language/KR dev match 보너스
+- 테스트는 기존 smoke 스타일을 유지하되, 실패 분기를 독립 케이스로 추가한다.
+
+### 4) Implementation Notes
+- 추천 랭킹 튜닝
+  - `src/components/screens/CuratedDetailScreen.tsx`
+    - `parseDateMs`, `freshnessScore` 유틸 추가
+    - 관련 항목 조회 시 정렬 기준을 `latest`로 가져온 뒤 클라이언트 점수로 재정렬
+    - 최종 점수식:
+      - `overlap * 120`
+      - `quality * 9`
+      - `relevance * 8`
+      - `freshness * 2`
+      - `languageMatch * 12`
+      - `koreanMatch * 8`
+- 실패 테스트 확장
+  - `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - 기존 2개(success)에서 6개로 확장
+    - 추가 케이스:
+      1) 승인 실패 메시지
+      2) 반려 실패 메시지 + payload 검증
+      3) 삭제 실패 메시지
+      4) 수집 실행 실패 메시지
+
+### 5) Validation
+- 정적 진단
+  - 변경 파일 `lsp_diagnostics` 오류 없음
+- 프론트 빌드
+  - `pnpm build` 통과
+- 프론트 테스트
+  - `pnpm exec vitest run --exclude ".claude/**"` 통과 (12 files, 37 tests)
+- 백엔드 테스트
+  - `server/`에서 `uv run pytest` 통과 (46 passed)
+
+### 6) Outcome
+#### 잘된 점
+- 추천 품질을 단순 태그 매칭에서 최신성/품질/언어 맥락을 반영한 복합 점수로 개선했다.
+- 운영 리스크가 큰 실패 분기(승인/반려/삭제/수집)를 테스트로 고정했다.
+
+#### 아쉬운 점
+- 현재 가중치는 휴리스틱 기반이며 실제 사용자 클릭 데이터 기반 튜닝은 아직이다.
+
+#### 다음 액션
+1. 추천 클릭 이벤트 로깅 추가 및 가중치 A/B 실험
+2. `CuratedDetailScreen` 추천 목록의 이유 표시(예: 태그 일치 수, 최신 업데이트일)
+
+## Session 2026-03-06-11
+
+### 1) Goal
+- 직전 액션 2개를 실제 기능으로 완성한다.
+  - 추천 이유 표시
+  - 추천 클릭 이벤트 저장
+
+### 2) Inputs
+- 사용자 지시: "진행해"
+- 현재 상태: 추천 카드는 표시되지만 이유 텍스트/클릭 로그 영속 저장은 미구현
+
+### 3) Design Decisions
+- 클릭 로깅은 별도 테이블(`curated_related_clicks`)로 분리해 운영 리포트 확장성을 확보한다.
+- 추천 이유는 사용자에게 바로 설명 가능한 라벨(태그 일치/최근 업데이트/품질/언어/KR 매치)로 노출한다.
+- 추천 정렬은 최신성 포함 복합 점수 유지하되, 표시 이유는 최대 3개로 제한해 가독성을 유지한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - 신규 테이블: `curated_related_clicks`
+      - `source_content_id`, `target_content_id`, `reason`, `clicked_at`, `client_ip`
+    - 인덱스 추가:
+      - `idx_curated_related_clicks_source_target`
+      - `idx_curated_related_clicks_clicked_at`
+    - 신규 함수: `create_curated_related_click(...)`
+  - `server/main.py`
+    - import 추가: `create_curated_related_click`
+    - 신규 모델: `CuratedRelatedClickCreate`
+    - 신규 엔드포인트: `POST /api/curated/related-clicks`
+      - source/target id 검증
+      - self-click 차단
+      - 승인된 콘텐츠 존재 검증
+      - reason 길이(최대 200) 정리 + client ip 저장
+- 프론트
+  - `src/lib/api.ts`
+    - `CuratedRelatedClickResponse` 타입 추가
+    - `trackCuratedRelatedClick(source_content_id, target_content_id, reason?)` 메서드 추가
+  - `src/components/screens/CuratedDetailScreen.tsx`
+    - 추천 항목 상태를 `RelatedRecommendation` 구조로 전환 (`item + reasons`)
+    - 추천 카드에 이유 배지(최대 3개) 표시
+    - 추천 카드 클릭 시 `trackCuratedRelatedClick(...)` 호출 후 상세 이동
+
+### 5) Validation
+- 정적 진단
+  - 변경 파일 `lsp_diagnostics` 오류 없음
+  - `server/main.py`에는 기존 basedpyright warning 일부 존재(신규 작업과 무관)
+- 프론트 빌드
+  - `pnpm build` 통과
+- 프론트 테스트
+  - `pnpm exec vitest run --exclude ".claude/**"` 통과 (12 files, 37 tests)
+- 백엔드 테스트
+  - `server/`에서 `uv run pytest` 통과 (46 passed)
+
+### 6) Outcome
+#### 잘된 점
+- 추천 카드가 "왜 추천됐는지"를 설명하게 되어 탐색 신뢰도가 올라갔다.
+- 추천 클릭 로그를 영속 저장해 이후 추천 품질 개선(A/B 실험, 리포트) 기반을 마련했다.
+
+#### 아쉬운 점
+- 클릭 로그 조회용 관리자 리포트/API는 아직 미구현이다.
+
+#### 다음 액션
+1. `curated_related_clicks` 집계 API + 관리자 대시보드 카드 추가
+2. 추천 이유 생성 규칙을 서버 측으로 이동해 일관성 강화

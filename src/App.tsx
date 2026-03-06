@@ -24,6 +24,9 @@ type Screen =
   | 'login'
   | 'register'
   | 'explore'
+  | 'curated'
+  | 'playground'
+  | 'glossary'
   | 'challenges'
   | 'about'
 
@@ -73,6 +76,11 @@ const AdminContent = lazy(async () => {
   return { default: module.AdminContent }
 })
 
+const AdminCurated = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminCurated')
+  return { default: module.AdminCurated }
+})
+
 const AdminReports = lazy(async () => {
   const module = await import('./components/screens/admin/pages/AdminReports')
   return { default: module.AdminReports }
@@ -96,6 +104,26 @@ const AdminLogs = lazy(async () => {
 const ExploreScreen = lazy(async () => {
   const module = await import('./components/screens/ExploreScreen')
   return { default: module.ExploreScreen }
+})
+
+const CuratedScreen = lazy(async () => {
+  const module = await import('./components/screens/CuratedScreen')
+  return { default: module.CuratedScreen }
+})
+
+const CuratedDetailScreen = lazy(async () => {
+  const module = await import('./components/screens/CuratedDetailScreen')
+  return { default: module.CuratedDetailScreen }
+})
+
+const PlaygroundScreen = lazy(async () => {
+  const module = await import('./components/screens/PlaygroundScreen')
+  return { default: module.PlaygroundScreen }
+})
+
+const GlossaryScreen = lazy(async () => {
+  const module = await import('./components/screens/GlossaryScreen')
+  return { default: module.GlossaryScreen }
 })
 
 const ChallengesScreen = lazy(async () => {
@@ -152,6 +180,18 @@ function getScreenMeta(screen: Screen, projectId: string | null): { title: strin
       title: '탐색 | VibeCoder Playground',
       description: '다양한 바이브코딩 프로젝트를 탐색하고 영감을 얻어보세요.',
     },
+    curated: {
+      title: '큐레이션 | VibeCoder Playground',
+      description: '초보자에게 실질적으로 도움이 되는 엄선된 레포를 탐색합니다.',
+    },
+    playground: {
+      title: '플레이그라운드 | VibeCoder Playground',
+      description: '에러 응급실과 명령어 레시피북으로 막히는 순간을 빠르게 해결합니다.',
+    },
+    glossary: {
+      title: '용어사전 | VibeCoder Playground',
+      description: '코딩 용어를 일상 비유로 쉽게 이해하는 바이브 용어사전입니다.',
+    },
     challenges: {
       title: '챌린지 | VibeCoder Playground',
       description: '커뮤니티 챌린지에 참여하고 새로운 실험을 시작해보세요.',
@@ -197,6 +237,10 @@ function parseRoute(pathname: string): RouteState {
   if (pathname === '/login') return { screen: 'login', projectId: null, editingProjectId: null }
   if (pathname === '/register') return { screen: 'register', projectId: null, editingProjectId: null }
   if (pathname === '/explore') return { screen: 'explore', projectId: null, editingProjectId: null }
+  if (pathname === '/curated') return { screen: 'curated', projectId: null, editingProjectId: null }
+  if (/^\/curated\/\d+$/.test(pathname)) return { screen: 'curated', projectId: null, editingProjectId: null }
+  if (pathname === '/playground') return { screen: 'playground', projectId: null, editingProjectId: null }
+  if (pathname === '/glossary') return { screen: 'glossary', projectId: null, editingProjectId: null }
   if (pathname === '/challenges') return { screen: 'challenges', projectId: null, editingProjectId: null }
   if (pathname === '/about') return { screen: 'about', projectId: null, editingProjectId: null }
   return { screen: 'home', projectId: null, editingProjectId: null }
@@ -205,6 +249,9 @@ function parseRoute(pathname: string): RouteState {
 function getPathForScreen(screen: Screen, projectId: string | null): string {
   if (screen === 'home') return '/'
   if (screen === 'explore') return '/explore'
+  if (screen === 'curated') return '/curated'
+  if (screen === 'playground') return '/playground'
+  if (screen === 'glossary') return '/glossary'
   if (screen === 'challenges') return '/challenges'
   if (screen === 'about') return '/about'
   if (screen === 'submit') return '/submit'
@@ -229,6 +276,9 @@ function isScreen(value: string | null): value is Screen {
     'login',
     'register',
     'explore',
+    'curated',
+    'playground',
+    'glossary',
     'challenges',
     'about',
   ].includes(value)
@@ -408,6 +458,10 @@ function AppContent() {
     navigate(`/submit/${encodeURIComponent(projectId)}/edit`)
   }
 
+  const openCuratedDetail = (contentId: number) => {
+    navigate(`/curated/${contentId}`)
+  }
+
   const screenMeta = useMemo(
     () => getScreenMeta(currentScreen, selectedProjectId),
     [currentScreen, selectedProjectId],
@@ -448,6 +502,24 @@ function AppContent() {
           className={`px-3 py-1 rounded text-sm ${currentScreen === 'explore' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
         >
           Explore
+        </button>
+        <button
+          onClick={() => handleNavigate('curated')}
+          className={`px-3 py-1 rounded text-sm ${currentScreen === 'curated' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
+        >
+          Curated
+        </button>
+        <button
+          onClick={() => handleNavigate('playground')}
+          className={`px-3 py-1 rounded text-sm ${currentScreen === 'playground' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
+        >
+          Playground
+        </button>
+        <button
+          onClick={() => handleNavigate('glossary')}
+          className={`px-3 py-1 rounded text-sm ${currentScreen === 'glossary' ? 'bg-[#23D5AB] text-[#0B1020]' : 'text-[#B8C3E6]'}`}
+        >
+          Glossary
         </button>
         <button
           onClick={() => handleNavigate('challenges')}
@@ -516,6 +588,10 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<HomeScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
             <Route path="/explore" element={<ExploreScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
+            <Route path="/curated" element={<CuratedScreen onNavigate={handleNavigate} onOpenCurated={openCuratedDetail} />} />
+            <Route path="/curated/:contentId" element={<CuratedDetailScreen onNavigate={handleNavigate} />} />
+            <Route path="/playground" element={<PlaygroundScreen onNavigate={handleNavigate} />} />
+            <Route path="/glossary" element={<GlossaryScreen onNavigate={handleNavigate} />} />
             <Route path="/challenges" element={<ChallengesScreen onNavigate={handleNavigate} />} />
             <Route path="/about" element={<AboutScreen onNavigate={handleNavigate} />} />
             <Route path="/submit" element={<SubmitScreen onNavigate={handleNavigate} />} />
@@ -525,6 +601,7 @@ function AppContent() {
               <Route index element={<AdminDashboard />} />
               <Route path="users" element={<AdminUsers />} />
               <Route path="content" element={<AdminContent />} />
+              <Route path="curated" element={<AdminCurated />} />
               <Route path="reports" element={<AdminReports />} />
               <Route path="pages" element={<AdminPages />} />
               <Route path="policies" element={<AdminPolicies />} />
