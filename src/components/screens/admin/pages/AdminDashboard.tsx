@@ -16,16 +16,7 @@ import { ActivityFeed } from "@/components/screens/admin/components/ActivityFeed
 import { KpiCard } from "@/components/screens/admin/components/KpiCard"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
-
-function extractCuratedThresholdHistory(reason?: string) {
-  const text = (reason || "").trim()
-  if (!text) return null
-
-  const match = text.match(/(?:^|,\s*)curated_quality_threshold=(\d+)/)
-  if (!match) return null
-
-  return Number(match[1])
-}
+import { extractCuratedThresholdHistoryEntry } from "./policyHistory"
 
 function formatSignedDelta(value: number): string {
   if (value === 0) return "변화 없음"
@@ -106,16 +97,9 @@ export function AdminDashboard() {
   }))
   const thresholdHistory = (policyHistoryQuery.data?.items ?? [])
     .map((log) => {
-      const threshold = extractCuratedThresholdHistory(log.reason)
-      if (threshold === null) return null
-      return {
-        id: log.id,
-        threshold,
-        admin: log.admin_nickname || "admin",
-        at: new Date(log.created_at).toLocaleString("ko-KR"),
-      }
+      return extractCuratedThresholdHistoryEntry(log)
     })
-    .filter((entry): entry is { id: string; threshold: number; admin: string; at: string } => entry !== null)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
   return (
     <div className="space-y-6">
@@ -203,7 +187,10 @@ export function AdminDashboard() {
                         to={`/admin/logs?actionType=policy_updated&query=${encodeURIComponent("curated_quality_threshold")}&targetLogId=${encodeURIComponent(entry.id)}`}
                         className="flex items-center justify-between gap-3 rounded border border-slate-700/80 px-2 py-1.5 transition hover:border-slate-500 hover:bg-slate-900/70"
                       >
-                        <span>Q {entry.threshold}</span>
+                        <span>
+                          Q {entry.threshold}
+                          {entry.previousThreshold !== null ? ` (${formatSignedDelta(entry.threshold - entry.previousThreshold)})` : ""}
+                        </span>
                         <span className="text-slate-500">{entry.admin} · {entry.at}</span>
                       </Link>
                     ))

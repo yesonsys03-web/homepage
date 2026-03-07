@@ -194,6 +194,18 @@ export interface Report {
   resolved_at?: string
 }
 
+export interface AdminPolicyFieldChange {
+  previous?: unknown
+  next?: unknown
+}
+
+export interface AdminActionLogMetadata {
+  event?: string
+  changed_fields?: Record<string, AdminPolicyFieldChange>
+  curated_quality_threshold?: AdminPolicyFieldChange
+  [key: string]: unknown
+}
+
 export interface AdminActionLog {
   id: string
   admin_id?: string
@@ -202,6 +214,7 @@ export interface AdminActionLog {
   target_type: string
   target_id: string
   reason?: string
+  metadata?: AdminActionLogMetadata
   created_at: string
 }
 

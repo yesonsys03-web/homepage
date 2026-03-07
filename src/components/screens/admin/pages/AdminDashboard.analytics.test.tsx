@@ -71,7 +71,20 @@ describe("AdminDashboard analytics", () => {
           action_type: "policy_updated",
           target_type: "moderation_settings",
           target_id: "00000000-0000-0000-0000-000000000001",
-          reason: "keywords=1, threshold=3, retention_days=180, view_window_days=14, mask_reasons=false, page_editor_enabled=true, rollout_stage=qa, pilot_admin_count=1, curated_quality_threshold=52",
+          reason: "curated_quality_threshold=52, curated_quality_threshold_previous=45, keywords=1, threshold=3, retention_days=180, view_window_days=14, mask_reasons=false, page_editor_enabled=true, rollout_stage=qa, pilot_admin_count=1, curated_quality_threshold_next=52",
+          metadata: {
+            event: "policy_update",
+            curated_quality_threshold: {
+              previous: 45,
+              next: 52,
+            },
+            changed_fields: {
+              curated_review_quality_threshold: {
+                previous: 45,
+                next: 52,
+              },
+            },
+          },
           created_at: "2026-03-07T01:00:00Z",
         },
       ],
@@ -161,6 +174,7 @@ describe("AdminDashboard analytics", () => {
     expect(screen.getByText("현재 품질 기준")).toBeInTheDocument()
     expect(screen.getAllByText("Q 52").length).toBeGreaterThan(0)
     expect(screen.getByText("최근 기준 변경")).toBeInTheDocument()
+    expect(screen.getByText("Q 52 (+7)")).toBeInTheDocument()
     expect(screen.getByText("라이선스 검토")).toBeInTheDocument()
     expect(screen.getByText("중복 검토")).toBeInTheDocument()
     expect(screen.getByText("품질 검토")).toBeInTheDocument()
