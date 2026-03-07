@@ -2623,6 +2623,895 @@ curl -X POST http://localhost:8000/api/auth/login \
 2. VIBE_02 `PlaygroundScreen`을 `/api/error-translate`와 연결해 fallback/rate limit 정책을 서버와 일치시킨다.
 3. VIBE_03 용어 신청 버튼 + 연관 용어 라우팅을 추가해 사전 UX를 완성한다.
 
+## Session 2026-03-07-03
+
+### 1) Goal
+- `VIBE_01~03` 남은 항목을 다시 점검하고, 가장 즉시 가치가 큰 `VIBE_02` 레시피북 UX 미완 영역을 실제 코드로 진전시킨다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`, `docs/VIBE_02_playground.md`, `docs/VIBE_03_glossary.md`
+- 현재 상태 확인: GitHub 수집 파이프라인은 유틸 계층 중심, Glossary는 기본 UX 완료, Playground는 하드코딩 레시피 MVP 상태
+
+### 3) Design Decisions
+- 남은 항목 중에서 리스크가 낮고 사용자 체감이 큰 `VIBE_02` 레시피북 강화를 우선한다.
+- 레시피 데이터는 문서 기획과 맞게 `JSON`으로 분리해 이후 어드민 콘텐츠 보강 흐름과도 자연스럽게 연결한다.
+- 화면은 별도 페이지 분리보다 기존 `PlaygroundScreen` 안에서 레시피북 섹션을 완성도 있게 강화한다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/data/recipes.json`: 카테고리/명령어/설명/주의문구를 가진 레시피 데이터셋 추가
+  - `src/data/recipes.ts`: JSON 로더 및 타입 정의 추가
+  - `src/components/screens/PlaygroundScreen.tsx`
+    - 카테고리 탭 필터 추가
+    - 명령어 복사 버튼 추가
+    - "이게 뭐야?" 설명 아코디언 추가
+    - localStorage 기반 즐겨찾기 추가
+    - 결과 없음 empty state 추가
+- 테스트
+  - `src/components/screens/PlaygroundScreen.test.tsx`: 카테고리 필터/즐겨찾기+설명 열기 동작 검증 추가
+
+### 5) Validation
+- 정적 진단/프론트 테스트/빌드는 이번 변경 직후 재실행해 확인한다.
+
+### 6) Outcome
+#### 잘된 점
+- `VIBE_02` 문서에 남아 있던 레시피 데이터 분리, 카테고리 탐색, 설명 펼치기, 즐겨찾기 흐름을 실제 화면으로 진전시켰다.
+
+#### 아쉬운 점
+- 레시피북 전용 별도 라우트와 어드민 작성 워크플로는 아직 남아 있다.
+
+#### 다음 액션
+1. 레시피북 즐겨찾기를 사용자 계정 단위 저장으로 승격할지 검토한다.
+2. `VIBE_03` 카드 갤러리/오늘의 추천 카드 같은 2차 UX를 이어서 구현한다.
+3. `VIBE_01` 실제 GitHub 수집/승인 파이프라인을 백엔드에서 확장한다.
+
+## Session 2026-03-07-04
+
+### 1) Goal
+- `VIBE_03`에서 기본 사전 검색 MVP 다음 단계였던 카드 갤러리와 오늘의 추천 카드 UX를 실제 화면으로 확장한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_03_glossary.md`
+- 현재 상태: `GlossaryScreen`은 검색/카테고리/연관 용어/용어 신청까지 완료, 카드 갤러리와 오늘의 추천 카드 위젯은 미구현
+
+### 3) Design Decisions
+- glossary 데이터는 새 API 없이 기존 `glossary.ts`를 그대로 재사용한다.
+- 오늘의 추천 카드는 날짜 기반 결정 함수로 고정해 하루 동안 같은 결과를 보여주도록 한다.
+- 카드 갤러리는 별도 화면 분리 대신 `GlossaryScreen`과 `HomeScreen`에서 재사용 가능한 컴포넌트로 만든다.
+
+### 4) Implementation Notes
+- 공통
+  - `src/data/glossary.ts`
+    - 카테고리 톤 매핑 유틸 추가
+    - 날짜 기반 `pickDailyGlossaryTerms()` 추가
+- 컴포넌트
+  - `src/components/GlossaryCardGallery.tsx`: 앞/뒤집기 카드 갤러리 추가
+  - `src/components/TodayGlossaryCards.tsx`: 오늘의 추천 용어 3장 위젯 추가
+- 화면 연결
+  - `src/components/screens/GlossaryScreen.tsx`
+    - 오늘의 추천 용어 섹션 추가
+    - 실생활 비유 카드 갤러리 섹션 추가
+    - 추천/갤러리 카드 클릭 시 기존 검색/포커스 UX와 연결
+  - `src/components/screens/HomeScreen.tsx`
+    - 홈에서 바로 glossary로 이어지는 오늘의 용어 위젯 추가
+- 테스트
+  - `src/components/screens/GlossaryScreen.test.tsx`: 추천 카드/갤러리 렌더링과 포커스 이동 검증 추가
+
+### 5) Validation
+- 변경 파일 LSP 확인, glossary 전용 테스트, 프론트 build 재실행으로 검증한다.
+
+### 6) Outcome
+#### 잘된 점
+- `VIBE_03`의 "구경하는 재미"와 "오늘 다시 오는 이유"를 실제 UI로 연결했다.
+
+#### 아쉬운 점
+- 오늘의 용어 XP/퀴즈, 전역 호버 팝업, 즉석 번역기 확장 기능은 아직 남아 있다.
+
+#### 다음 액션
+1. 오늘의 용어 카드에 XP/퀴즈를 연결할지 설계한다.
+2. glossary hover popover를 Curated/Playground까지 확장할 기반을 잡는다.
+3. `VIBE_01` 실제 GitHub 수집/승인 파이프라인 구현으로 다시 돌아간다.
+
+## Session 2026-03-07-05
+
+### 1) Goal
+- `VIBE_01`의 가장 큰 미완 지점인 GitHub 실제 후보 수집 파이프라인을 샘플 하드코딩 단계에서 한 단계 더 현실 구현으로 전진시킨다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`
+- 현재 상태: `/api/admin/curated/run`은 동작은 하지만 GitHub API 대신 샘플 2건만 저장하고 있었다.
+
+### 3) Design Decisions
+- 실제 GitHub Search API 후보 수집을 우선 붙이고, Gemini 실호출은 다음 단계로 미룬다.
+- Gemini 미연동 구간은 heuristic 평가 + 비LLM 3레벨 요약으로 메워서 운영 파이프라인을 먼저 현실화한다.
+- 토큰이 없는 로컬/개발 환경은 기존처럼 완전히 막지 않고 명시적 샘플 fallback 메시지를 반환한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/github_collector.py`
+    - GitHub Search API 조회 추가
+    - owner profile 조회 + 한국 개발자 위치 판별 추가
+    - 최근 90일 업데이트 필터와 canonical URL 기반 후보 정규화 강화
+  - `server/gemini_curator.py`
+    - heuristic 큐레이션 점수/카테고리/태그/사유 생성 추가
+    - 비LLM 3레벨 요약 생성 추가
+  - `server/main.py`
+    - `/api/admin/curated/run`이 실제 후보 수집기와 연결되도록 변경
+    - `GITHUB_TOKEN` 존재 시 실제 GitHub 후보 수집 사용
+    - 토큰 부재 시 샘플 fallback 메시지 반환
+    - upsert 결과의 `inserted` 플래그를 기준으로 `created` 수를 정확히 계산
+  - `server/db.py`
+    - `create_or_update_curated_content()`가 PostgreSQL `xmax = 0` 기반 `inserted` 여부를 함께 반환
+- 테스트
+  - `server/tests/test_admin_curated_collection_api.py`: 실제 후보 수집 연결, 토큰 없는 fallback, 신규 insert 카운트 계산 검증 추가
+
+### 5) Validation
+- 관련 백엔드 pytest를 재실행해 수동 수집 엔드포인트 회귀를 확인한다.
+
+### 6) Outcome
+#### 잘된 점
+- `VIBE_01` 수동 수집 엔드포인트가 더 이상 데모용 샘플 고정이 아니라 실제 GitHub 후보를 받을 수 있는 형태로 진전됐다.
+
+#### 아쉬운 점
+- Gemini 실호출, README excerpt 활용, 스케줄러/APScheduler, 어드민 알림 메일은 아직 후속이다.
+
+#### 다음 액션
+1. README excerpt를 포함한 실제 Gemini 평가/요약 호출을 붙인다.
+2. `server/scheduler.py`와 FastAPI lifespan 등록으로 자동 수집까지 연결한다.
+3. 어드민 pending 큐에서 라이선스 검토/복구 플로를 더 세분화한다.
+
+## Session 2026-03-07-06
+
+### 1) Goal
+- `VIBE_01` 백엔드 수집 경로를 이어가기 전에 남아 있던 타입 에러를 정리하고, 관련 테스트/임포트 검증을 다시 닫는다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`, `docs/VIBE_01_github_content.md`
+- 현재 상태: `server/tests/test_admin_curated_collection_api.py`에 `relevance_score` 비교 타입 에러 1개가 남아 있었고, `server/github_collector.py`는 JSON payload 접근이 다소 느슨했다.
+
+### 3) Design Decisions
+- 테스트는 응답 JSON을 바로 `Any`처럼 다루지 않고, 작은 typed helper로 `dict[str, object]`를 보장한 뒤 단언한다.
+- GitHub collector는 API payload를 받자마자 `dict[str, object]` 형태로 정규화해 이후 필드 접근을 더 안전하게 만든다.
+- 이번 세션은 기능 확장보다 안정화에 집중하고, 실제 기능 회귀는 pytest와 import check로 빠르게 닫는다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/tests/test_admin_curated_collection_api.py`
+    - `_json_body()` helper를 추가해 JSON object 응답을 typed dict로 다루도록 정리
+    - `relevance_score`를 `int`로 확인한 뒤 비교하도록 바꿔 operator type error 제거
+    - fallback 메시지도 `str` 확인 후 검증하도록 정리
+  - `server/github_collector.py`
+    - `JsonObject` alias와 `_as_json_object()` helper를 추가
+    - search 결과 item / owner payload / license payload 접근을 정규화된 dict 기준으로 정리
+    - `korean_cache.setdefault(...)`를 명시적 분기로 바꿔 불필요한 경고를 줄임
+    - `_github_get_json()`에서 응답 bytes decode 후 JSON object/list 형태를 명시적으로 판별
+
+### 5) Validation
+- 확인 항목: 타입 에러 제거, curated 수집 회귀 없음, backend import 정상 여부
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py` -> `25 passed`
+  - `cd server && uv run python -c "import main; print('ok')"` -> `ok`
+  - LSP 기준 `server/tests/test_admin_curated_collection_api.py`, `server/github_collector.py`의 error는 0건으로 확인
+
+### 6) Outcome
+#### 잘된 점
+- 직전 세션에서 남긴 acceptance blocker였던 테스트 타입 에러를 제거했고, 수집기 JSON handling도 한 단계 더 견고해졌다.
+
+#### 아쉬운 점
+- `server/github_collector.py`와 일부 테스트 파일에는 여전히 basedpyright warning이 남아 있어 다음 안정화 때 추가 정리가 가능하다.
+
+#### 다음 액션
+1. `server/github_collector.py` warning을 더 줄일지 결정한다.
+2. README excerpt 기반 Gemini 평가/요약 실호출을 붙인다.
+3. 자동 수집 스케줄러와 admin pending 운영 흐름을 이어서 구현한다.
+
+## Session 2026-03-07-07
+
+### 1) Goal
+- `VIBE_01` GitHub 큐레이션 수집 흐름에 README excerpt 수집과 Gemini 실평가/실요약 단계를 붙여 운영 파이프라인을 한 단계 더 현실화한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 현재 상태: GitHub Search API 기반 후보 수집은 붙어 있었지만, 평가/요약은 여전히 heuristic 기반이었고 README 본문은 활용하지 못하고 있었다.
+
+### 3) Design Decisions
+- Gemini 연동은 별도 SDK를 새로 넣지 않고 표준 HTTP 요청 기반으로 붙여 현재 `uv` 워크플로와 의존성 부담을 유지한다.
+- GitHub README는 후보 수집 직후 excerpt만 짧게 가져와 Gemini prompt와 heuristic fallback 둘 다에서 활용한다.
+- Gemini 키가 없거나 호출/파싱이 실패해도 수집 API가 중단되지 않도록 기존 heuristic 평가/요약을 강한 fallback으로 유지한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/github_collector.py`
+    - `fetch_github_readme_excerpt()` 추가
+    - GitHub raw README endpoint를 호출해 excerpt를 가져오고 최대 길이 기준으로 잘라 prompt 입력 크기를 제어
+    - GitHub header 생성을 `_build_github_headers()`로 공통화
+  - `server/gemini_curator.py`
+    - `GeminiCurationResult` 추가
+    - `curate_repository_with_gemini()` 추가
+    - Gemini REST API(`generateContent`)에 JSON-only 응답을 요청하고, 응답 text -> JSON 파싱 -> 평가/3레벨 요약 검증 흐름 추가
+    - heuristic/비LLM summary도 `readme_excerpt`를 참고하도록 보강
+  - `server/main.py`
+    - `GEMINI_API_KEY`, `GEMINI_MODEL`, `GITHUB_README_EXCERPT_MAX_CHARS` env 설정 추가
+    - `_load_curated_collection_candidates()`에서 README excerpt를 수집하고 Gemini/heuristic intelligence를 합성하도록 변경
+    - `_build_curated_candidate_intelligence()` helper를 추가해 Gemini 성공 시 실결과를 사용하고 실패 시 heuristic로 되돌아가도록 정리
+    - `/api/admin/curated/run`은 후보에 이미 포함된 summary를 우선 사용하고, 비어 있으면 기존 fallback을 적용하도록 유지
+- 테스트
+  - `server/tests/test_admin_curated_collection_api.py`
+    - Gemini configured path에서 README excerpt + Gemini summary/evaluation이 저장 payload에 반영되는지 검증 추가
+    - Gemini 실패 시 heuristic fallback으로 저장이 계속되는지 검증 추가
+- 설정 문서
+  - `server/.env.example`에 `GEMINI_MODEL`, `GITHUB_README_EXCERPT_MAX_CHARS` 추가
+
+### 5) Validation
+- 확인 항목: Gemini 연동 추가 후 curated run 회귀 없음, fallback 유지, import 가능, 수정 파일 LSP error 0건
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py` -> `26 passed`
+  - `cd server && uv run python -c "import main; print('ok')"` -> `ok`
+  - LSP error 0건 확인: `server/gemini_curator.py`, `server/github_collector.py`, `server/main.py`, `server/tests/test_admin_curated_collection_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- 큐레이션 수집이 GitHub metadata 수준을 넘어 README 문맥과 Gemini 기반 요약까지 활용할 수 있는 구조로 전진했다.
+- Gemini가 실패해도 운영 수집 API가 계속 동작하도록 fallback을 유지해 리스크를 낮췄다.
+
+#### 아쉬운 점
+- Gemini 응답 품질/비용/레이트리밋 튜닝과 prompt 개선은 아직 운영 데이터 기반 보정이 필요하다.
+- README excerpt는 아직 DB에 별도 저장하지 않고 수집 시점 enrichment에만 사용한다.
+
+#### 다음 액션
+1. `server/scheduler.py`와 lifespan 등록으로 자동 수집을 붙인다.
+2. Gemini 호출 실패/성공률을 관리자 관점에서 관찰할 수 있게 로그나 액션 메타데이터를 남긴다.
+3. pending 큐에서 라이선스/품질/중복 검토 플로를 더 세분화한다.
+
+## Session 2026-03-07-08
+
+### 1) Goal
+- `VIBE_01` 큐레이션 수집을 수동 관리자 실행에만 의존하지 않도록 자동 스케줄러를 붙이고 앱 lifecycle에 안전하게 연결한다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`, `docs/VIBE_01_github_content.md`
+- 현재 상태: `/api/admin/curated/run`은 수동 실행 기준으로만 동작했고, 앱 startup/shutdown에는 admin log cleanup loop만 등록돼 있었다.
+
+### 3) Design Decisions
+- 자동 수집은 관리자 엔드포인트와 같은 수집 파이프라인을 재사용하되, 개발용 샘플 fallback은 절대 사용하지 않도록 분리한다.
+- 스케줄러는 별도 `server/scheduler.py`로 분리해 periodic loop / task cancellation을 재사용 가능한 형태로 둔다.
+- 자동 수집은 기본 비활성화 상태로 두고, env 설정으로만 켜지게 해 로컬 개발 환경에서 예기치 않은 수집이 일어나지 않게 한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/scheduler.py`
+    - `run_periodic_async_loop()` 추가
+    - `cancel_background_task()` 추가
+  - `server/main.py`
+    - `perform_curated_collection_run()` helper로 수동 수집 핵심 로직을 분리
+    - `_load_curated_collection_candidates(..., allow_sample_fallback=...)`로 자동/수동 모드 차이를 명시
+    - `run_curated_collection_scheduler_iteration()` 추가
+    - startup 시 `AUTO_CURATED_COLLECTION_ENABLED`가 켜져 있으면 periodic task를 생성하고, shutdown 시 clean cancel 하도록 확장
+    - 새 env: `AUTO_CURATED_COLLECTION_ENABLED`, `AUTO_CURATED_COLLECTION_RUN_ON_STARTUP`, `AUTO_CURATED_COLLECTION_INTERVAL_SECONDS`
+- 테스트
+  - `server/tests/test_admin_curated_collection_api.py`
+    - automatic mode에서 샘플 fallback을 건너뛰는지 검증 추가
+    - scheduler iteration이 `allow_sample_fallback=False`로 helper를 호출하는지 검증 추가
+- 설정 문서
+  - `server/.env.example`에 자동 수집 관련 env 추가
+
+### 5) Validation
+- 확인 항목: scheduler helper 추가 후 기존 curated run 회귀 없음, automatic mode 샘플 차단, import/LSP 정상
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py` -> `28 passed`
+  - `cd server && uv run python -c "import main; import scheduler; print('ok')"` -> `ok`
+  - LSP error 0건 확인: `server/main.py`, `server/scheduler.py`, `server/tests/test_admin_curated_collection_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- 자동 수집이 lifecycle에 연결되면서 운영자가 매번 수동으로 버튼을 누르지 않아도 되는 기반이 생겼다.
+- 자동 모드에서 샘플 후보가 저장되는 사고를 막아 운영/개발 경계를 분명히 했다.
+
+#### 아쉬운 점
+- 자동 수집 결과를 관리자 UI에서 직접 관찰하는 상태판이나 action log 연동은 아직 없다.
+- 스케줄러는 현재 단순 interval 기반이라 cron 수준 세밀 제어는 후속이다.
+
+#### 다음 액션
+1. 자동 수집 성공/실패/생성 건수를 관리자 액션 로그나 observability 카드에 남긴다.
+2. pending 큐에 라이선스/중복/품질 검토 상태를 더 세분화한다.
+3. 필요하면 interval 기반 대신 cron 성격의 스케줄 정책으로 확장한다.
+
+## Session 2026-03-07-09
+
+### 1) Goal
+- 자동 큐레이션 수집 결과를 관리자 로그/관측 지표에서 바로 볼 수 있게 연결해 background 작업 가시성을 높인다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 현재 상태: 자동 수집 스케줄러는 붙어 있었지만 성공/실패/건너뜀 여부와 생성 건수는 운영 화면에서 확인할 수 없었다.
+
+### 3) Design Decisions
+- 새 엔드포인트를 만들지 않고 기존 `/api/admin/action-logs/observability` payload를 확장해 page editor 관측과 함께 보이도록 한다.
+- 자동 수집 이벤트는 기존 `admin_action_logs`를 재사용하고, `target_id`는 raw 문자열 대신 deterministic UUID로 저장해 현재 스키마 제약을 따른다.
+- 프론트 검증은 실제 `src/` 경로의 Vitest 실행으로 확인하고, `.claude/worktrees` 쪽 중복 테스트 실패는 작업 범위 밖 워크트리 이슈로 분리한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `log_curated_collection_action()` 추가
+    - scheduler iteration이 `curated_collection_succeeded`, `curated_collection_skipped`, `curated_collection_failed` 액션을 기록하도록 변경
+    - `curated_collection_action_target_id()`로 deterministic UUID target을 생성
+  - `server/db.py`
+    - `get_admin_action_observability()`에 자동 수집 로그 집계 추가
+    - `daily_curated_collection_counts`, `curated_collection_summary`, `curated_collection_failure_distribution` 반환
+- 프론트
+  - `src/lib/api.ts`
+    - `AdminActionObservability` 타입에 자동 수집 관측 필드 추가
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - 자동 수집 성공/건너뜀/실패/생성 카드 추가
+    - 일별 자동 수집 실행 목록, 실패 원인 분포 UI 추가
+- 테스트
+  - `server/tests/test_admin_curated_collection_api.py`
+    - scheduler success/skip/failure action logging 검증 추가
+  - `server/tests/test_admin_page_editor_api.py`
+    - observability 응답에 새 curated 필드가 포함되는지 검증 추가
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - 새 자동 수집 메트릭과 분포 UI 검증 추가
+
+### 5) Validation
+- 확인 항목: scheduler action log 기록, observability payload 확장, admin logs UI 반영, build 회귀 없음
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_curated_collection_api.py tests/test_admin_page_editor_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py` -> `54 passed`
+  - `cd server && uv run python -c "import main; import scheduler; print('ok')"` -> 이전 세션에서 `ok` 확인 유지
+  - `cd src && ../node_modules/.bin/vitest run components/screens/admin/pages/AdminLogs.observability.test.tsx` -> `1 passed`
+  - `npm run build` -> passed
+  - LSP error 0건 확인: `server/main.py`, `server/db.py`, `src/components/screens/admin/pages/AdminLogs.tsx`, `src/lib/api.ts`
+
+### 6) Outcome
+#### 잘된 점
+- 자동 수집 백그라운드 작업이 이제 관리자 화면의 기존 로그/관측 패널에 자연스럽게 드러난다.
+- 스케줄러 이벤트를 기존 운영 로그 체계 안에 넣어 별도 대시보드 없이도 상태를 추적할 수 있게 됐다.
+
+#### 아쉬운 점
+- `.claude/worktrees` 내부 중복 프론트 테스트들은 여전히 별도 React hook 환경 문제로 실패하며, 이는 현재 실제 앱 소스 변경과는 분리된 워크트리 이슈다.
+- 자동 수집 액션 로그는 현재 문자열 reason 기반 메타데이터라 이후 구조화 필드가 필요할 수 있다.
+
+#### 다음 액션
+1. pending 큐에 라이선스/중복/품질 검토 상태를 더 세분화한다.
+2. 자동 수집 로그 메타데이터를 구조화하거나 관리자 카드 drill-down을 추가한다.
+3. 필요하면 cron 성격의 스케줄 정책과 수집 pause/resume 토글까지 확장한다.
+
+## Session 2026-03-07-10
+
+### 1) Goal
+- 큐레이션 pending 큐를 라이선스/중복/품질 검토 상태로 더 세분화해 운영자가 왜 멈춰 있는 항목인지 바로 구분할 수 있게 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 사용자 피드백/이슈: 프론트 명령은 `pnpm` 기준으로 맞출 것
+- 현재 상태: curated status는 사실상 `pending`/`approved`/`rejected`/`auto_rejected`만 의미 있게 쓰였고, 검수 큐의 세부 이유를 표현하지 못했다.
+
+### 3) Design Decisions
+- 새 review status를 `review_license`, `review_duplicate`, `review_quality`로 추가하되, 기존 `pending`은 일반 검수 대기로 유지한다.
+- 자동 수집은 명확한 케이스만 자동 분류한다: 라이선스 불명확 -> `review_license`, 품질 점수 낮음 -> `review_quality`, duplicate는 관리자 수동 분류로 둔다.
+- 검수 대기 뱃지/카운트는 `pending` 하나가 아니라 review queue 전체(`pending` + 3개 review 상태)를 합산해 보여준다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - curated status 상수와 `CURATED_REVIEW_QUEUE_STATUSES` 추가
+    - `CuratedAdminUpdateRequest.status` literal 범위를 review 상태까지 확장
+    - `determine_curated_collection_status()` 추가
+    - 자동 수집 저장 시 라이선스/품질 기준에 따라 review status를 할당하도록 변경
+- 프론트
+  - `src/lib/api.ts`
+    - `CuratedContent.status` union에 review 상태 추가
+  - `src/components/screens/admin/AdminLayout.tsx`
+    - curated badge count를 review queue 전체 합산으로 변경
+  - `src/components/screens/admin/pages/AdminCurated.tsx`
+    - 상태 필터에 `review_license`, `review_duplicate`, `review_quality` 추가
+    - 상태 badge를 운영자 친화 라벨로 표시
+    - row action에 `라이선스 검토`, `중복 검토`, `품질 검토` 추가
+    - 검수 대기 카운트를 review queue 전체 합산으로 변경
+- 테스트
+  - `server/tests/test_admin_curated_collection_api.py`
+    - 자동 상태 분기(license/quality review) 검증 추가
+  - `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - 품질 검토 전환 액션 검증 추가
+    - aggregated review queue count 표시 검증 추가
+
+### 5) Validation
+- 확인 항목: review status 자동 분기, 관리자 검수 액션/필터, pnpm 기반 프론트 검증, build 회귀 없음
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_curated_collection_api.py tests/test_admin_page_editor_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py` -> `56 passed`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx` -> `2 files passed, 9 tests passed`
+  - `pnpm build` -> passed
+  - LSP error 0건 확인: `server/main.py`, `server/tests/test_admin_curated_collection_api.py`, `src/components/screens/admin/pages/AdminCurated.tsx`, `src/components/screens/admin/AdminLayout.tsx`, `src/lib/api.ts`
+
+### 6) Outcome
+#### 잘된 점
+- 운영자가 pending 큐를 볼 때 "왜 이 항목을 봐야 하는지"가 상태만으로 바로 드러나게 됐다.
+- 자동 수집도 막연한 pending 대신 라이선스/품질 검토 큐로 바로 밀어 넣어 후속 운영 우선순위를 세우기 쉬워졌다.
+
+#### 아쉬운 점
+- duplicate 검토는 아직 자동 판별이 아니라 수동 triage 액션 중심이다.
+- review status별 전용 설명/필터 칩/대시보드 위젯까지는 아직 추가하지 않았다.
+
+#### 다음 액션
+1. duplicate 후보 자동 탐지 규칙을 설계해 `review_duplicate`를 더 적극적으로 활용한다.
+2. review status별 운영 가이드 문구를 관리자 화면과 `docs/admin_menual.md`에 반영한다.
+3. 관리자 대시보드에 curated review queue breakdown 위젯을 추가한다.
+
+## Session 2026-03-07-11
+
+### 1) Goal
+- `review_duplicate` 상태를 수동 전환용 라벨에만 두지 않고, 자동 수집 단계에서 중복 의심 후보를 바로 분류하도록 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 현재 상태: 라이선스/품질 review는 자동 분기되지만 duplicate review는 관리자 수동 액션으로만 들어갈 수 있었다.
+
+### 3) Design Decisions
+- duplicate 판별은 저장 직전 `perform_curated_collection_run()`에서 수행해 기존 curated row와 같은 수집 배치 내 후보 둘 다 비교한다.
+- 신호는 단순하면서 설명 가능한 값만 사용한다: `canonical_url`, `repo_owner + repo_name`, 정규화된 `title`.
+- exact canonical upsert와 별개로, 제목/owner-repo가 사실상 같은 후보는 운영 검토가 필요하므로 `review_duplicate`로 보낸다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `perform_curated_collection_run()`에 `processed_candidates` 추적 추가
+    - `determine_curated_collection_status()`가 `existing_items`, `processed_items`를 받아 duplicate 여부까지 함께 판단하도록 확장
+    - `is_curated_duplicate_candidate()` 추가
+    - `_normalize_curated_title()` 추가
+    - canonical URL 일치, owner/repo 일치, 정규화 title 일치 시 `review_duplicate`로 라우팅
+- 테스트
+  - `server/tests/test_admin_curated_collection_api.py`
+    - 기존 curated row 기준 duplicate review 분기 검증 추가
+    - 같은 배치 내 processed item 기준 duplicate review 분기 검증 추가
+
+### 5) Validation
+- 확인 항목: duplicate review 자동 분기, 기존 review queue 회귀 없음, pnpm/uv 기반 검증 성공
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_curated_collection_api.py tests/test_admin_page_editor_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py` -> `58 passed`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx` -> `2 files passed, 9 tests passed`
+  - `pnpm build` -> passed
+  - LSP error 0건 확인: `server/main.py`, `server/tests/test_admin_curated_collection_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- duplicate 검토가 더 이상 수동 triage에만 의존하지 않고 자동 수집 단계에서 바로 분류된다.
+- 기존 curated DB와 동일 배치 후보까지 함께 비교해 중복성 높은 후보를 더 일찍 분리할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재 duplicate 판별은 보수적 문자열/URL 기반이라 README나 설명의 의미적 유사성까지는 보지 않는다.
+- duplicate 이유를 운영 UI에 별도 상세 사유로 노출하진 않았다.
+
+#### 다음 액션
+1. `docs/admin_menual.md`와 관리자 화면에 review status별 운영 가이드를 반영한다.
+2. 관리자 대시보드에 curated review queue breakdown 위젯을 추가한다.
+3. 필요하면 duplicate 사유(`title_match`, `owner_repo_match` 등)를 별도 메타데이터로 저장한다.
+
+## Session 2026-03-07-12
+
+### 1) Goal
+- 세분화된 curated review status를 운영자가 한눈에 볼 수 있도록 관리자 대시보드 breakdown 위젯과 운영 메뉴얼을 마무리한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: review queue 분기(`pending`, `review_license`, `review_duplicate`, `review_quality`)는 구현되어 있었지만, 대시보드 요약과 운영 절차 문서화가 남아 있었다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- 새 API를 만들지 않고 `get_admin_action_observability()` 응답에 review queue breakdown을 추가해 `AdminLogs`와 `AdminDashboard`가 같은 운영 집계 소스를 공유하도록 했다.
+- 대시보드 위젯은 총 검수 대기 수와 상태별 적체를 동시에 보여 주는 1개 섹션으로 구성해, 운영자가 `/admin/curated` 진입 전 병목을 먼저 파악할 수 있게 했다.
+- 운영 메뉴얼은 단순 상태 사전이 아니라 자동 분기 규칙, 운영 순서, 이상 징후 해석까지 포함해 실제 triage 문서로 확장했다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/lib/api.ts`
+    - `AdminActionObservability`에 `curated_review_queue_summary` 추가
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - `api.getAdminActionObservability(30)` 조회 추가
+    - `Curated 검수 큐` 위젯 추가
+    - 총 검수 대기 수와 `pending`, `review_license`, `review_duplicate`, `review_quality` 상태 카드를 렌더링
+  - `src/components/screens/admin/pages/AdminDashboard.analytics.test.tsx`
+    - observability mock 확장 및 새 위젯 렌더링 검증 추가
+- 백엔드
+  - `server/db.py`
+    - `curated_contents` 상태 집계를 추가해 `curated_review_queue_summary` 반환
+  - `server/tests/test_admin_page_editor_api.py`
+    - observability 응답에 review queue summary가 포함되는지 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - curated review queue 운영 가이드 섹션 추가
+    - 상태 의미, 자동 분기 원칙, 운영자가 보는 화면, 권장 운영 순서, 이상 징후 해석 정리
+
+### 5) Validation
+- 확인 항목: observability payload 확장, 대시보드 위젯 렌더링, 운영 문서 반영, pnpm/uv 기준 검증 성공
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_page_editor_api.py tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 0건 확인 예정/동반 수행
+
+### 6) Outcome
+#### 잘된 점
+- 관리자 대시보드에서 review queue 병목을 먼저 확인하고 곧바로 `/admin/curated`로 이어지는 운영 루프가 생겼다.
+- 자동 수집 관측, 검수 큐 적체, 운영 메뉴얼이 서로 같은 상태 모델을 공유하게 됐다.
+
+#### 아쉬운 점
+- duplicate 사유는 아직 개수만 보이며, `canonical_url`/`owner_repo`/`title` 중 어떤 신호였는지는 저장하지 않는다.
+
+#### 다음 액션
+1. duplicate review 사유를 구조화 메타데이터로 저장할지 결정한다.
+2. 필요하면 dashboard에서 상태 카드를 클릭해 `/admin/curated` 필터로 바로 이동하는 deep link를 추가한다.
+
+## Session 2026-03-07-13
+
+### 1) Goal
+- duplicate review를 단순 상태값이 아니라 설명 가능한 메타데이터까지 남기고, 대시보드 검수 카드에서 해당 필터 화면으로 바로 진입할 수 있게 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `review_duplicate` 자동 분기는 동작했지만 어떤 신호로 분류되었는지 row 자체에는 남지 않았고, 대시보드 카드는 숫자만 보여 주는 상태였다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- curated row에는 범용 `review_metadata` JSONB 컬럼을 추가해 duplicate 신호를 구조화해 저장한다.
+- duplicate 메타데이터는 현재 `canonical_url_match`, `owner_repo_match`, `title_match`, `matched_existing_ids`, `matched_processed_titles`까지만 담아 설명 가능성을 우선한다.
+- 대시보드 상태 카드는 새 라우트를 만들지 않고 `/admin/curated?status=...` deep link를 사용해 기존 운영 화면을 재사용한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `curated_content.review_metadata JSONB` 컬럼 추가/보정
+    - create/update upsert 경로에 `review_metadata` 저장 추가
+    - observability 집계 쿼리의 테이블명 오타 `curated_contents` -> `curated_content` 수정
+  - `server/main.py`
+    - `CuratedDuplicateReviewMetadata` 타입 추가
+    - `serialize_curated_content()`에 `review_metadata` 노출 추가
+    - `build_curated_duplicate_review_metadata()` 추가
+    - 자동 수집 시 duplicate 분기 결과를 `review_metadata`에 저장
+  - `server/tests/test_admin_curated_collection_api.py`
+    - duplicate metadata 구조화 결과 테스트 추가
+- 프론트
+  - `src/lib/api.ts`
+    - `CuratedContent.review_metadata` 타입 추가
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - review status 카드를 `/admin/curated?status=...` 링크로 변경
+  - `src/components/screens/admin/pages/AdminCurated.tsx`
+    - `useSearchParams()`로 status query string 동기화
+    - duplicate reason 칩과 기존 항목 ID/같은 배치 후보 제목 표시 추가
+  - `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - query string 초기 진입과 duplicate reason 표시 검증 추가
+
+### 5) Validation
+- 확인 항목: review metadata 저장/직렬화, query-string 상태 필터, duplicate reason UI, pnpm/uv 기준 검증 성공
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_page_editor_api.py tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- `review_duplicate`가 왜 붙었는지 운영자가 테이블에서 바로 이해할 수 있게 됐다.
+- 대시보드 숫자 확인 -> 해당 상태 filtered queue 진입까지 한 번에 이어지는 triage 흐름이 생겼다.
+
+#### 아쉬운 점
+- 아직 duplicate 대상의 상세 row snapshot(예: 상대 canonical URL/title 전체 값)은 저장하지 않는다.
+
+#### 다음 액션
+1. 필요하면 duplicate 상세 팝오버 또는 compare drawer를 추가한다.
+2. review metadata를 라이선스/품질 검토 사유까지 확장할지 검토한다.
+
+## Session 2026-03-07-14
+
+### 1) Goal
+- `review_metadata`를 duplicate 전용에서 license/quality review까지 확장해 검수 큐 전체가 설명 가능한 상태 모델을 갖게 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: duplicate review는 구조화 메타데이터가 있었지만 `review_license`, `review_quality`는 단순 status만 남고 있었다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- `review_metadata`는 상태별 공통 필드 `reason_codes`를 두고, 필요 시 상태별 보조 필드(`license_value`, `quality_score_value`, `quality_threshold`)를 추가하는 방식으로 확장했다.
+- duplicate 전용 boolean 플래그는 유지하되, UI는 `reason_codes`를 우선 렌더링하도록 바꿔 review queue 전체를 같은 방식으로 표시한다.
+- quality 기준값은 현재 서버 결정 로직과 맞춘 `45`를 명시적으로 저장해 나중에 정책값으로 바뀌어도 당시 판단 근거를 추적할 수 있게 했다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `build_curated_review_metadata()` 추가
+    - duplicate/license/quality review 모두 `review_metadata` 생성 경로를 공유하도록 정리
+    - duplicate metadata에 `reason_codes` 추가
+  - `server/tests/test_admin_curated_collection_api.py`
+    - missing license, low quality metadata 검증 테스트 추가
+- 프론트
+  - `src/lib/api.ts`
+    - `reason_codes`, `license_value`, `quality_score_value`, `quality_threshold` 타입 추가
+  - `src/components/screens/admin/pages/AdminCurated.tsx`
+    - generic review reason chip 렌더링 추가
+    - quality 점수/기준, license 값 표시 추가
+  - `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - license/quality review metadata 표시 테스트 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - license/quality review metadata 해석 포인트 추가
+
+### 5) Validation
+- 확인 항목: reason_codes 기반 렌더링, license/quality metadata 저장, pnpm/uv 기준 검증 성공
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_page_editor_api.py tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- 이제 review queue의 세 핵심 상태(duplicate/license/quality)가 모두 "왜 이 상태인지"를 row 단위에서 바로 설명한다.
+- 운영자는 큐레이션 테이블에서 원인 칩과 근거 값을 함께 보며 더 빠르게 triage할 수 있다.
+
+#### 아쉬운 점
+- 현재 `reason_codes`는 영어 내부 코드값을 기준으로 저장하므로, 외부 API 문서까지 열 경우 별도 코드 사전이 추가로 있으면 더 친절하다.
+
+#### 다음 액션
+1. review reason 코드를 관리자 문서/화면에서 더 자세히 설명하는 도움말 UI를 추가한다.
+2. 추후 정책값이 runtime 설정으로 이동하면 quality threshold도 정책 기반으로 직렬화한다.
+
+## Session 2026-03-07-15
+
+### 1) Goal
+- curated quality review 기준을 운영 정책값으로 끌어올리고, 관리자 큐 화면에서 review reason의 의미를 즉시 이해할 수 있게 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `quality_below_threshold`는 구조화돼 있었지만 기준값 `45`가 코드에 고정돼 있었고, reason chip 의미는 운영자가 문서를 따로 봐야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- quality 기준은 `moderation_settings`에 `curated_review_quality_threshold`로 추가해 `/admin/policies`에서 조정하도록 했다.
+- 상태 결정 함수는 `quality_threshold`를 인자로 받는 순수 함수 형태를 유지하고, 실제 수집 실행에서만 정책값을 주입한다.
+- review reason 도움말은 새 툴팁 시스템을 도입하지 않고 `AdminCurated` 상단의 `Review Reason Guide` 카드로 제공해 구현 리스크를 낮췄다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `moderation_settings.curated_review_quality_threshold` 컬럼 추가/조회/업데이트 경로 반영
+  - `server/main.py`
+    - `DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD` 추가
+    - `get_effective_moderation_settings()` / `ensure_baseline_moderation_settings()` / `update_admin_policies()`에 새 정책값 연결
+    - `perform_curated_collection_run()`이 정책값을 읽어 `determine_curated_collection_status()`와 `build_curated_review_metadata()`에 주입
+  - `server/tests/test_admin_curated_collection_api.py`
+    - custom threshold status/metadata 테스트 추가
+- 프론트
+  - `src/lib/api.ts`
+    - `ModerationPolicy`와 `updateAdminPolicies()` payload에 `curated_review_quality_threshold` 추가
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - `Curated 품질 검토 기준(1~100)` 입력 필드 추가
+  - `src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx`
+    - 새 정책 필드 load/save 검증 추가
+  - `src/components/screens/admin/pages/AdminCurated.tsx`
+    - `Review Reason Guide` 카드 추가
+  - `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - guide 카드 노출 검증 추가
+
+### 5) Validation
+- 확인 항목: 정책 저장/로드, custom threshold 적용, review reason guide 노출, pnpm/uv 기준 검증 성공
+- 테스트/검증 결과:
+  - `cd server && uv run --group dev pytest tests/test_admin_page_editor_api.py tests/test_admin_curated_collection_api.py tests/test_curated_related_api.py tests/test_admin_user_enforcement.py`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminPolicies.log-policy.test.tsx components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- quality review 정책이 운영 화면에서 직접 조정 가능해져 triage volume을 운영자가 제어할 수 있게 됐다.
+- 큐 화면만 열어도 reason chip 의미를 바로 확인할 수 있어 문서 왕복이 줄었다.
+
+#### 아쉬운 점
+- 현재 reason guide는 정적 카드라 row별 상황에 따라 접혀 있거나 hover되는 더 정교한 UX는 아직 아니다.
+
+#### 다음 액션
+1. `AdminDashboard` 또는 `AdminPolicies`에 현재 curated quality threshold를 함께 노출한다.
+2. review reason guide를 collapsible/inline helper 형태로 더 다듬는다.
+
+## Session 2026-03-07-16
+
+### 1) Goal
+- 운영자가 현재 curated quality 기준을 대시보드/정책 화면에서 바로 볼 수 있게 하고, review reason guide는 접기/펼치기 가능한 도움말로 다듬는다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: quality threshold는 정책값으로 옮겨졌지만 대시보드에서 바로 보이지 않았고, `Review Reason Guide`는 항상 펼쳐져 있어 테이블 밀도를 높였다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- 대시보드는 별도 새 endpoint 없이 `api.getAdminPolicies()`를 추가 조회해 현재 quality threshold를 `Curated 검수 큐` 요약 카드 안에 함께 보여 준다.
+- `AdminPolicies`는 입력 필드 아래에 현재 기준이 실제 분기 로직에서 어떻게 쓰이는지 한 줄 설명을 붙여 정책 영향도를 즉시 이해하게 했다.
+- `AdminCurated`의 review guide는 기본 접힘 상태 + `가이드 펼치기/접기` 버튼으로 바꿔, 평소에는 테이블 집중도를 높이고 필요 시에만 설명을 보게 했다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - `api.getAdminPolicies()` query 추가
+    - `Curated 검수 큐` hero에 현재 `품질 기준 Q` 표시 추가
+  - `src/components/screens/admin/pages/AdminDashboard.analytics.test.tsx`
+    - dashboard threshold 표시와 policies query 호출 검증 추가
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - `Curated 품질 검토 기준(1~100)` 아래 현재 분기 의미 설명 박스 추가
+  - `src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx`
+    - 설명 박스와 threshold 저장 흐름 검증 유지/확장
+  - `src/components/screens/admin/pages/AdminCurated.tsx`
+    - `showReviewReasonGuide` state 추가
+    - `ChevronDown` / `ChevronUp` 기반 guide toggle 추가
+  - `src/components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+    - guide 기본 접힘/수동 펼침 검증 추가
+
+### 5) Validation
+- 확인 항목: dashboard threshold 요약, policy 설명 박스, collapsible guide UX, pnpm 기준 검증 성공
+- 테스트/검증 결과:
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminPolicies.log-policy.test.tsx components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- 운영자는 threshold 값을 dashboard와 policy 화면에서 모두 확인할 수 있어 정책-적체 관계를 더 빠르게 읽을 수 있다.
+- review guide가 기본 접힘 상태가 되면서 큐레이션 테이블의 시선 분산이 줄었다.
+
+#### 아쉬운 점
+- dashboard가 policies query를 추가로 한 번 더 호출하므로, 나중에는 observability payload나 shared bootstrap payload로 묶을 여지가 있다.
+
+#### 다음 액션
+1. dashboard/curated에 threshold 변경 이력까지 보여 줄지 검토한다.
+2. review guide를 row context 기반 inline helper로 더 정교하게 다듬는다.
+
+## Session 2026-03-07-17
+
+### 1) Goal
+- 운영자가 current threshold뿐 아니라 최근 curated quality threshold 변경 이력도 대시보드/정책 화면에서 바로 확인할 수 있게 한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: 현재 `Q` 값은 보였지만, 언제/누가 바꿨는지는 `활동 로그` 화면을 별도로 검색해야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- 새 DB 구조나 새 API endpoint를 만들지 않고, 기존 `policy_updated` 액션 로그의 `reason` 문자열에 이미 기록되는 `curated_quality_threshold=...` 값을 재사용한다.
+- 대시보드는 최근 3건만 짧게 보여 주는 운영 요약용, `AdminPolicies`는 최근 5건까지 보여 주는 설정 이력용으로 역할을 나눴다.
+- threshold 파싱은 프론트에서 단순 정규식으로 처리해 백엔드 변경 범위를 최소화했다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - `api.getAdminActionLogs(6, { actionType: "policy_updated" })` query 추가
+    - `curated_quality_threshold` 이력을 추출해 `최근 기준 변경` 목록 표시
+  - `src/components/screens/admin/pages/AdminDashboard.analytics.test.tsx`
+    - threshold history 목록과 filtered log query 호출 검증 추가
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - `useQuery`로 `policy_updated` 로그를 조회해 `최근 품질 기준 변경` 카드 추가
+  - `src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx`
+    - threshold history 렌더링과 log query 호출 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - dashboard/policies에서 threshold history를 해석하는 포인트 추가
+
+### 5) Validation
+- 확인 항목: dashboard history, policies history, pnpm 기준 검증 성공
+- 테스트/검증 결과:
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminPolicies.log-policy.test.tsx components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- 운영자는 이제 `현재 기준`과 `최근 변경 이력`을 같은 컨텍스트에서 같이 볼 수 있어 threshold 변화와 queue 변화의 관계를 빠르게 읽을 수 있다.
+- 새 저장소나 새 로그 체계를 추가하지 않고 기존 admin action log 자산을 그대로 재활용했다.
+
+#### 아쉬운 점
+- 현재는 `reason` 문자열 파싱에 의존하므로, 장기적으로는 정책 변경 payload를 구조화 저장하면 더 안전하다.
+
+#### 다음 액션
+1. `policy_updated` reason을 구조화 JSON으로 남길지 검토한다.
+2. threshold history에서 변경 전/후 diff까지 표시할지 검토한다.
+
+## Session 2026-03-07-18
+
+### 1) Goal
+- threshold history를 단순 조회용이 아니라 바로 탐색 가능한 운영 shortcut으로 만들기 위해 `활동 로그` deep link까지 연결한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: 대시보드/정책 화면에 최근 `Q` 변경 목록은 보였지만, 세부 로그를 보려면 운영자가 다시 `활동 로그`에 들어가 수동으로 필터를 쳐야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- deep link 대상은 `/admin/logs?actionType=policy_updated&query=curated_quality_threshold`로 고정해 가장 관련성 높은 로그 집합으로 바로 이동하게 했다.
+- `AdminLogs`는 별도 전역 상태를 만들지 않고 `useSearchParams()`로 필터 상태를 URL과 양방향 동기화해, 링크 진입과 수동 필터 수정이 모두 같은 모델을 쓰게 했다.
+- dashboard/policies history row는 `Link`로 감싸 클릭 affordance를 주되, 추가 버튼을 만들지 않아 UI 밀도를 유지했다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - `useSearchParams()` 추가
+    - `query`, `actionType`, `actorId`, `pageId`, `windowDays`를 URL과 동기화
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - threshold history row를 `/admin/logs?actionType=policy_updated&query=curated_quality_threshold` 링크로 변경
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - threshold history row를 동일 deep link로 변경
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - query string 기반 초기 필터/observability window 반영 테스트 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - threshold history row가 활동 로그 shortcut 역할을 한다는 점 명시
+
+### 5) Validation
+- 확인 항목: AdminLogs query param sync, threshold history deep link, pnpm 기준 검증 성공
+- 테스트/검증 결과:
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminPolicies.log-policy.test.tsx components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- threshold history를 보고 바로 관련 `policy_updated` 로그로 이동할 수 있어, 정책 변경 맥락 추적 시간이 줄었다.
+- `AdminLogs`가 URL-driven filter를 지원하게 되어 다른 admin deep link 확장 기반도 생겼다.
+
+#### 아쉬운 점
+- 현재 deep link는 `curated_quality_threshold` 키워드 단위라 특정 개별 row id까지 pinpoint 하지는 않는다.
+
+#### 다음 액션
+1. `AdminLogs`에 selected row 강조 또는 anchor 개념을 추가해 deep link 정밀도를 높인다.
+2. 추후 다른 admin cards도 동일 query-param deep link 패턴으로 통일한다.
+
+## Session 2026-03-07-19
+
+### 1) Goal
+- threshold history deep link가 단순 필터 이동을 넘어서, 도착한 `policy_updated` row를 즉시 식별할 수 있게 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: threshold history에서 `/admin/logs`로는 이동했지만, 같은 키워드가 포함된 다른 로그가 있으면 운영자가 다시 눈으로 target row를 찾아야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- deep link는 기존 `actionType`/`query`에 더해 `targetLogId`를 함께 전달한다.
+- `AdminLogs`는 `targetLogId`가 있으면 안내 배너를 보여 주고, 해당 row에만 강조 스타일(`data-highlighted=true`)을 적용한다.
+- query 결과에 같은 keyword를 가진 row가 여러 개 있어도 target row만 강조되도록 해서 precision을 높였다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - threshold history link에 `targetLogId` 추가
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - 동일 deep link 파라미터 추가
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - `targetLogId` query param 읽기
+    - 안내 배너 렌더링
+    - target row에 highlight class + `data-highlighted` 속성 부여
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - target row highlight 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - highlight 안내 메시지 해석 추가
+
+### 5) Validation
+- 확인 항목: target row highlight, query-param deep link 유지, pnpm 기준 검증 성공
+- 테스트/검증 결과:
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminPolicies.log-policy.test.tsx components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminCurated.smoke.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- threshold history -> 활동 로그 이동 후 어떤 row를 봐야 하는지 즉시 드러난다.
+- `targetLogId` 패턴이 생겨 다른 admin deep link에도 같은 precision을 재사용할 수 있다.
+
+#### 아쉬운 점
+- target row가 현재 필터 결과에 없으면 highlight는 당연히 보이지 않으므로, 미래에는 미스매치 fallback 안내를 더 줄 수 있다.
+
+#### 다음 액션
+1. target row가 결과에 없을 때 fallback toast/banner를 추가한다.
+2. 다른 admin cards에도 `targetLogId` deep link 패턴을 확장한다.
+
 ## Session 2026-03-06-07
 
 ### 1) Goal

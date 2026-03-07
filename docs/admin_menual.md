@@ -167,14 +167,98 @@ uv lock
 - 최근 작업 기준으로 추천 이유는 `reason_code + label` 기준으로 정리되어 있고, 과거 자유 텍스트 reason은 서버에서 정규화해 집계한다.
 - 운영자가 봐야 할 핵심 지표는 top pair, top reason, source content 기준 필터다.
 
-## 10. DB 관점에서 기억할 점
+## 10. curated review queue 운영 가이드
+
+### 10-1. 현재 review status 의미
+- `pending`
+  - 일반 검수 대기
+  - 자동 수집은 통과했지만 운영자가 최종 확인해야 하는 기본 상태다.
+- `review_license`
+  - 라이선스 정보가 비어 있거나 불명확한 후보
+  - 재사용 가능 여부를 먼저 확인해야 한다.
+  - `review_metadata.reason_codes`에 `license_missing` 또는 `license_unrecognized`가 남는다.
+- `review_duplicate`
+  - 기존 curated 또는 같은 수집 배치 안에서 중복 의심 신호가 감지된 후보
+  - 현재 신호는 `canonical_url`, `repo_owner + repo_name`, 정규화된 `title` 기준이다.
+  - 관리자 화면에서는 `review_metadata` 기반으로 `URL 일치`, `owner/repo 일치`, `제목 일치` 칩을 함께 보여 준다.
+- `review_quality`
+  - 수집은 되었지만 quality 기준이 낮아 추가 검토가 필요한 후보
+  - README/Gemini/heuristic 결과를 함께 보고 유지 여부를 판단한다.
+  - 현재 기준 미달 신호는 `review_metadata.reason_codes = ["quality_below_threshold"]`이며 `quality_score_value`, `quality_threshold`도 함께 저장된다.
+  - `quality_threshold`는 이제 정책 설정의 `Curated 품질 검토 기준` 값과 동기화된다.
+- `approved`
+  - 공개 노출 가능한 상태
+- `rejected`
+  - 운영자가 수동 반려한 상태
+- `auto_rejected`
+  - 자동 수집 단계에서 cutoff에 걸려 바로 제외된 상태
+
+### 10-2. 자동 수집 후 상태 분기 원칙
+- `POST /api/admin/curated/run` 수동 실행과 startup/scheduler 자동 실행 모두 같은 분기 로직을 탄다.
+- 현재 분기 순서
+  1. auto cutoff면 `auto_rejected`
+  2. duplicate 신호면 `review_duplicate`
+  3. 라이선스 없음/불명확이면 `review_license`
+  4. quality 낮으면 `review_quality`
+  5. 그 외는 `pending`
+- 즉, 운영자가 수동 triage하지 않아도 라이선스/중복/품질 이슈가 먼저 분리된다.
+
+### 10-3. 운영자가 실제로 보는 화면
+- `/admin`
+  - 대시보드의 `Curated 검수 큐` 카드에서 상태별 적체 현황을 먼저 본다.
+  - 총 대기 건수와 `pending`, `review_license`, `review_duplicate`, `review_quality` 분포를 바로 확인할 수 있다.
+  - 상태 카드를 클릭하면 `/admin/curated?status=...`로 바로 이동한다.
+  - 같은 카드 안에 현재 `품질 기준(Q)`이 함께 보이므로, queue 증가가 기준 상향 때문인지도 바로 해석할 수 있다.
+  - 카드 하단의 `최근 기준 변경` 목록은 `policy_updated` 로그에서 추출한 최근 `curated_quality_threshold` 변경 이력이다.
+  - 이력 행을 클릭하면 `/admin/logs?actionType=policy_updated&query=curated_quality_threshold`로 이동해 관련 로그만 바로 본다.
+  - 최근 버전부터 이동 직후 해당 로그 row는 강조 표시되어 어떤 이력에서 내려왔는지 한눈에 확인할 수 있다.
+- `/admin/curated`
+  - 실제 검수/승인/반려 작업을 수행하는 화면
+  - 상태 필터를 `pending`, `review_license`, `review_duplicate`, `review_quality`, `approved`, `rejected`, `auto_rejected` 기준으로 좁혀 본다.
+  - `review_duplicate` 항목은 duplicate reason 칩과 기존 항목 ID/같은 배치 후보 제목까지 함께 확인할 수 있다.
+  - `review_license`, `review_quality`도 reason 칩과 추가 수치/라이선스 값이 함께 보이므로 별도 원문 로그를 열지 않고 1차 triage가 가능하다.
+- `/admin/logs`
+  - 자동 수집 성공/건너뜀/실패 건수와 실패 사유를 본다.
+  - 큐가 갑자기 늘면 같은 기간의 `curated_collection_failed`, `curated_collection_skipped`도 함께 확인한다.
+
+### 10-4. 추천 운영 순서
+1. `/admin` 대시보드에서 어떤 review 상태가 몰리는지 먼저 본다.
+2. `/admin/logs`에서 같은 기간 자동 수집 실패/건너뜀 이상이 있었는지 확인한다.
+3. `/admin/curated`에서 가장 많이 쌓인 상태부터 필터링해 처리한다.
+4. `review_duplicate`는 기존 승인 콘텐츠와 URL/owner-repo/title이 정말 같은지 확인한다.
+   - 보이는 칩이 무엇인지 먼저 보고, `기존 항목 ID` 또는 `같은 배치 후보` 표기를 함께 확인한다.
+5. `review_license`는 repo license, README, upstream 정책을 확인한 뒤 승인/반려를 결정한다.
+6. `review_quality`는 summary/README/stars/category 적합성을 함께 보고 승인 여부를 정한다.
+
+### 10-6. 정책과 연결된 운영 포인트
+- `/admin/policies`
+  - `Curated 품질 검토 기준(1~100)`을 올리면 더 많은 후보가 `review_quality`로 들어간다.
+  - 기준을 내리면 `pending`으로 바로 넘어가는 후보가 늘어난다.
+  - 같은 화면의 `최근 품질 기준 변경` 목록에서 최근 누가 어떤 `Q` 값으로 바꿨는지 바로 확인할 수 있다.
+  - 각 이력 행은 `활동 로그`의 해당 정책 변경 맥락으로 바로 이동하는 shortcut 역할도 한다.
+  - 이동 후 `threshold history에서 이동한 로그를 강조 표시하고 있습니다.` 안내가 보이면 정상적으로 target row가 잡힌 상태다.
+- 운영자가 quality queue 급증을 볼 때는 대시보드/큐만 보지 말고 현재 정책값도 함께 확인한다.
+- 현재 UI의 `Review Reason Guide` 카드가 각 reason chip의 의미를 바로 설명해 준다.
+- 최근 버전부터 `Review Reason Guide`는 기본 접힘 상태이며, 필요한 순간에만 펼쳐 본다.
+
+### 10-5. 상태가 갑자기 치우칠 때 해석
+- `review_duplicate` 급증
+  - GitHub 검색 키워드가 너무 넓거나 같은 주제 레포가 반복 수집되는지 본다.
+- `review_license` 급증
+  - GitHub API 응답에 license 누락이 많거나 upstream repo가 SPDX를 비워둔 경우일 수 있다.
+- `review_quality` 급증
+  - README 품질 저하, Gemini fallback 비중 증가, heuristic 기준 과민 반응 가능성을 의심한다.
+- `pending` 급증
+  - 자동 triage는 통과하지만 운영 처리 속도가 밀린 상태일 수 있으므로 검수 우선순위를 다시 잡는다.
+
+## 11. DB 관점에서 기억할 점
 - DB는 PostgreSQL이고 드라이버는 `psycopg2-binary`다.
 - 연결은 `SimpleConnectionPool`을 사용한다.
 - 스키마 변경은 전통적인 외부 마이그레이션 툴보다 `init_db()` 내부 보정 패턴이 섞여 있다.
 - 따라서 새 컬럼/인덱스 추가 시 `server/db.py` startup 경로까지 같이 확인해야 한다.
 - 운영 이슈가 생기면 테이블 구조보다 먼저 startup에서 어떤 보정 로직이 도는지 보는 것이 빠를 때가 많다.
 
-## 11. 운영자가 자주 확인할 파일
+## 12. 운영자가 자주 확인할 파일
 
 ### 장애/버그 확인용
 - `server/main.py`
@@ -191,7 +275,7 @@ uv lock
 ### curated 분석 확인용
 - `server/tests/test_curated_related_api.py`
 
-## 12. 운영 체크리스트
+## 13. 운영 체크리스트
 
 ### 서버가 안 뜰 때
 1. `server/.env`에 `DATABASE_URL`, `SECRET_KEY`가 맞는지 확인
@@ -214,13 +298,13 @@ uv lock
 2. super_admin 전용 엔드포인트인지 확인
 3. publish schedule/process 루트가 필요한 상황인지 구분
 
-## 13. 변경 시 반드시 같이 업데이트할 문서
+## 14. 변경 시 반드시 같이 업데이트할 문서
 - `docs/admin_menual.md`: 운영 절차/관리 포인트 변경 시 즉시 반영
 - `docs/IMPLEMENTATION_LEARNING_LOG.md`: 왜 바뀌었는지 기록
 - `docs/UV_WORKFLOW.md`: 실행/테스트 명령이 바뀌면 반영
 - `docs/ADMIN_USER_ENFORCEMENT_PLAN.md`: 관리자 제재 정책이 바뀌면 반영
 
-## 14. 운영 배포 절차
+## 15. 운영 배포 절차
 
 ### 14-1. 배포 전 준비
 1. DB 연결 정보 준비
@@ -267,7 +351,7 @@ uv run uvicorn main:app --reload
 - `PUBLIC_BASE_URL`이 실제 공개 API 기준 URL과 일치
 - 배포 후 `/health`, 로그인, 관리자 핵심 API 최소 1회 확인
 
-## 15. 대표 관리자 API 요청/응답 예시
+## 16. 대표 관리자 API 요청/응답 예시
 
 ### 15-1. 관리자 통계 조회
 ```bash
@@ -372,7 +456,7 @@ curl -X POST "https://api.example.com/api/admin/pages/about/publish-schedules" \
 - `detail`이 문자열인지 객체인지 먼저 구분한다.
 - 객체일 경우 `code`, `message`, `field_errors` 순서로 보면 원인 파악이 빠르다.
 
-## 16. 장애 대응 플레이북
+## 17. 장애 대응 플레이북
 
 ### 16-1. 1차 공통 대응
 1. 증상 범위 확인
@@ -450,14 +534,14 @@ curl -X POST "https://api.example.com/api/admin/pages/about/publish-schedules" \
 
 이 항목은 작업 후 `docs/IMPLEMENTATION_LEARNING_LOG.md`와 이 문서에 같이 반영한다.
 
-## 17. 다음 업데이트 후보
+## 18. 다음 업데이트 후보
 - 실제 배포 플랫폼별 실행 명령 정리
 - 관리자 액션 로그 조회 예시 추가
 - 자주 쓰는 SQL/DB 점검 예시 추가
 - OAuth 장애 사례집 추가
 - 배포 체크리스트를 staging/prod 이중 버전으로 분리
 
-## 18. staging / prod 분리 체크리스트
+## 19. staging / prod 분리 체크리스트
 
 ### 18-1. staging 체크리스트
 - 목적: 운영 반영 전 기능/권한/로그/복구 흐름 검증
@@ -499,7 +583,7 @@ curl -X POST "https://api.example.com/api/admin/pages/about/publish-schedules" \
 - prod는 보안/권한/복구 가능성 검증이 더 중요
 - staging에서 통과한 항목이라도 prod에서는 실제 도메인, OAuth, 프록시, HTTPS 조건을 다시 확인해야 한다
 
-## 19. 관리자 액션 로그 조회 가이드
+## 20. 관리자 액션 로그 조회 가이드
 
 ### 19-1. 무엇을 보는 API인가
 - `GET /api/admin/action-logs`
@@ -601,7 +685,7 @@ curl -X GET "https://api.example.com/api/admin/action-logs/observability?window_
   - Google OAuth runtime 설정이 관리자 화면/API에서 변경된 경우
   - OAuth 장애가 설정 변경 직후 발생했는지 확인할 때 먼저 본다
 
-## 20. SQL / DB 점검 예시
+## 21. SQL / DB 점검 예시
 
 ### 20-1. 원칙
 - 운영 DB에서는 읽기 전용 조회를 먼저 사용한다
@@ -662,7 +746,7 @@ ORDER BY count DESC;
 - page migration 관련 이슈는 `migration/backups`, `migration/restore`, `rollback` 경로가 먼저다
 - DB를 직접 바꾸면 admin_action_logs가 남지 않을 수 있으므로 운영 추적성이 깨질 수 있다
 
-## 21. page migration / restore 실제 운영 시나리오
+## 22. page migration / restore 실제 운영 시나리오
 
 ### 21-1. 이런 상황에서 사용
 - migration execute 이후 About 페이지 렌더링이 깨졌을 때
@@ -713,7 +797,7 @@ curl -X GET "https://api.example.com/api/admin/pages/about_page/migration/backup
   - migration backup 기준으로 정확히 되돌릴 때 적합
   - 특정 migration 실행의 부작용 복구에 유리
 
-## 22. OAuth 장애 FAQ
+## 23. OAuth 장애 FAQ
 
 ### 22-1. 증상: Google 로그인 버튼을 눌렀는데 바로 실패한다
 우선 확인:
@@ -750,7 +834,7 @@ curl -X GET "https://api.example.com/api/admin/pages/about_page/migration/backup
 - staging/prod 둘 다 callback URL을 따로 등록해둔다
 - 도메인/프록시 변경 후에는 health endpoint와 실제 로그인 플로우를 반드시 둘 다 확인한다
 
-## 23. 관리자 일일 / 주간 점검 루틴
+## 24. 관리자 일일 / 주간 점검 루틴
 
 ### 23-1. 일일 점검 루틴
 - 오전 시작 점검
@@ -787,7 +871,7 @@ curl -X GET "https://api.example.com/api/admin/pages/about_page/migration/backup
 - `oauth_settings_updated` 직후 로그인 장애가 나면 OAuth 설정 변경 영향 가능성
 - curated summary가 갑자기 0 또는 급감이면 저장/집계/API 응답 이상 가능성
 
-## 24. 역할별 운영 체크리스트
+## 25. 역할별 운영 체크리스트
 
 ### 24-1. 사용자 관리 체크리스트
 
