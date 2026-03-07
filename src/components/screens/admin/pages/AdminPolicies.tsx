@@ -4,16 +4,7 @@ import { Link } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
-
-function extractCuratedThresholdHistory(reason?: string) {
-  const text = (reason || "").trim()
-  if (!text) return null
-
-  const match = text.match(/(?:^|,\s*)curated_quality_threshold=(\d+)/)
-  if (!match) return null
-
-  return Number(match[1])
-}
+import { extractCuratedThresholdHistoryEntry } from "./policyHistory"
 
 export function AdminPolicies() {
   const [loading, setLoading] = useState(true)
@@ -128,16 +119,9 @@ export function AdminPolicies() {
 
   const thresholdHistory = (policyHistoryQuery.data?.items ?? [])
     .map((log) => {
-      const threshold = extractCuratedThresholdHistory(log.reason)
-      if (threshold === null) return null
-      return {
-        id: log.id,
-        threshold,
-        admin: log.admin_nickname || "admin",
-        at: new Date(log.created_at).toLocaleString("ko-KR"),
-      }
+      return extractCuratedThresholdHistoryEntry(log)
     })
-    .filter((entry): entry is { id: string; threshold: number; admin: string; at: string } => entry !== null)
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
 
   return (
     <section className="space-y-4">
@@ -299,7 +283,10 @@ export function AdminPolicies() {
                   to={`/admin/logs?actionType=policy_updated&query=${encodeURIComponent("curated_quality_threshold")}&targetLogId=${encodeURIComponent(entry.id)}`}
                   className="flex items-center justify-between gap-3 rounded border border-slate-700 px-3 py-2 transition hover:border-slate-500 hover:bg-slate-950/60"
                 >
-                  <span className="font-medium text-slate-100">Q {entry.threshold}</span>
+                  <span className="font-medium text-slate-100">
+                    Q {entry.threshold}
+                    {entry.previousThreshold !== null ? ` (${entry.previousThreshold} -> ${entry.threshold})` : ""}
+                  </span>
                   <span className="text-xs text-slate-400">{entry.admin} · {entry.at}</span>
                 </Link>
               ))

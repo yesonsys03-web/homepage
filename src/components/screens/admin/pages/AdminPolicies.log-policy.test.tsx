@@ -84,7 +84,20 @@ describe("AdminPolicies log policy fields", () => {
           action_type: "policy_updated",
           target_type: "moderation_settings",
           target_id: "00000000-0000-0000-0000-000000000001",
-          reason: "keywords=1, threshold=3, retention_days=180, view_window_days=14, mask_reasons=false, page_editor_enabled=true, rollout_stage=qa, pilot_admin_count=1, curated_quality_threshold=45",
+          reason: "curated_quality_threshold=45, curated_quality_threshold_previous=40, keywords=1, threshold=3, retention_days=180, view_window_days=14, mask_reasons=false, page_editor_enabled=true, rollout_stage=qa, pilot_admin_count=1, curated_quality_threshold_next=45",
+          metadata: {
+            event: "policy_update",
+            curated_quality_threshold: {
+              previous: 40,
+              next: 45,
+            },
+            changed_fields: {
+              curated_review_quality_threshold: {
+                previous: 40,
+                next: 45,
+              },
+            },
+          },
           created_at: "2026-03-07T02:00:00Z",
         },
       ],
@@ -107,7 +120,7 @@ describe("AdminPolicies log policy fields", () => {
     expect(curatedThresholdInput).toHaveValue(45)
     expect(screen.getByText(/quality score가/)).toBeInTheDocument()
     expect(screen.getByText("최근 품질 기준 변경")).toBeInTheDocument()
-    expect(screen.getByText("Q 45")).toBeInTheDocument()
+    expect(screen.getByText("Q 45 (40 -> 45)")).toBeInTheDocument()
 
     fireEvent.change(retentionInput, { target: { value: "365" } })
     fireEvent.change(viewWindowInput, { target: { value: "30" } })
