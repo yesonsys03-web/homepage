@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useSearchParams } from "react-router-dom"
 
 import { api } from "@/lib/api"
+import { extractAdminLogSummary } from "./adminLogSummary"
 
 export function AdminLogs() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -11,7 +12,36 @@ export function AdminLogs() {
   const [actorId, setActorId] = useState(searchParams.get("actorId") ?? "")
   const [pageId, setPageId] = useState(searchParams.get("pageId") ?? "")
   const [windowDays, setWindowDays] = useState(Number(searchParams.get("windowDays") ?? "30") || 30)
+  const [expandedPolicyLogs, setExpandedPolicyLogs] = useState<string[]>([])
   const targetLogId = searchParams.get("targetLogId") ?? ""
+
+  const togglePolicyLogExpansion = (logId: string) => {
+    setExpandedPolicyLogs((current) => (
+      current.includes(logId)
+        ? current.filter((item) => item !== logId)
+        : [...current, logId]
+    ))
+  }
+
+  const handleClearQuery = () => {
+    setQuery("")
+    const nextParams = new URLSearchParams(searchParams)
+    nextParams.delete("query")
+    nextParams.delete("targetLogId")
+    setSearchParams(nextParams, { replace: true })
+  }
+
+  const handleResetFilters = () => {
+    setQuery("")
+    setActionType("")
+    setActorId("")
+    setPageId("")
+    setWindowDays(30)
+
+    const nextParams = new URLSearchParams()
+    nextParams.set("windowDays", "30")
+    setSearchParams(nextParams, { replace: true })
+  }
 
   useEffect(() => {
     const nextParams = new URLSearchParams(searchParams)
@@ -52,15 +82,24 @@ export function AdminLogs() {
     if (!keyword) return logs
 
     return logs.filter((log) => {
+      const metadataText = JSON.stringify(log.metadata || {}).toLowerCase()
       return (
         log.action_type.toLowerCase().includes(keyword)
         || log.target_type.toLowerCase().includes(keyword)
         || log.target_id.toLowerCase().includes(keyword)
         || (log.reason || "").toLowerCase().includes(keyword)
         || (log.admin_nickname || "").toLowerCase().includes(keyword)
+        || metadataText.includes(keyword)
       )
     })
   }, [logsQuery.data, query])
+  const targetLogStatus = targetLogId === ""
+    ? "idle"
+    : logsQuery.isPending
+      ? "loading"
+      : filtered.some((log) => log.id === targetLogId)
+        ? "found"
+        : "missing"
 
   return (
     <section className="space-y-4">
@@ -205,10 +244,32 @@ export function AdminLogs() {
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-700 bg-slate-800">
-        {targetLogId ? (
-          <div className="border-b border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            threshold history에서 이동한 로그를 강조 표시하고 있습니다.
-          </div>
+        {targetLogStatus === "found" ? (
+            <div className="border-b border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+              threshold history에서 이동한 로그를 강조 표시하고 있습니다.
+            </div>
+        ) : targetLogStatus === "missing" ? (
+            <div className="border-b border-rose-400/20 bg-rose-500/10 px-4 py-3 text-sm text-rose-100">
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <p>요청한 로그를 현재 필터 결과에서 찾지 못했습니다. 필터나 검색어를 조정해 다시 확인하세요.</p>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleClearQuery}
+                    className="rounded-md border border-rose-300/30 bg-rose-200/10 px-3 py-1.5 text-xs font-medium text-rose-50 transition hover:bg-rose-200/20"
+                  >
+                    검색어 제거
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetFilters}
+                    className="rounded-md border border-rose-300/30 bg-rose-200/10 px-3 py-1.5 text-xs font-medium text-rose-50 transition hover:bg-rose-200/20"
+                  >
+                    필터 초기화
+                  </button>
+                </div>
+              </div>
+            </div>
         ) : null}
         <table className="w-full">
           <thead className="bg-slate-900">
@@ -237,7 +298,12 @@ export function AdminLogs() {
               </tr>
             ) : (
               filtered.map((log, index) => {
-                const isTargetLog = targetLogId !== "" && log.id === targetLogId
+                const isTargetLog = targetLogStatus === "found" && log.id === targetLogId
+                const allSummaryItems = extractAdminLogSummary(log)
+                const visibleSummaryItems = allSummaryItems.slice(0, 3)
+                const hiddenSummaryItems = allSummaryItems.slice(3)
+                const hiddenPolicyChangeCount = Math.max(allSummaryItems.length - visibleSummaryItems.length, 0)
+                const isPolicyExpanded = expandedPolicyLogs.includes(log.id)
                 return (
                 <tr
                   key={log.id}
@@ -250,7 +316,44 @@ export function AdminLogs() {
                 >
                   <td className="px-4 py-3 text-sm text-slate-100">{log.action_type}</td>
                   <td className="px-4 py-3 text-sm text-slate-300">{log.target_type}:{log.target_id}</td>
-                  <td className="px-4 py-3 text-sm text-slate-300">{log.reason || "-"}</td>
+                  <td className="px-4 py-3 text-sm text-slate-300">
+                    <div className="space-y-2">
+                      <p>{log.reason || "-"}</p>
+                      {visibleSummaryItems.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {visibleSummaryItems.map((change) => (
+                            <span
+                              key={`${log.id}-${change.key}`}
+                              className="rounded-full border border-sky-400/20 bg-sky-500/10 px-2.5 py-1 text-[11px] text-sky-100"
+                            >
+                              {change.label}: {change.summary}
+                            </span>
+                          ))}
+                          {hiddenPolicyChangeCount > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => togglePolicyLogExpansion(log.id)}
+                              className="rounded-full border border-slate-500/30 bg-slate-700/40 px-2.5 py-1 text-[11px] text-slate-200 transition hover:bg-slate-700/70"
+                            >
+                              {isPolicyExpanded ? `추가 변경 접기 (${hiddenPolicyChangeCount}개)` : `+${hiddenPolicyChangeCount}개 변경`}
+                            </button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      {isPolicyExpanded && hiddenSummaryItems.length > 0 ? (
+                        <div className="flex flex-wrap gap-2">
+                          {hiddenSummaryItems.map((change) => (
+                            <span
+                              key={`${log.id}-${change.key}-expanded`}
+                              className="rounded-full border border-slate-500/30 bg-slate-700/25 px-2.5 py-1 text-[11px] text-slate-200"
+                            >
+                              {change.label}: {change.summary}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </td>
                   <td className="px-4 py-3 text-sm text-slate-300">{log.admin_nickname || "admin"}</td>
                   <td className="px-4 py-3 text-sm text-slate-300">{new Date(log.created_at).toLocaleString("ko-KR")}</td>
                 </tr>

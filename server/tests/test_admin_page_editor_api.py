@@ -220,7 +220,12 @@ def test_publish_admin_page_success(monkeypatch: Any) -> None:
     monkeypatch.setattr(
         main, "upsert_site_content", lambda *_args, **_kwargs: {"ok": True}
     )
-    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+    captured_log: dict[str, Any] = {}
+
+    def capture_log(**kwargs: Any) -> None:
+        captured_log.update(kwargs)
+
+    monkeypatch.setattr(main, "write_admin_action_log", capture_log)
 
     response = client.post(
         "/api/admin/pages/about_page/publish",
@@ -229,6 +234,12 @@ def test_publish_admin_page_success(monkeypatch: Any) -> None:
 
     assert response.status_code == 200
     assert response.json()["publishedVersion"] == 3
+    assert captured_log["action_type"] == "page_published"
+    assert captured_log["metadata"] == {
+        "page_id": "about_page",
+        "draft_version": 2,
+        "published_version": 3,
+    }
 
     main.app.dependency_overrides.clear()
 
@@ -602,7 +613,12 @@ def test_publish_admin_page_returns_conflict_when_not_latest_draft(
         role="super_admin"
     )
     monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
-    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+    captured_log: dict[str, Any] = {}
+
+    def capture_log(**kwargs: Any) -> None:
+        captured_log.update(kwargs)
+
+    monkeypatch.setattr(main, "write_admin_action_log", capture_log)
 
     monkeypatch.setattr(
         main,
@@ -619,6 +635,13 @@ def test_publish_admin_page_returns_conflict_when_not_latest_draft(
     detail = response.json()["detail"]
     assert detail["code"] == "page_publish_conflict"
     assert detail["current_version"] == 5
+    assert captured_log["action_type"] == "page_publish_failed"
+    assert captured_log["metadata"] == {
+        "failure_kind": "conflict",
+        "page_id": "about_page",
+        "expected_draft_version": 4,
+        "current_draft_version": 5,
+    }
 
     main.app.dependency_overrides.clear()
 
@@ -710,7 +733,7 @@ def test_update_admin_page_draft_conflict_writes_conflict_log(monkeypatch: Any) 
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
     monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
-    logged_action_types: list[str] = []
+    logged_actions: list[dict[str, Any]] = []
     monkeypatch.setattr(
         main,
         "save_page_document_draft",
@@ -719,7 +742,7 @@ def test_update_admin_page_draft_conflict_writes_conflict_log(monkeypatch: Any) 
     monkeypatch.setattr(
         main,
         "write_admin_action_log",
-        lambda **kwargs: logged_action_types.append(str(kwargs.get("action_type", ""))),
+        lambda **kwargs: logged_actions.append(kwargs),
     )
 
     payload = {
@@ -758,7 +781,22 @@ def test_update_admin_page_draft_conflict_writes_conflict_log(monkeypatch: Any) 
     response = client.put("/api/admin/pages/about_page/draft", json=payload)
 
     assert response.status_code == 409
-    assert "page_conflict_detected" in logged_action_types
+    assert any(
+        str(item.get("action_type", "")) == "page_conflict_detected"
+        for item in logged_actions
+    )
+    conflict_log = next(
+        item
+        for item in logged_actions
+        if item.get("action_type") == "page_conflict_detected"
+    )
+    assert conflict_log["metadata"] == {
+        "page_id": "about_page",
+        "source": "manual",
+        "base_version": 1,
+        "current_version": 9,
+        "retryable": True,
+    }
 
     main.app.dependency_overrides.clear()
 
@@ -772,7 +810,7 @@ def test_publish_admin_page_validation_failure_writes_failed_log(
     )
     monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
 
-    logged_action_types: list[str] = []
+    logged_actions: list[dict[str, Any]] = []
     monkeypatch.setattr(
         main,
         "get_page_document_draft",
@@ -802,7 +840,7 @@ def test_publish_admin_page_validation_failure_writes_failed_log(
     monkeypatch.setattr(
         main,
         "write_admin_action_log",
-        lambda **kwargs: logged_action_types.append(str(kwargs.get("action_type", ""))),
+        lambda **kwargs: logged_actions.append(kwargs),
     )
 
     response = client.post(
@@ -811,7 +849,87 @@ def test_publish_admin_page_validation_failure_writes_failed_log(
     )
 
     assert response.status_code == 422
-    assert "page_publish_failed" in logged_action_types
+    assert any(
+        str(item.get("action_type", "")) == "page_publish_failed"
+        for item in logged_actions
+    )
+    failed_log = next(
+        item
+        for item in logged_actions
+        if item.get("action_type") == "page_publish_failed"
+    )
+    assert failed_log["metadata"] == {
+        "failure_kind": "validation_failed",
+        "page_id": "about_page",
+        "blocking_error_count": 1,
+        "warning_count": 0,
+    }
+
+    main.app.dependency_overrides.clear()
+
+
+def test_update_admin_page_draft_success_writes_summary_metadata(
+    monkeypatch: Any,
+) -> None:
+    client = TestClient(main.app)
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
+    monkeypatch.setattr(main, "enforce_page_editor_rollout_access", lambda _user: None)
+
+    captured_log: dict[str, Any] = {}
+    monkeypatch.setattr(
+        main,
+        "save_page_document_draft",
+        lambda **_: {"saved_version": 3},
+    )
+    monkeypatch.setattr(
+        main,
+        "write_admin_action_log",
+        lambda **kwargs: captured_log.update(kwargs),
+    )
+
+    payload = {
+        "baseVersion": 2,
+        "reason": "save",
+        "source": "manual",
+        "document": {
+            "pageId": "about_page",
+            "status": "draft",
+            "version": 2,
+            "title": "About",
+            "seo": {
+                "metaTitle": "About",
+                "metaDescription": "Desc",
+                "ogImage": None,
+            },
+            "blocks": [
+                {
+                    "id": "hero-1",
+                    "type": "hero",
+                    "order": 0,
+                    "visible": True,
+                    "content": {
+                        "headline": "A",
+                        "highlight": "H",
+                        "description": "D",
+                        "contactEmail": "hello@example.com",
+                    },
+                }
+            ],
+            "updatedBy": "11111111-1111-1111-1111-111111111111",
+            "updatedAt": "2026-03-04T00:00:00Z",
+        },
+    }
+
+    response = client.put("/api/admin/pages/about_page/draft", json=payload)
+
+    assert response.status_code == 200
+    assert captured_log["action_type"] == "page_draft_saved"
+    assert captured_log["metadata"] == {
+        "page_id": "about_page",
+        "source": "manual",
+        "base_version": 2,
+        "saved_version": 3,
+    }
 
     main.app.dependency_overrides.clear()
 
