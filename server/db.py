@@ -2,12 +2,81 @@
 
 import os
 import hashlib
+import re
+from collections import defaultdict
+from datetime import datetime
 from psycopg2.extras import Json, RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 from contextlib import contextmanager
 from typing import Mapping, Optional, cast
 from dotenv import load_dotenv
 from threading import Lock
+
+CURATED_REASON_UNKNOWN = "unknown"
+CURATED_REASON_TAG_OVERLAP = "tag_overlap"
+CURATED_REASON_RECENT_UPDATE = "recent_update"
+CURATED_REASON_HIGH_QUALITY = "high_quality"
+CURATED_REASON_LANGUAGE_MATCH = "language_match"
+CURATED_REASON_KOREAN_DEV_MATCH = "korean_dev_match"
+CURATED_REASON_CATEGORY_MATCH = "category_match"
+CURATED_REASON_CONTEXTUAL_MATCH = "contextual_match"
+
+CURATED_REASON_LABELS: dict[str, str] = {
+    CURATED_REASON_UNKNOWN: "기타",
+    CURATED_REASON_TAG_OVERLAP: "태그 일치",
+    CURATED_REASON_RECENT_UPDATE: "최근 업데이트",
+    CURATED_REASON_HIGH_QUALITY: "품질 점수 높음",
+    CURATED_REASON_LANGUAGE_MATCH: "언어 일치",
+    CURATED_REASON_KOREAN_DEV_MATCH: "KR Dev 일치",
+    CURATED_REASON_CATEGORY_MATCH: "유사 카테고리",
+    CURATED_REASON_CONTEXTUAL_MATCH: "추천 맥락 일치",
+}
+CURATED_REASON_TAG_PATTERN = re.compile(r"^태그\s+\d+개\s+일치$")
+
+
+def normalize_curated_reason_code(value: object | None) -> str:
+    if not isinstance(value, str):
+        return CURATED_REASON_UNKNOWN
+
+    candidate = value.strip()
+    if not candidate:
+        return CURATED_REASON_UNKNOWN
+    if candidate in CURATED_REASON_LABELS:
+        return candidate
+    if (
+        CURATED_REASON_TAG_PATTERN.match(candidate)
+        or candidate == CURATED_REASON_LABELS[CURATED_REASON_TAG_OVERLAP]
+    ):
+        return CURATED_REASON_TAG_OVERLAP
+    if candidate.endswith("언어 일치"):
+        return CURATED_REASON_LANGUAGE_MATCH
+
+    exact_matches = {
+        CURATED_REASON_LABELS[
+            CURATED_REASON_RECENT_UPDATE
+        ]: CURATED_REASON_RECENT_UPDATE,
+        CURATED_REASON_LABELS[CURATED_REASON_HIGH_QUALITY]: CURATED_REASON_HIGH_QUALITY,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_KOREAN_DEV_MATCH
+        ]: CURATED_REASON_KOREAN_DEV_MATCH,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_CATEGORY_MATCH
+        ]: CURATED_REASON_CATEGORY_MATCH,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_CONTEXTUAL_MATCH
+        ]: CURATED_REASON_CONTEXTUAL_MATCH,
+        "관련 추천 클릭": CURATED_REASON_CONTEXTUAL_MATCH,
+        "unknown": CURATED_REASON_UNKNOWN,
+    }
+    return exact_matches.get(candidate, CURATED_REASON_UNKNOWN)
+
+
+def get_curated_reason_label(code: object | None) -> str:
+    normalized = normalize_curated_reason_code(code)
+    return CURATED_REASON_LABELS.get(
+        normalized, CURATED_REASON_LABELS[CURATED_REASON_UNKNOWN]
+    )
+
 
 # .env 파일 로드
 _ = load_dotenv(".env")
@@ -282,6 +351,7 @@ def init_db():
                     source_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
                     target_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
                     reason TEXT,
+                    reason_code TEXT,
                     clicked_at TIMESTAMP DEFAULT NOW(),
                     client_ip TEXT
                 )
@@ -524,6 +594,27 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_clicked_at
                 ON curated_related_clicks (clicked_at DESC)
             """)
+            cur.execute("""
+                ALTER TABLE curated_related_clicks
+                ADD COLUMN IF NOT EXISTS reason_code TEXT
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_reason_code
+                ON curated_related_clicks (reason_code)
+            """)
+            cur.execute(
+                """
+                SELECT id, reason
+                FROM curated_related_clicks
+                WHERE reason_code IS NULL OR BTRIM(reason_code) = ''
+                """
+            )
+            missing_reason_code_rows = cur.fetchall()
+            for row in missing_reason_code_rows:
+                cur.execute(
+                    "UPDATE curated_related_clicks SET reason_code = %s WHERE id = %s",
+                    (normalize_curated_reason_code(row[1]), row[0]),
+                )
 
             conn.commit()
             print("✅ Database tables initialized successfully!")
@@ -1361,6 +1452,7 @@ def create_glossary_term_request(
 def create_curated_related_click(
     source_content_id: int,
     target_content_id: int,
+    reason_code: Optional[str],
     reason: Optional[str],
     client_ip: Optional[str],
 ):
@@ -1371,16 +1463,204 @@ def create_curated_related_click(
                 INSERT INTO curated_related_clicks (
                     source_content_id,
                     target_content_id,
+                    reason_code,
                     reason,
                     client_ip
                 )
-                VALUES (%s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING *
                 """,
-                (source_content_id, target_content_id, reason, client_ip),
+                (source_content_id, target_content_id, reason_code, reason, client_ip),
             )
             conn.commit()
             return cur.fetchone()
+
+
+def get_curated_related_click_summary(
+    days: int = 30,
+    limit: int = 5,
+    source_content_id: Optional[int] = None,
+):
+    safe_days = max(1, min(days, 365))
+    safe_limit = max(1, min(limit, 20))
+    safe_source_content_id = (
+        source_content_id if source_content_id and source_content_id > 0 else None
+    )
+    params: list[object] = [safe_days]
+    summary_where = "WHERE clicked_at >= NOW() - (%s * INTERVAL '1 day')"
+    detail_where = "WHERE c.clicked_at >= NOW() - (%s * INTERVAL '1 day')"
+    if safe_source_content_id is not None:
+        summary_where += " AND source_content_id = %s"
+        detail_where += " AND c.source_content_id = %s"
+        params.append(safe_source_content_id)
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*)::int AS total_clicks,
+                    COUNT(DISTINCT (source_content_id, target_content_id))::int AS unique_pairs
+                FROM curated_related_clicks
+                {summary_where}
+                """,
+                params,
+            )
+            summary = cur.fetchone() or {}
+
+            cur.execute(
+                f"""
+                SELECT
+                    c.source_content_id,
+                    source.title AS source_title,
+                    c.target_content_id,
+                    target.title AS target_title,
+                    COALESCE(NULLIF(BTRIM(c.reason_code), ''), NULLIF(BTRIM(c.reason), ''), 'unknown') AS normalized_reason,
+                    c.clicked_at
+                FROM curated_related_clicks c
+                JOIN curated_content source ON source.id = c.source_content_id
+                JOIN curated_content target ON target.id = c.target_content_id
+                {detail_where}
+                ORDER BY c.clicked_at DESC
+                """,
+                params,
+            )
+            raw_rows = cur.fetchall() or []
+
+    pair_totals: dict[tuple[int, int], dict[str, object]] = {}
+    pair_reasons: dict[tuple[int, int], dict[str, int]] = defaultdict(dict)
+    reason_totals: dict[str, int] = defaultdict(int)
+
+    for row in raw_rows:
+        source_content_id = _safe_int(row.get("source_content_id"), 0)
+        target_content_id = _safe_int(row.get("target_content_id"), 0)
+        pair_key = (source_content_id, target_content_id)
+        reason_code = normalize_curated_reason_code(row.get("normalized_reason"))
+        clicked_at_value = row.get("clicked_at")
+        clicked_at = (
+            clicked_at_value if isinstance(clicked_at_value, datetime) else None
+        )
+        existing = pair_totals.get(pair_key)
+        if existing is None:
+            pair_totals[pair_key] = {
+                "source_content_id": source_content_id,
+                "source_title": str(row.get("source_title") or ""),
+                "target_content_id": target_content_id,
+                "target_title": str(row.get("target_title") or ""),
+                "click_count": 0,
+                "last_clicked_at": clicked_at,
+            }
+            existing = pair_totals[pair_key]
+
+        existing_click_count = _safe_int(existing.get("click_count"), 0)
+        existing["click_count"] = existing_click_count + 1
+        existing_last_clicked_at_value = existing.get("last_clicked_at")
+        existing_last_clicked_at = (
+            existing_last_clicked_at_value
+            if isinstance(existing_last_clicked_at_value, datetime)
+            else None
+        )
+        if clicked_at is not None and (
+            existing_last_clicked_at is None or clicked_at > existing_last_clicked_at
+        ):
+            existing["last_clicked_at"] = clicked_at
+
+        pair_reason_counts = pair_reasons[pair_key]
+        pair_reason_counts[reason_code] = pair_reason_counts.get(reason_code, 0) + 1
+        reason_totals[reason_code] += 1
+
+    sorted_pairs = sorted(
+        pair_totals.values(),
+        key=lambda row: (
+            _safe_int(row.get("click_count"), 0),
+            (
+                cast(datetime, row.get("last_clicked_at")).timestamp()
+                if isinstance(row.get("last_clicked_at"), datetime)
+                else 0.0
+            ),
+            _safe_int(row.get("source_content_id"), 0),
+            _safe_int(row.get("target_content_id"), 0),
+        ),
+        reverse=True,
+    )[:safe_limit]
+
+    top_pairs = []
+    for row in sorted_pairs:
+        pair_key = (
+            _safe_int(row.get("source_content_id"), 0),
+            _safe_int(row.get("target_content_id"), 0),
+        )
+        reason_counts = pair_reasons.get(pair_key, {})
+        top_reason_code = (
+            sorted(
+                reason_counts.items(),
+                key=lambda item: (item[1], item[0]),
+                reverse=True,
+            )[0][0]
+            if reason_counts
+            else "unknown"
+        )
+        top_reason_count = reason_counts.get(top_reason_code, 0)
+        last_clicked_at_value = row.get("last_clicked_at")
+        last_clicked_at = (
+            last_clicked_at_value
+            if isinstance(last_clicked_at_value, datetime)
+            else None
+        )
+        top_pairs.append(
+            {
+                "source_content_id": _safe_int(row.get("source_content_id"), 0),
+                "source_title": str(row.get("source_title") or ""),
+                "target_content_id": _safe_int(row.get("target_content_id"), 0),
+                "target_title": str(row.get("target_title") or ""),
+                "click_count": _safe_int(row.get("click_count"), 0),
+                "last_clicked_at": last_clicked_at.isoformat()
+                if last_clicked_at is not None
+                else "",
+                "top_reason_code": top_reason_code,
+                "top_reason_label": get_curated_reason_label(top_reason_code),
+                "top_reason_count": top_reason_count,
+            }
+        )
+
+    top_reasons = [
+        {
+            "reason_code": reason_code,
+            "reason_label": get_curated_reason_label(reason_code),
+            "click_count": click_count,
+        }
+        for reason_code, click_count in sorted(
+            reason_totals.items(),
+            key=lambda item: (item[1], item[0]),
+            reverse=True,
+        )[:safe_limit]
+    ]
+
+    return {
+        "window_days": safe_days,
+        "source_content_id": safe_source_content_id,
+        "total_clicks": int(summary.get("total_clicks") or 0),
+        "unique_pairs": int(summary.get("unique_pairs") or 0),
+        "top_pairs": top_pairs,
+        "top_reasons": top_reasons,
+        "available_sources": [
+            {
+                "content_id": content_id,
+                "title": title,
+            }
+            for content_id, title in sorted(
+                {
+                    (
+                        _safe_int(row.get("source_content_id"), 0),
+                        str(row.get("source_title") or ""),
+                    )
+                    for row in raw_rows
+                    if _safe_int(row.get("source_content_id"), 0) > 0
+                },
+                key=lambda item: (item[1].lower(), item[0]),
+            )
+        ],
+    }
 
 
 def get_admin_stats():

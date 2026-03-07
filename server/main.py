@@ -118,6 +118,7 @@ from db import (
     increment_error_solution_feedback,
     create_glossary_term_request,
     create_curated_related_click,
+    get_curated_related_click_summary,
 )
 from auth import (
     verify_password,
@@ -137,6 +138,85 @@ from gemini_curator import (
     fallback_summary_template,
     should_auto_reject,
 )
+
+CURATED_REASON_UNKNOWN = "unknown"
+CURATED_REASON_TAG_OVERLAP = "tag_overlap"
+CURATED_REASON_RECENT_UPDATE = "recent_update"
+CURATED_REASON_HIGH_QUALITY = "high_quality"
+CURATED_REASON_LANGUAGE_MATCH = "language_match"
+CURATED_REASON_KOREAN_DEV_MATCH = "korean_dev_match"
+CURATED_REASON_CATEGORY_MATCH = "category_match"
+CURATED_REASON_CONTEXTUAL_MATCH = "contextual_match"
+
+CURATED_REASON_LABELS: dict[str, str] = {
+    CURATED_REASON_UNKNOWN: "기타",
+    CURATED_REASON_TAG_OVERLAP: "태그 일치",
+    CURATED_REASON_RECENT_UPDATE: "최근 업데이트",
+    CURATED_REASON_HIGH_QUALITY: "품질 점수 높음",
+    CURATED_REASON_LANGUAGE_MATCH: "언어 일치",
+    CURATED_REASON_KOREAN_DEV_MATCH: "KR Dev 일치",
+    CURATED_REASON_CATEGORY_MATCH: "유사 카테고리",
+    CURATED_REASON_CONTEXTUAL_MATCH: "추천 맥락 일치",
+}
+CURATED_REASON_TAG_PATTERN = re.compile(r"^태그\s+\d+개\s+일치$")
+
+
+def normalize_curated_reason_code(value: object | None) -> str:
+    if not isinstance(value, str):
+        return CURATED_REASON_UNKNOWN
+
+    candidate = value.strip()
+    if not candidate:
+        return CURATED_REASON_UNKNOWN
+    if candidate in CURATED_REASON_LABELS:
+        return candidate
+    if (
+        CURATED_REASON_TAG_PATTERN.match(candidate)
+        or candidate == CURATED_REASON_LABELS[CURATED_REASON_TAG_OVERLAP]
+    ):
+        return CURATED_REASON_TAG_OVERLAP
+    if candidate.endswith("언어 일치"):
+        return CURATED_REASON_LANGUAGE_MATCH
+
+    exact_matches = {
+        CURATED_REASON_LABELS[
+            CURATED_REASON_RECENT_UPDATE
+        ]: CURATED_REASON_RECENT_UPDATE,
+        CURATED_REASON_LABELS[CURATED_REASON_HIGH_QUALITY]: CURATED_REASON_HIGH_QUALITY,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_KOREAN_DEV_MATCH
+        ]: CURATED_REASON_KOREAN_DEV_MATCH,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_CATEGORY_MATCH
+        ]: CURATED_REASON_CATEGORY_MATCH,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_CONTEXTUAL_MATCH
+        ]: CURATED_REASON_CONTEXTUAL_MATCH,
+        "관련 추천 클릭": CURATED_REASON_CONTEXTUAL_MATCH,
+        "unknown": CURATED_REASON_UNKNOWN,
+    }
+    return exact_matches.get(candidate, CURATED_REASON_UNKNOWN)
+
+
+def get_curated_reason_label(code: object | None) -> str:
+    normalized = normalize_curated_reason_code(code)
+    return CURATED_REASON_LABELS.get(
+        normalized, CURATED_REASON_LABELS[CURATED_REASON_UNKNOWN]
+    )
+
+
+def format_curated_reason_label(
+    code: object | None,
+    *,
+    overlap_count: int = 0,
+    language: Optional[str] = None,
+) -> str:
+    normalized = normalize_curated_reason_code(code)
+    if normalized == CURATED_REASON_TAG_OVERLAP and overlap_count > 0:
+        return f"태그 {overlap_count}개 일치"
+    if normalized == CURATED_REASON_LANGUAGE_MATCH and language:
+        return f"{language} 언어 일치"
+    return get_curated_reason_label(normalized)
 
 
 async def startup_event() -> None:
@@ -637,7 +717,18 @@ class GlossaryTermRequestCreate(BaseModel):
 class CuratedRelatedClickCreate(BaseModel):
     source_content_id: int
     target_content_id: int
+    reason_code: Optional[str] = None
     reason: Optional[str] = None
+
+
+class CuratedReasonPayload(TypedDict):
+    code: str
+    label: str
+
+
+class CuratedRelatedListItem(TypedDict):
+    item: dict[str, object]
+    reasons: list[CuratedReasonPayload]
 
 
 class RegisterRequest(BaseModel):
@@ -2527,6 +2618,178 @@ def serialize_curated_content(row: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _parse_curated_timestamp_ms(value: object) -> Optional[int]:
+    if isinstance(value, datetime):
+        timestamp = value
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return int(timestamp.timestamp() * 1000)
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        candidate = normalized.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(candidate)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return int(parsed.timestamp() * 1000)
+    return None
+
+
+def _curated_freshness_score(item: Mapping[str, object], now_ms: int) -> float:
+    source_ms = _parse_curated_timestamp_ms(item.get("github_pushed_at"))
+    if source_ms is None:
+        source_ms = _parse_curated_timestamp_ms(item.get("collected_at"))
+    if source_ms is None:
+        return 0.0
+
+    day_ms = 24 * 60 * 60 * 1000
+    elapsed_days = max(0.0, (now_ms - source_ms) / day_ms)
+    return max(0.0, 30.0 - elapsed_days)
+
+
+def _normalized_curated_tags(item: Mapping[str, object]) -> list[str]:
+    raw_tags = item.get("tags")
+    if not isinstance(raw_tags, list):
+        return []
+
+    tags: list[str] = []
+    for tag in raw_tags:
+        if isinstance(tag, str):
+            normalized = tag.strip().lower()
+            if normalized:
+                tags.append(normalized)
+    return tags
+
+
+def _build_curated_related_entry(
+    base_item: Mapping[str, object],
+    candidate: Mapping[str, object],
+    now_ms: int,
+) -> tuple[int, CuratedRelatedListItem]:
+    current_tag_set = set(_normalized_curated_tags(base_item))
+    candidate_tag_set = set(_normalized_curated_tags(candidate))
+    overlap_count = len(current_tag_set & candidate_tag_set)
+    quality = safe_int(candidate.get("quality_score"), 0)
+    relevance = safe_int(candidate.get("relevance_score"), 0)
+    freshness = _curated_freshness_score(candidate, now_ms)
+    base_category = str(base_item.get("category") or "").strip().lower()
+    candidate_category = str(candidate.get("category") or "").strip().lower()
+    category_match = 1 if base_category and base_category == candidate_category else 0
+    base_language = str(base_item.get("language") or "").strip()
+    candidate_language = str(candidate.get("language") or "").strip()
+    language_match = 1 if base_language and base_language == candidate_language else 0
+    korean_match = (
+        1
+        if bool(base_item.get("is_korean_dev")) and bool(candidate.get("is_korean_dev"))
+        else 0
+    )
+
+    reason_codes: list[str] = []
+    if overlap_count > 0:
+        reason_codes.append(CURATED_REASON_TAG_OVERLAP)
+    if freshness >= 20:
+        reason_codes.append(CURATED_REASON_RECENT_UPDATE)
+    if quality >= 8:
+        reason_codes.append(CURATED_REASON_HIGH_QUALITY)
+    if language_match > 0:
+        reason_codes.append(CURATED_REASON_LANGUAGE_MATCH)
+    if korean_match > 0:
+        reason_codes.append(CURATED_REASON_KOREAN_DEV_MATCH)
+    if not reason_codes:
+        reason_codes.append(
+            CURATED_REASON_CATEGORY_MATCH
+            if category_match > 0
+            else CURATED_REASON_CONTEXTUAL_MATCH
+        )
+
+    score = int(
+        overlap_count * 120
+        + quality * 9
+        + relevance * 8
+        + freshness * 2
+        + language_match * 12
+        + korean_match * 8
+    )
+    return score, {
+        "item": serialize_curated_content(candidate),
+        "reasons": [
+            {
+                "code": code,
+                "label": format_curated_reason_label(
+                    code,
+                    overlap_count=overlap_count,
+                    language=base_language if language_match > 0 else None,
+                ),
+            }
+            for code in reason_codes
+        ],
+    }
+
+
+def _collect_curated_related_candidates(
+    base_item: Mapping[str, object],
+    limit: int,
+) -> list[CuratedRelatedListItem]:
+    safe_limit = max(1, min(limit, 8))
+    sample_limit = max(24, safe_limit * 8)
+    category = str(base_item.get("category") or "").strip() or None
+
+    candidate_rows: list[Mapping[str, object]] = []
+    if category:
+        candidate_rows.extend(
+            cast(
+                list[Mapping[str, object]],
+                list_curated_content(
+                    status="approved",
+                    category=category,
+                    sort="latest",
+                    limit=sample_limit,
+                    offset=0,
+                ),
+            )
+        )
+
+    if len(candidate_rows) < sample_limit:
+        candidate_rows.extend(
+            cast(
+                list[Mapping[str, object]],
+                list_curated_content(
+                    status="approved",
+                    sort="latest",
+                    limit=sample_limit,
+                    offset=0,
+                ),
+            )
+        )
+
+    base_id = safe_int(base_item.get("id"), 0)
+    seen_ids: set[int] = set()
+    scored: list[tuple[int, CuratedRelatedListItem]] = []
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    for candidate in candidate_rows:
+        candidate_id = safe_int(candidate.get("id"), 0)
+        if candidate_id <= 0 or candidate_id == base_id or candidate_id in seen_ids:
+            continue
+        seen_ids.add(candidate_id)
+        scored.append(_build_curated_related_entry(base_item, candidate, now_ms))
+
+    scored.sort(
+        key=lambda entry: (
+            entry[0],
+            safe_int(entry[1]["item"].get("quality_score"), 0),
+            safe_int(entry[1]["item"].get("relevance_score"), 0),
+            safe_int(entry[1]["item"].get("stars"), 0),
+        ),
+        reverse=True,
+    )
+    return [entry[1] for entry in scored[:safe_limit]]
+
+
 @app.get("/api/curated")
 def list_curated_endpoint(
     category: Optional[str] = None,
@@ -2566,6 +2829,18 @@ def get_curated_detail_endpoint(content_id: int):
     return serialize_curated_content(item)
 
 
+@app.get("/api/curated/{content_id}/related")
+def get_curated_related_endpoint(content_id: int, limit: int = 4):
+    item = get_curated_content_by_id(content_id)
+    if not item or str(item.get("status") or "") != "approved":
+        raise HTTPException(status_code=404, detail="콘텐츠를 찾을 수 없습니다")
+
+    return {
+        "items": _collect_curated_related_candidates(item, limit),
+        "source": "server",
+    }
+
+
 @app.post("/api/curated/related-clicks")
 def create_curated_related_click_endpoint(
     payload: CuratedRelatedClickCreate,
@@ -2588,19 +2863,29 @@ def create_curated_related_click_endpoint(
     if not target_item or str(target_item.get("status") or "") != "approved":
         raise HTTPException(status_code=404, detail="대상 콘텐츠를 찾을 수 없습니다")
 
-    cleaned_reason = (payload.reason or "").strip()
-    if len(cleaned_reason) > 200:
-        cleaned_reason = cleaned_reason[:200]
+    normalized_reason_code = normalize_curated_reason_code(
+        payload.reason_code or payload.reason
+    )
+    if normalized_reason_code == CURATED_REASON_UNKNOWN and (
+        payload.reason or payload.reason_code
+    ):
+        normalized_reason_code = CURATED_REASON_CONTEXTUAL_MATCH
 
     saved = create_curated_related_click(
         source_content_id=source_id,
         target_content_id=target_id,
-        reason=cleaned_reason or None,
+        reason_code=normalized_reason_code,
+        reason=get_curated_reason_label(normalized_reason_code),
         client_ip=_extract_client_ip(request),
     )
+    saved_id = safe_int(saved.get("id") if saved else None, 0)
+    if saved_id <= 0:
+        raise HTTPException(
+            status_code=500, detail="추천 클릭 기록 저장에 실패했습니다"
+        )
     return {
         "ok": True,
-        "id": safe_int(saved.get("id") if saved else None, 0),
+        "id": saved_id,
     }
 
 
@@ -2753,6 +3038,21 @@ def run_curated_collection_endpoint(
         "daily_limit": config.daily_collect_limit,
         "collected_today": collected_today + created_count,
     }
+
+
+@app.get("/api/admin/curated/related-clicks/summary")
+def get_admin_curated_related_clicks_summary_endpoint(
+    request: Request,
+    days: int = 30,
+    limit: int = 5,
+    source_content_id: Optional[int] = None,
+):
+    _ = require_admin_from_request(request)
+    return get_curated_related_click_summary(
+        days=days,
+        limit=limit,
+        source_content_id=source_content_id,
+    )
 
 
 @app.delete("/api/admin/curated/{content_id}")
