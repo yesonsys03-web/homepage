@@ -65,8 +65,28 @@ export interface CuratedContent {
   summary_mid: string
   summary_expert: string
   tags: string[]
-  status: "pending" | "approved" | "rejected" | "auto_rejected" | string
+  status:
+    | "pending"
+    | "review_license"
+    | "review_duplicate"
+    | "review_quality"
+    | "approved"
+    | "rejected"
+    | "auto_rejected"
+    | string
   reject_reason: string
+  review_metadata?: {
+    reason_codes?: string[]
+    canonical_url_match?: boolean
+    owner_repo_match?: boolean
+    title_match?: boolean
+    matched_existing_ids?: number[]
+    matched_processed_titles?: string[]
+    license_value?: string
+    quality_score_value?: number
+    quality_threshold?: number
+    [key: string]: unknown
+  }
   approved_at: string
   approved_by: string
   github_pushed_at: string
@@ -197,6 +217,25 @@ export interface AdminActionObservability {
     conflict_rate: number
   }
   publish_failure_distribution: Array<{ reason: string; count: number }>
+  daily_curated_collection_counts: Array<{
+    day: string
+    run_count: number
+    created_total: number
+  }>
+  curated_collection_summary: {
+    succeeded: number
+    failed: number
+    skipped: number
+    created_total: number
+  }
+  curated_review_queue_summary: {
+    pending: number
+    review_license: number
+    review_duplicate: number
+    review_quality: number
+    total: number
+  }
+  curated_collection_failure_distribution: Array<{ reason: string; count: number }>
 }
 
 export type AdminPagePerfScenario =
@@ -377,6 +416,7 @@ export interface ModerationPolicy {
   page_editor_publish_fail_rate_threshold: number
   page_editor_rollback_ratio_threshold: number
   page_editor_conflict_rate_threshold: number
+  curated_review_quality_threshold: number
   updated_at: string
   last_updated_by?: string | null
   last_updated_by_id?: string | null
@@ -1538,6 +1578,7 @@ export const api = {
     page_editor_publish_fail_rate_threshold?: number,
     page_editor_rollback_ratio_threshold?: number,
     page_editor_conflict_rate_threshold?: number,
+    curated_review_quality_threshold?: number,
   ) => {
     const payload: {
       blocked_keywords: string[]
@@ -1553,6 +1594,7 @@ export const api = {
       page_editor_publish_fail_rate_threshold?: number
       page_editor_rollback_ratio_threshold?: number
       page_editor_conflict_rate_threshold?: number
+      curated_review_quality_threshold?: number
     } = {
       blocked_keywords,
       auto_hide_report_threshold,
@@ -1589,6 +1631,9 @@ export const api = {
     }
     if (typeof page_editor_conflict_rate_threshold === "number") {
       payload.page_editor_conflict_rate_threshold = page_editor_conflict_rate_threshold
+    }
+    if (typeof curated_review_quality_threshold === "number") {
+      payload.curated_review_quality_threshold = curated_review_quality_threshold
     }
 
     const res = await authFetch(`${API_BASE}/api/admin/policies`, {

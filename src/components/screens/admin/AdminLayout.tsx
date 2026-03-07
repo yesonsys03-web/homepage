@@ -12,6 +12,8 @@ import { api } from "@/lib/api"
 import { useAuth } from "@/lib/use-auth"
 import { isAdminRole } from "@/lib/roles"
 
+const CURATED_REVIEW_QUEUE_STATUSES = ["pending", "review_license", "review_duplicate", "review_quality"] as const
+
 export function AdminLayout() {
   const { user, isLoading } = useAuth()
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
@@ -28,7 +30,12 @@ export function AdminLayout() {
   })
   const curatedQuery = useQuery({
     queryKey: ["admin-layout", "curated-pending"],
-    queryFn: async () => api.getAdminCuratedContent("pending", 1, 0),
+    queryFn: async () => {
+      const responses = await Promise.all(
+        CURATED_REVIEW_QUEUE_STATUSES.map((status) => api.getAdminCuratedContent(status, 1, 0)),
+      )
+      return responses.reduce((sum, response) => sum + (response.total ?? 0), 0)
+    },
     enabled: isAdminRole(user?.role),
   })
 
@@ -55,7 +62,7 @@ export function AdminLayout() {
           badges={{
             reports: reportsQuery.data?.total ?? 0,
             users: pendingApprovals,
-            curated: curatedQuery.data?.total ?? 0,
+            curated: curatedQuery.data ?? 0,
           }}
         />
       </div>
@@ -66,7 +73,7 @@ export function AdminLayout() {
             badges={{
               reports: reportsQuery.data?.total ?? 0,
               users: pendingApprovals,
-              curated: curatedQuery.data?.total ?? 0,
+              curated: curatedQuery.data ?? 0,
             }}
             onNavigate={() => setMobileNavOpen(false)}
           />
