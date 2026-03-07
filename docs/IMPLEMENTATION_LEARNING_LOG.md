@@ -42,6 +42,64 @@
 
 ## Sessions
 
+## Session 2026-03-07-02
+
+### 1) Goal
+- 큐레이션 추천 클릭 분석을 관리자 전용 상세 화면으로 확장하고 추천 사유 저장값을 안정적인 코드로 정규화한다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 사용자 피드백/이슈: 이전 작업 후 "진행해" 요청에 따라 추천 클릭 분석 상세화와 reason 정규화 계속 진행
+- 제약 조건: 기존 `curated_related_clicks.reason` 컬럼을 유지하면서도 과거 자유 텍스트와 신규 코드값을 함께 다뤄야 함
+
+### 3) Design Decisions
+- DB 스키마를 바로 바꾸지 않고 `reason` 컬럼에는 안정적인 코드값을 저장하되, 과거 자유 텍스트는 서버 집계 시 코드로 정규화한다.
+- 관리자 상세 분석 화면은 별도 API를 늘리지 않고 기존 summary API를 더 큰 limit로 재사용해 빠르게 드릴다운한다.
+
+### 4) Implementation Notes
+- 프론트(v0): `/admin/curated/analytics` 페이지를 추가하고 대시보드 위젯에서 상세 이동 링크를 연결했다.
+- 프론트(v0): `/admin/manual` 페이지를 추가해 `docs/admin_menual.md` 원문을 관리자 화면에서 바로 검색/열람할 수 있게 했다.
+- 백엔드(FastAPI): related 추천 응답과 클릭 저장 흐름을 `reason_code + label` 구조로 정리하고 집계 응답도 코드/라벨을 함께 반환하도록 바꿨다.
+- 데이터/엔드포인트 영향: `curated_related_clicks.reason`은 이제 신규 데이터에 대해 정규화 코드값을 저장하며, 집계 응답은 `top_reason_code`, `top_reason_label`, `reason_code`, `reason_label`을 포함한다.
+- 운영 문서: 백엔드 운영자가 빠르게 구조와 관리자 API를 파악할 수 있도록 `docs/admin_menual.md`를 추가했고, 이후 배포 절차/대표 API 예시/장애 대응 플레이북/staging·prod 체크리스트/관리자 액션 로그 가이드/SQL 점검 예시/action_type 사전/page migration restore 시나리오/OAuth FAQ에 더해 일일·주간 점검 루틴과 역할별 운영 체크리스트까지 확장했다.
+
+### 5) Validation
+- 확인 항목: reason 코드 정규화, 관리자 상세 화면 렌더링, 기존 대시보드/상세 클릭 흐름 호환성, `uv` 기반 백엔드 테스트 재현성
+- 테스트/검증 결과: 프론트 vitest와 Vite build는 재검증 완료. 백엔드 pytest는 `httpx` 누락으로 한 차례 수집 실패를 확인했고 `server/pyproject.toml`의 dev group 보강 후 `cd server && uv run --group dev pytest`로 재검증했다.
+
+### 6) Outcome
+- 잘된 점: 추천 이유 문구가 바뀌어도 집계 축이 유지되고 운영자가 상세 화면에서 바로 분석할 수 있게 됨. 또한 `cd server && uv run --group dev pytest` 흐름이 필요한 테스트 의존성을 기준으로 재현 가능해졌고, 별도 운영 메뉴얼도 마련됐다.
+- 아쉬운 점: 기존 자유 텍스트 레코드는 매핑 규칙 밖의 문구가 있으면 `unknown`으로 흡수된다
+- 다음 액션: 필요 시 DB migration으로 `reason_code` 별도 컬럼을 만들고 과거 데이터 백필을 수행한다.
+
+## Session 2026-03-07-01
+
+### 1) Goal
+- Curated 상세의 추천 이유 계산을 서버로 이동하고, `curated_related_clicks` 집계 API와 관리자 대시보드 위젯을 추가한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBECODER_PLAYGROUND_DESIGN_SYSTEM.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 사용자 피드백/이슈: "curated_related_clicks 집계 API + 관리자 대시보드 위젯" 및 "추천 이유 계산 서버 이동" 요청
+- 제약 조건: 기존 FastAPI/React 계약을 크게 깨지 않으면서 클라이언트/서버 기준을 일치시켜야 함
+
+### 3) Design Decisions
+- 추천 사유는 `server/main.py`의 전용 related API에서 계산해 상세 화면과 집계 로직이 같은 기준을 사용하도록 했다.
+- 클릭 집계는 별도 관리자 API로 분리해 대시보드 위젯이 운영 메트릭을 직접 조회하도록 했다.
+
+### 4) Implementation Notes
+- 프론트(v0): `CuratedDetailScreen`이 서버 계산 결과를 사용하도록 변경하고 `AdminDashboard`에 추천 클릭 위젯을 추가했다.
+- 백엔드(FastAPI): `/api/curated/{content_id}/related`, `/api/admin/curated/related-clicks/summary`를 추가했다.
+- 데이터/엔드포인트 영향: `curated_related_clicks` 테이블 기반 top pair / top reason 집계 응답이 새로 생겼다.
+
+### 5) Validation
+- 확인 항목: 추천 이유 서버 일원화, 관리자 집계 응답 shape, 대시보드 위젯 렌더링
+- 테스트/검증 결과: Python API 테스트 및 Vitest 화면 테스트를 추가해 관련 흐름을 검증 예정
+
+### 6) Outcome
+- 잘된 점: 추천 사유와 클릭 집계 기준이 서버 단일 로직으로 모였다.
+- 아쉬운 점: 현재 추천 후보군은 승인 콘텐츠 최신 목록 기반 휴리스틱이라 개인화 신호까지는 반영하지 않는다.
+- 다음 액션: 클릭 로그가 쌓이면 가중치/필터를 운영 데이터 기준으로 튜닝한다.
+
 ## Session 2026-02-25-01
 
 ### 1) Goal
