@@ -3512,6 +3512,418 @@ curl -X POST http://localhost:8000/api/auth/login \
 1. target row가 결과에 없을 때 fallback toast/banner를 추가한다.
 2. 다른 admin cards에도 `targetLogId` deep link 패턴을 확장한다.
 
+## Session 2026-03-07-20
+
+### 1) Goal
+- `targetLogId` deep link가 실패하는 경우에도 운영자가 혼란스럽지 않도록, `활동 로그`에 명시적 fallback 안내를 추가한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: target row가 있으면 highlight가 잘 되었지만, 필터 결과에 없을 때도 강조 성공처럼 보이는 배너가 떠서 오해 여지가 있었다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- `AdminLogs`에서 `hasTargetLog`를 계산해 성공/실패 배너를 분기한다.
+- 실패 배너는 현재 결과에서 못 찾았다는 사실과, 필터/검색어를 조정하라는 다음 액션을 함께 안내한다.
+- target row가 없는 경우에는 강조 성공 배너를 완전히 숨겨 false positive 신호를 없앴다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - `hasTargetLog` derived state 추가
+    - success highlight banner / missing-target fallback banner 분기
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - missing `targetLogId` fallback banner 테스트 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - fallback 안내 메시지 해석 포인트 추가
+
+### 5) Validation
+- 확인 항목: target-found vs target-missing banner 분기, pnpm 기준 검증 성공
+- 테스트/검증 결과:
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+  - `pnpm build`
+  - `lsp_diagnostics`로 수정 파일 오류 확인 동반
+
+### 6) Outcome
+#### 잘된 점
+- deep link 실패 시에도 운영자가 현재 상태를 정확히 이해하고 바로 다음 액션을 취할 수 있게 됐다.
+- `targetLogId` 패턴이 성공/실패 모두 설명 가능한 navigation UX로 정리됐다.
+
+#### 아쉬운 점
+- 아직 자동으로 필터를 넓혀 재검색해 주지는 않으므로, 사용자가 수동으로 조정해야 한다.
+
+#### 다음 액션
+1. fallback 상태에서 `필터 초기화` 또는 `검색어 제거` quick action 버튼을 추가한다.
+2. `policy_updated`를 구조화 payload로 바꿔 diff 기반 deep link를 검토한다.
+
+## Session 2026-03-07-21
+
+### 1) Goal
+- `AdminLogs`의 missing-target fallback 배너를 단순 안내에서 끝내지 않고, 운영자가 즉시 복구 액션을 실행할 수 있는 상태로 마무리한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: missing 배너는 표시되지만 사용자가 직접 검색어와 필터를 하나씩 지워야 해서 운영 동선이 끊겼다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- missing-target 배너 안에 `검색어 제거`, `필터 초기화` quick action을 직접 배치해 운영자가 같은 맥락에서 바로 복구할 수 있게 한다.
+- `필터 초기화`는 deep link 탐색 상태를 완전히 해제해야 하므로 `targetLogId`를 포함한 필터 파라미터를 함께 정리한다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - `handleClearQuery`, `handleResetFilters` 추가
+    - missing-target 배너에 quick action 버튼 2종 추가
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - fallback 배너 노출 후 `필터 초기화` 클릭 시 입력값과 배너가 함께 정리되는지 검증
+- 운영 문서
+  - `docs/admin_menual.md`
+    - missing-target 배너의 quick action 사용 흐름 반영
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.observability.test.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- target row를 못 찾았을 때도 운영자가 같은 배너에서 바로 재검색 동작으로 이어질 수 있게 됐다.
+- deep link 기반 활동 로그 UX가 단순 탐색을 넘어 복구 가능한 운영 흐름으로 닫혔다.
+
+#### 아쉬운 점
+- 현재 quick action은 클라이언트 상태 기준 초기화라, 향후 더 정교한 deep link 복원/undo 패턴이 필요할 수 있다.
+
+#### 다음 액션
+1. `policy_updated.reason`을 구조화 payload로 바꿔 threshold 변경 전/후 diff를 안정적으로 보여준다.
+2. 다른 admin deep link 진입점에도 같은 target-row recovery 패턴을 확장한다.
+
+## Session 2026-03-07-22
+
+### 1) Goal
+- `policy_updated` 로그의 freeform `reason` 파싱 의존을 줄이고, threshold history/diff/deep link가 안정적으로 동작하도록 structured metadata로 전환한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `AdminDashboard`, `AdminPolicies`가 모두 `reason` 문자열에서 `curated_quality_threshold=...`를 regex로 파싱하고 있었다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- `admin_action_logs`에 `metadata JSONB`를 추가하고, `policy_updated`는 `reason`과 별도로 `curated_quality_threshold.previous/next` 및 `changed_fields`를 함께 저장한다.
+- 프론트는 metadata를 우선 사용하되, 기존 로그 호환을 위해 legacy `reason` 파싱 fallback을 남긴다.
+- `AdminLogs` 검색도 metadata를 포함해, deep link query가 visible reason 문구 변화에 덜 민감하도록 만든다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `admin_action_logs.metadata JSONB` 컬럼 및 startup 보정 추가
+    - `create_admin_action_log(..., metadata=...)` 지원 추가
+  - `server/main.py`
+    - `write_admin_action_log(..., metadata=...)` 지원 추가
+    - `build_policy_update_log_metadata()` 추가
+    - `/api/admin/policies` 저장 시 threshold 이전/이후 값을 metadata에 함께 기록
+- 프론트
+  - `src/lib/api.ts`
+    - `AdminActionLog.metadata` 타입 추가
+  - 신규: `src/components/screens/admin/pages/policyHistory.ts`
+    - metadata 우선 + legacy fallback threshold history 추출 helper 추가
+  - `src/components/screens/admin/pages/AdminDashboard.tsx`
+    - 최근 기준 변경 카드가 metadata 기반으로 threshold/delta 표시
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - 최근 품질 기준 변경 목록이 metadata 기반 `previous -> next` diff 표시
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - 검색 시 metadata JSON도 포함
+- 테스트
+  - `server/tests/test_admin_policy_logs_api.py` 신규 추가
+  - `src/components/screens/admin/pages/AdminDashboard.analytics.test.tsx`
+  - `src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx`
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/db.py` 오류 없음
+  - `lsp_diagnostics`: `src/lib/api.ts` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminDashboard.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminPolicies.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/policyHistory.ts` 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_admin_policy_logs_api.py`
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminDashboard.analytics.test.tsx components/screens/admin/pages/AdminPolicies.log-policy.test.tsx components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- threshold history가 더 이상 freeform reason regex 하나에 매달리지 않고, 이전/이후 diff까지 안정적으로 표시된다.
+- deep link query도 metadata 검색을 타므로 reason 문구 변경에 덜 취약해졌다.
+
+#### 아쉬운 점
+- 기존 레거시 로그는 metadata가 없으므로 fallback parser를 당분간 유지해야 한다.
+
+#### 다음 액션
+1. `policy_updated` 외 다른 admin action에도 structured metadata 도입이 필요한지 점검한다.
+2. 활동 로그 테이블에서 policy metadata를 더 읽기 쉬운 badge/diff UI로 노출할지 검토한다.
+
+## Session 2026-03-07-23
+
+### 1) Goal
+- `AdminLogs` 테이블에서 `policy_updated` metadata를 raw reason 아래의 compact diff UI로 직접 보여 줘, 운영자가 threshold 변경 맥락을 더 빨리 읽을 수 있게 한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: metadata는 저장/검색되지만 `활동 로그` 표에서는 여전히 reason 문자열만 보여 줘, diff를 눈으로 다시 해석해야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- `사유` 셀은 기존 human-readable reason을 유지하고, 그 아래에 최대 3개의 compact diff chip을 추가한다.
+- chip 문구는 metadata `changed_fields`를 우선 사용하고, 운영 화면에서 자주 읽는 필드는 한글 label로 치환한다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/policyHistory.ts`
+    - policy field label map, 값 formatter, compact diff summary extractor 추가
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - `policy_updated` row의 `사유` 셀 아래에 diff chip strip 추가
+    - 예: `품질 기준: Q 45 -> Q 52`
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - metadata 기반 policy diff chip 표시 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - `활동 로그`에서 compact diff chip을 읽는 방법 반영
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/policyHistory.ts` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.observability.test.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- 운영자가 raw reason 전체를 읽지 않아도 핵심 policy diff를 한눈에 파악할 수 있게 됐다.
+- structured metadata가 저장뿐 아니라 실제 운영 UI 가치로 연결됐다.
+
+#### 아쉬운 점
+- 현재는 최대 3개 chip까지만 노출하므로, 변경 필드가 아주 많을 때는 전체 diff를 모두 한 번에 보지 못한다.
+
+#### 다음 액션
+1. chip overflow가 많은 `policy_updated` row에 `+N개 변경` 요약을 추가할지 검토한다.
+2. 다른 admin action metadata도 같은 compact summary 패턴으로 확장할지 검토한다.
+
+## Session 2026-03-07-24
+
+### 1) Goal
+- `AdminLogs`의 policy diff chip이 많아질 때도 표 밀도를 유지하도록, 3개 초과 변경은 `+N개 변경` 요약으로 접는다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `policy_updated` row는 compact diff chip을 보여 주지만, 변경 필드가 많아지면 같은 셀에서 계속 늘어날 수 있었다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- visible chip은 최대 3개까지만 유지하고, 초과분은 `+N개 변경`으로 집계한다.
+- overflow 요약도 같은 chip strip 안에 넣어, 추가 변경이 있다는 사실을 같은 시선 흐름에서 읽게 한다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - 전체 policy change 목록과 visible 3개를 분리하고 `hiddenPolicyChangeCount` 계산 추가
+    - 초과분이 있으면 `+N개 변경` summary chip 표시
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - 4개 변경 필드 fixture로 overflow summary chip 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - `+N개 변경` 해석 가이드 반영
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.observability.test.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- policy 변경이 많은 로그도 표 높이를 통제하면서 핵심 변화와 추가 변경 유무를 동시에 전달하게 됐다.
+
+#### 아쉬운 점
+- 현재 `+N개 변경`은 개수만 알려 주므로, 초과분 전체를 펼쳐 보는 상세 UX는 아직 없다.
+
+#### 다음 액션
+1. `+N개 변경` hover/foldout으로 나머지 diff를 보여 줄지 검토한다.
+2. compact summary 패턴을 다른 admin metadata 이벤트에도 재사용할지 검토한다.
+
+## Session 2026-03-07-25
+
+### 1) Goal
+- `AdminLogs`의 `+N개 변경` summary chip을 실제 foldout control로 바꿔, 숨겨진 policy diff를 같은 row 안에서 바로 펼쳐 볼 수 있게 한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `+N개 변경`은 추가 변경이 있다는 사실만 알려 주고, 숨겨진 diff 자체는 볼 수 없었다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- `+N개 변경`은 button으로 승격하고, 펼친 뒤에는 `추가 변경 접기 (N개)`로 라벨을 바꾼다.
+- 숨겨진 chip도 같은 `사유` 셀 내부에서 바로 보여 줘서 row 맥락을 잃지 않도록 한다.
+
+### 4) Implementation Notes
+- 프론트
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - `expandedPolicyLogs` state 추가
+    - overflow chip을 toggle button으로 교체
+    - 펼친 상태에서 hidden policy change chip strip 추가
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - `+1개 변경` 클릭 후 `추가 변경 접기 (1개)`와 숨겨진 `롤아웃 단계: qa -> pilot` chip 표시 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - `+N개 변경` 버튼으로 숨겨진 diff를 펼치는 흐름 반영
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.observability.test.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- overflow 요약이 단순 카운트가 아니라 즉시 열어볼 수 있는 상세 진입점이 됐다.
+- 활동 로그 테이블 안에서 policy 변경 맥락을 단계적으로 탐색할 수 있게 됐다.
+
+#### 아쉬운 점
+- 현재 확장 state는 세션 내 클라이언트 상태라, reload나 deep link로는 펼침 상태가 유지되지 않는다.
+
+#### 다음 액션
+1. 펼침 상태를 URL이나 row-local animation과 연결할지 검토한다.
+2. 다른 metadata 이벤트에도 같은 expand/collapse 패턴을 적용할지 검토한다.
+
+## Session 2026-03-07-26
+
+### 1) Goal
+- `AdminLogs`의 compact summary 패턴을 `policy_updated`에서 끝내지 않고, 다음 고가치 이벤트인 page publish 계열(`page_published`, `page_publish_failed`)까지 확장한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: compact summary UI는 `policy_updated`만 지원했고, page publish 계열은 여전히 raw reason만 읽어야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- backend에서 `page_published`, `page_publish_failed` 로그에 metadata를 함께 기록해 UI가 안정적으로 compact chip을 만들 수 있게 한다.
+- 프론트는 action type별 summary extractor를 분리해, policy와 page event를 같은 row renderer로 처리한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `page_publish_failed(conflict)`에 `failure_kind`, `expected_draft_version`, `current_draft_version` metadata 추가
+    - `page_publish_failed(validation_failed)`에 `failure_kind`, `blocking_error_count`, `warning_count` metadata 추가
+    - `page_published`에 `page_id`, `draft_version`, `published_version` metadata 추가
+  - `server/tests/test_admin_page_editor_api.py`
+    - publish success/conflict/validation failure 로그 metadata 검증 추가
+- 프론트
+  - 신규: `src/components/screens/admin/pages/adminLogSummary.ts`
+    - policy / page publish 계열 compact summary extractor 추가
+  - `src/components/screens/admin/pages/AdminLogs.tsx`
+    - generic summary extractor로 전환
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - `page_published` row의 `게시 버전: v2 -> v3` chip 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - page publish 계열 compact summary 예시 반영
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/adminLogSummary.ts` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.observability.test.tsx` 오류 없음
+  - `lsp_diagnostics`: `server/tests/test_admin_page_editor_api.py` 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_admin_page_editor_api.py`
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- `AdminLogs`가 policy 이벤트뿐 아니라 page publish 계열도 compact summary로 읽을 수 있게 되어, 운영자 입장에서 action type별 가독성이 한 단계 올라갔다.
+
+#### 아쉬운 점
+- 아직 page draft/conflict save 계열은 metadata summary를 붙이지 않았으므로, page editor 이벤트 전반으로 보면 일부만 확장된 상태다.
+
+#### 다음 액션
+1. `page_draft_saved`, `page_conflict_detected`, `page_rolled_back`에도 metadata summary 확장 여부를 검토한다.
+2. summary chip tone을 action type별로 구분할지 검토한다.
+
+## Session 2026-03-07-27
+
+### 1) Goal
+- page publish 계열에서 한 단계 더 나아가, `page_draft_saved`, `page_conflict_detected`, `page_rolled_back`까지 `AdminLogs` compact summary 패턴을 확장한다.
+
+### 2) Inputs
+- 참고 문서: `docs/admin_menual.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `page_published`, `page_publish_failed`만 summary chip을 갖고 있었고, draft/conflict/rollback은 raw reason만 읽어야 했다.
+- 제약 조건: 프론트 검증 명령은 `pnpm` 기준으로 유지한다.
+
+### 3) Design Decisions
+- backend에서 각 event에 필요한 최소 metadata만 붙여 summary chip이 안정적으로 계산되게 한다.
+- frontend는 기존 `adminLogSummary.ts` extractor를 확장해 action type별로 필요한 chip만 생성한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `page_conflict_detected`에 `source`, `base_version`, `current_version`, `retryable` metadata 추가
+    - `page_draft_saved`에 `source`, `base_version`, `saved_version` metadata 추가
+    - `page_rolled_back`에 `target_version`, `restored_draft_version`, `published_version`, `publish_now` metadata 추가
+  - `server/tests/test_admin_page_editor_api.py`
+    - conflict/draft save metadata 검증 추가
+- 프론트
+  - `src/components/screens/admin/pages/adminLogSummary.ts`
+    - `page_draft_saved`, `page_conflict_detected`, `page_rolled_back` summary extractor 추가
+  - `src/components/screens/admin/pages/AdminLogs.observability.test.tsx`
+    - `저장 소스: manual`, `저장 버전: v2 -> v3`, `복원 버전: v3 -> v4`, `즉시 게시: 예` chip 검증 추가
+- 운영 문서
+  - `docs/admin_menual.md`
+    - page editor 전반의 compact summary 범위 반영
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/adminLogSummary.ts` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/admin/pages/AdminLogs.observability.test.tsx` 오류 없음
+  - `lsp_diagnostics`: `server/main.py` 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_admin_page_editor_api.py`
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/admin/pages/AdminLogs.observability.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- page editor 운영 로그 전반이 같은 compact summary 언어로 읽히게 되어, action type이 달라도 운영자가 같은 시각 패턴으로 빠르게 해석할 수 있게 됐다.
+
+#### 아쉬운 점
+- chip tone은 아직 공통 스타일이라, success/failure/conflict를 색만 보고 구분하기는 어렵다.
+
+#### 다음 액션
+1. action type별 summary chip tone 분화 여부를 검토한다.
+2. 필요하면 `page_perf_*` 로그에도 compact summary를 붙인다.
+
 ## Session 2026-03-06-07
 
 ### 1) Goal

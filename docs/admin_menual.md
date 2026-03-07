@@ -209,9 +209,11 @@ uv lock
   - 총 대기 건수와 `pending`, `review_license`, `review_duplicate`, `review_quality` 분포를 바로 확인할 수 있다.
   - 상태 카드를 클릭하면 `/admin/curated?status=...`로 바로 이동한다.
   - 같은 카드 안에 현재 `품질 기준(Q)`이 함께 보이므로, queue 증가가 기준 상향 때문인지도 바로 해석할 수 있다.
-  - 카드 하단의 `최근 기준 변경` 목록은 `policy_updated` 로그에서 추출한 최근 `curated_quality_threshold` 변경 이력이다.
+  - 카드 하단의 `최근 기준 변경` 목록은 `policy_updated.metadata.curated_quality_threshold` 기준으로 추출한 최근 품질 기준 변경 이력이다.
+  - metadata에 이전 값이 있으면 `Q 52 (+7)`처럼 변화량도 함께 보여 준다.
   - 이력 행을 클릭하면 `/admin/logs?actionType=policy_updated&query=curated_quality_threshold`로 이동해 관련 로그만 바로 본다.
   - 최근 버전부터 이동 직후 해당 로그 row는 강조 표시되어 어떤 이력에서 내려왔는지 한눈에 확인할 수 있다.
+  - 만약 target row가 현재 결과에 없으면 `요청한 로그를 현재 필터 결과에서 찾지 못했습니다...` 안내가 표시되며, 이 경우 배너의 `검색어 제거` 또는 `필터 초기화`로 즉시 범위를 넓혀 다시 확인할 수 있다.
 - `/admin/curated`
   - 실제 검수/승인/반려 작업을 수행하는 화면
   - 상태 필터를 `pending`, `review_license`, `review_duplicate`, `review_quality`, `approved`, `rejected`, `auto_rejected` 기준으로 좁혀 본다.
@@ -220,6 +222,12 @@ uv lock
 - `/admin/logs`
   - 자동 수집 성공/건너뜀/실패 건수와 실패 사유를 본다.
   - 큐가 갑자기 늘면 같은 기간의 `curated_collection_failed`, `curated_collection_skipped`도 함께 확인한다.
+  - `policy_updated` row는 최근 버전부터 raw reason 아래에 compact diff chip을 함께 보여 준다.
+  - 예를 들어 `품질 기준: Q 45 -> Q 52`처럼 핵심 변경만 빠르게 읽고, 필요할 때만 전체 reason 문구를 확인하면 된다.
+  - chip이 3개를 넘으면 마지막에 `+N개 변경` 버튼이 붙고, 이를 누르면 숨겨진 diff chip이 같은 row 아래에 펼쳐진다.
+  - 같은 compact summary 패턴은 `page_published`, `page_publish_failed`에도 적용된다.
+  - 예를 들어 `게시 버전: v2 -> v3`, `실패 유형: validation_failed`, `차단 오류: 1건` 같은 chip으로 페이지 운영 로그를 빠르게 읽을 수 있다.
+  - 최근 버전부터는 `page_draft_saved`, `page_conflict_detected`, `page_rolled_back`도 `저장 소스`, `저장 버전`, `버전 충돌`, `복원 버전`, `즉시 게시` 같은 chip으로 함께 읽을 수 있다.
 
 ### 10-4. 추천 운영 순서
 1. `/admin` 대시보드에서 어떤 review 상태가 몰리는지 먼저 본다.
@@ -234,9 +242,10 @@ uv lock
 - `/admin/policies`
   - `Curated 품질 검토 기준(1~100)`을 올리면 더 많은 후보가 `review_quality`로 들어간다.
   - 기준을 내리면 `pending`으로 바로 넘어가는 후보가 늘어난다.
-  - 같은 화면의 `최근 품질 기준 변경` 목록에서 최근 누가 어떤 `Q` 값으로 바꿨는지 바로 확인할 수 있다.
+  - 같은 화면의 `최근 품질 기준 변경` 목록에서 최근 누가 어떤 `Q` 값으로 바꿨는지, 가능하면 `이전 -> 현재` diff까지 바로 확인할 수 있다.
   - 각 이력 행은 `활동 로그`의 해당 정책 변경 맥락으로 바로 이동하는 shortcut 역할도 한다.
   - 이동 후 `threshold history에서 이동한 로그를 강조 표시하고 있습니다.` 안내가 보이면 정상적으로 target row가 잡힌 상태다.
+  - 반대로 target row가 없다는 배너가 뜨면, 같은 배너의 quick action으로 현재 필터를 바로 정리해 재검색한다.
 - 운영자가 quality queue 급증을 볼 때는 대시보드/큐만 보지 말고 현재 정책값도 함께 확인한다.
 - 현재 UI의 `Review Reason Guide` 카드가 각 reason chip의 의미를 바로 설명해 준다.
 - 최근 버전부터 `Review Reason Guide`는 기본 접힘 상태이며, 필요한 순간에만 펼쳐 본다.
