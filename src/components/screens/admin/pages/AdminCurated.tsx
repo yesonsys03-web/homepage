@@ -86,6 +86,7 @@ export function AdminCurated() {
   const [summaryBeginner, setSummaryBeginner] = useState("")
   const [summaryMid, setSummaryMid] = useState("")
   const [summaryExpert, setSummaryExpert] = useState("")
+  const [thumbnailUrl, setThumbnailUrl] = useState("")
   const [rejectReason, setRejectReason] = useState("")
   const [submitting, setSubmitting] = useState(false)
   const [runningCollection, setRunningCollection] = useState(false)
@@ -172,6 +173,7 @@ export function AdminCurated() {
     setSummaryBeginner(item.summary_beginner || "")
     setSummaryMid(item.summary_mid || "")
     setSummaryExpert(item.summary_expert || "")
+    setThumbnailUrl(item.thumbnail_url || "")
     setRejectReason(item.reject_reason || "")
   }
 
@@ -219,6 +221,7 @@ export function AdminCurated() {
           summary_beginner: summaryBeginner.trim(),
           summary_mid: summaryMid.trim(),
           summary_expert: summaryExpert.trim(),
+          thumbnail_url: thumbnailUrl.trim(),
         })
       }
 
@@ -349,6 +352,11 @@ export function AdminCurated() {
             <td className="px-4 py-3 text-sm text-slate-100">
               <p className="line-clamp-1">{item.title}</p>
               <p className="text-xs text-slate-400">{item.repo_owner}/{item.repo_name}</p>
+              {item.source_url ? (
+                <a href={item.source_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-sky-400 hover:underline truncate block max-w-[260px]">{item.source_url}</a>
+              ) : (
+                <p className="text-[11px] text-red-400">source_url 없음</p>
+              )}
               {reviewReasonLabels(item).length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {reviewReasonLabels(item).map((label) => (
@@ -424,6 +432,19 @@ export function AdminCurated() {
 
         {drawerMode === "edit" ? (
           <>
+            <label className="block text-sm text-slate-300">
+              커버 이미지 URL
+              <input
+                type="url"
+                value={thumbnailUrl}
+                onChange={(event) => setThumbnailUrl(event.target.value)}
+                placeholder="https://example.com/image.png (비워두면 GitHub 기본 이미지 사용)"
+                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-slate-100 placeholder:text-slate-500"
+              />
+              {thumbnailUrl.trim() ? (
+                <img src={thumbnailUrl.trim()} alt="미리보기" className="mt-2 h-28 w-full rounded object-cover" />
+              ) : null}
+            </label>
             <label className="block text-sm text-slate-300">
               초보자 요약
               <textarea

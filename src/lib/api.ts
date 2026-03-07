@@ -58,6 +58,8 @@ export interface CuratedContent {
   is_korean_dev: boolean
   stars: number
   license: string
+  license_explanation: string
+  thumbnail_url: string
   relevance_score?: number | null
   beginner_value?: number | null
   quality_score?: number | null
@@ -105,6 +107,20 @@ export interface ErrorTranslateResponse {
   plan_b: ErrorTranslateStep
   error_type: "pnpm" | "python" | "git" | "vite" | "general" | string
   error_hash: string
+  source: "cache" | "fallback" | string
+}
+
+export interface TextTranslateCommand {
+  description: string
+  command: string
+}
+
+export interface TextTranslateResponse {
+  korean_summary: string
+  simple_analogy: string
+  commands: TextTranslateCommand[]
+  related_terms: string[]
+  input_hash: string
   source: "cache" | "fallback" | string
 }
 
@@ -1089,6 +1105,7 @@ export const api = {
       relevance_score?: number
       beginner_value?: number
       license?: string
+      thumbnail_url?: string
     },
   ) => {
     const res = await authFetch(`${API_BASE}/api/admin/curated/${contentId}`, {
@@ -1121,6 +1138,20 @@ export const api = {
       throw new ApiRequestError(res.status, detail)
     }
     return res.json() as Promise<ErrorTranslateResponse>
+  },
+
+  textTranslate: async (input_text: string) => {
+    const res = await fetch(`${API_BASE}/api/translate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input_text }),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "텍스트 번역에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "텍스트 번역에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<TextTranslateResponse>
   },
 
   sendErrorTranslateFeedback: async (error_hash: string, solved: boolean) => {

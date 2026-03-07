@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useState, type CSSProperties } from "react"
 
+import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
+import { ProjectMeta } from "@/components/ProjectMeta"
 import { TopNav } from "@/components/TopNav"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { api, type CuratedContent } from "@/lib/api"
 
@@ -25,6 +25,73 @@ type Screen =
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
   onOpenCurated?: (contentId: number) => void
+}
+
+function StickerBadge({ type }: { type: "new" | "hot" | "weird" | "wip" }) {
+  const colors = {
+    new: "bg-[#23D5AB] text-[#0B1020]",
+    hot: "bg-[#FF5D8F] text-white",
+    weird: "bg-[#FFB547] text-[#0B1020]",
+    wip: "bg-[#B8C3E6] text-[#0B1020]",
+  }
+  const labels = { new: "NEW", hot: "HOT", weird: "WEIRD", wip: "WIP" }
+  return (
+    <span className={`absolute -top-2 -right-2 px-2 py-0.5 text-xs font-bold rounded ${colors[type]} rotate-3`}>
+      {labels[type]}
+    </span>
+  )
+}
+
+function CuratedCard({
+  item,
+  index,
+  onOpenCurated,
+}: {
+  item: CuratedContent
+  index: number
+  onOpenCurated?: (contentId: number) => void
+}) {
+  return (
+    <Card
+      className="group relative bg-[#161F42] border-0 rounded-xl overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:rotate-1 hover:shadow-xl hover:shadow-[#23D5AB]/10 cursor-pointer"
+      style={{
+        transform: `rotate(${(index % 3 - 1) * 1.5}deg)`,
+      }}
+      onClick={() => onOpenCurated?.(item.id)}
+    >
+      {item.is_korean_dev && <StickerBadge type="new" />}
+      <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center overflow-hidden">
+        {item.thumbnail_url ? (
+          <img
+            src={item.thumbnail_url}
+            alt={item.title}
+            className="h-full w-full object-cover"
+            onError={(e) => { e.currentTarget.style.display = "none" }}
+          />
+        ) : (
+          <ProjectCoverPlaceholder
+            seedKey={String(item.id)}
+            title={item.title}
+            summary={item.summary_beginner}
+            platform={item.category}
+            tags={item.tags}
+            likeCount={item.stars}
+            size="card"
+          />
+        )}
+      </div>
+      <CardContent className="p-4">
+        <ProjectMeta
+          title={item.title}
+          summary={item.summary_beginner || "요약 준비 중"}
+          tags={item.tags}
+          author={item.repo_owner}
+          likes={item.stars}
+          comments={item.quality_score ?? 0}
+        />
+      </CardContent>
+    </Card>
+  )
 }
 
 export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
@@ -135,35 +202,22 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
 
         {error ? <p className="mb-4 rounded-xl border border-[#FF6B6B]/40 bg-[#2A1320] px-4 py-3 text-sm text-[#FFB7B7]">{error}</p> : null}
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <section className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
           {loading
             ? Array.from({ length: 6 }).map((_, index) => (
-                <div key={`curated-skeleton-${index}`} className="h-56 animate-pulse rounded-2xl border border-[#111936] bg-[#161F42]" />
+                <div key={`curated-skeleton-${index}`} className="rounded-xl bg-[#161F42] border border-[#111936] overflow-hidden animate-pulse">
+                  <div className="aspect-video bg-[#111936]" />
+                  <div className="p-4 space-y-2">
+                    <div className="h-4 bg-[#111936] rounded w-2/3" />
+                    <div className="h-3 bg-[#111936] rounded w-full" />
+                    <div className="h-3 bg-[#111936] rounded w-5/6" />
+                  </div>
+                </div>
               ))
-            : items.map((item) => (
-                <Card key={item.id} className="border-[#111936] bg-[#161F42]">
-                  <CardHeader>
-                    <CardTitle className="line-clamp-2 text-base text-[#F4F7FF]">{item.title}</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3 text-sm text-[#B8C3E6]">
-                    <div className="flex flex-wrap gap-2">
-                      <Badge className="bg-[#111936] text-[#B8C3E6]">{item.category || "미분류"}</Badge>
-                      <Badge className="bg-[#111936] text-[#B8C3E6]">{item.language || "Unknown"}</Badge>
-                      <Badge className="bg-[#111936] text-[#B8C3E6]">⭐ {item.stars}</Badge>
-                    </div>
-                    <p className="line-clamp-3">{item.summary_beginner || "초보자 요약이 아직 준비되지 않았습니다."}</p>
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs text-[#8A96BE]">{item.repo_owner}/{item.repo_name}</span>
-                      <Button
-                        size="sm"
-                        className="bg-[#23D5AB] text-[#0B1020] hover:bg-[#23D5AB]/90"
-                        onClick={() => openDetail(item.id)}
-                      >
-                        상세보기
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
+            : items.map((item, index) => (
+                <div key={item.id} className="reveal-up" style={{ "--reveal-delay": `${Math.min(index, 8) * 45}ms` } as CSSProperties}>
+                  <CuratedCard item={item} index={index} onOpenCurated={openDetail} />
+                </div>
               ))}
         </section>
 

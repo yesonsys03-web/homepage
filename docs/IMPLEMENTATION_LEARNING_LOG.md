@@ -42,6 +42,34 @@
 
 ## Sessions
 
+## Session 2026-03-07-03
+
+### 1) Goal
+- Playground/Curated 주요 문장에 glossary hover popup을 붙이고, 용어사전으로 즉시 이동할 수 있는 재사용 가능한 하이라이트 유틸을 완성한다.
+
+### 2) Inputs
+- 참고 문서: `docs/IMPLEMENTATION_LEARNING_LOG.md`, `docs/VIBE_03_glossary.md`
+- 사용자 피드백/이슈: 중단된 작업 이어서 진행 요청. 최근 세션 흔적상 glossary hover popup slice가 구현 직전 상태였음.
+- 제약 조건: 기존 디자인 톤을 유지하면서도 별도 tooltip 패키지 없이 현재 shadcn/radix 조합에서 가볍게 재사용 가능해야 함.
+
+### 3) Design Decisions
+- hover popup은 새 상태 관리 없이 `hover`/`focus-within` 기반 preview 카드로 구현해 키보드 포커스와 마우스 hover를 함께 지원한다.
+- 텍스트 하이라이트는 glossary 데이터에서 직접 매칭해 `Playground`의 번역 결과와 `Curated`의 요약 문장에 같은 규칙으로 적용한다.
+
+### 4) Implementation Notes
+- 프론트(v0): `GlossaryHoverTerm`, `GlossaryHighlightedText`, `glossary-text` 유틸을 추가했다.
+- 프론트(v0): `PlaygroundScreen`의 텍스트 번역 결과/연관 용어와 `CuratedScreen`, `CuratedDetailScreen` 요약 문장에 hover popup + glossary 이동을 연결했다.
+- 데이터/엔드포인트 영향: API 변경은 없고, 기존 `vibecoder_glossary_focus_term` 로컬 스토리지 흐름을 공용 유틸로 정리했다.
+
+### 5) Validation
+- 확인 항목: 용어 매칭 하이라이트, hover preview DOM 렌더링, glossary 포커스 이동, 기존 Playground/Curated 화면 회귀
+- 테스트/검증 결과: Vitest 대상 테스트, TypeScript build, LSP diagnostics 재검증 예정
+
+### 6) Outcome
+- 잘된 점: 용어가 등장하는 문장 안에서도 바로 뜻을 미리 보고 glossary로 이동할 수 있게 되어 VIBE_03 학습 흐름이 자연스러워졌다.
+- 아쉬운 점: 현재 매칭은 glossary term 본문 기준이라 별칭/축약어 사전은 추가로 넓힐 수 있다.
+- 다음 액션: 사용 로그가 쌓이면 어떤 용어가 hover만 많이 되고 클릭은 적은지 보고 용어 카드 밀도를 조정한다.
+
 ## Session 2026-03-07-02
 
 ### 1) Goal
@@ -3923,6 +3951,174 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. action type별 summary chip tone 분화 여부를 검토한다.
 2. 필요하면 `page_perf_*` 로그에도 compact summary를 붙인다.
+
+## Session 2026-03-07-28
+
+### 1) Goal
+- `VIBE_01~03` 현재 구현 상태를 다시 맞춰 보고, 아직 비어 있는 우선순위 높은 항목 중 `VIBE_03`의 `즉석 번역기`를 현재 앱 구조에 맞게 MVP로 연결한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`, `docs/VIBE_02_playground.md`, `docs/VIBE_03_glossary.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 현재 상태 확인 결과:
+  - `VIBE_02`의 `에러 응급실`과 `명령어 레시피북`은 이미 `PlaygroundScreen`에 구현되어 있음
+  - `VIBE_03`의 `용어사전`과 `비유 카드 갤러리`도 구현되어 있음
+  - 반면 `VIBE_03`의 `즉석 번역기`는 아직 빠져 있었음
+- 제약 조건: Gemini API 키는 아직 설정되지 않았으므로, endpoint는 `fallback + cache + rate limit` 기준으로 먼저 동작해야 함
+
+### 3) Design Decisions
+- `TranslatorScreen.tsx`를 새로 만드는 대신, 문서의 `에러 응급실과 탭으로 통합` 방향에 맞춰 `PlaygroundScreen` 안에 `에러 번역 / 텍스트 번역` 탭을 추가한다.
+- backend는 `error_solutions`와 분리된 `text_translations` 캐시 테이블을 추가해 텍스트 번역을 독립적으로 저장한다.
+- 관련 용어 이동은 별도 라우터 변경 없이 localStorage handoff로 `GlossaryScreen` 포커스 흐름에 연결한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `text_translations` 테이블 및 `get_text_translation`, `upsert_text_translation` helper 추가
+  - `server/main.py`
+    - `TextTranslateRequest` 추가
+    - `/api/translate` POST endpoint 구현
+    - 입력 길이 제한(2,000자), rate limit, prompt-injection 필터, 캐시/ fallback 응답 추가
+    - `build_text_translation_fallback()`과 `find_related_glossary_terms()` 추가
+  - 신규 테스트: `server/tests/test_translate_api.py`
+    - fallback 응답/캐시 응답/길이 제한 검증 추가
+- 프론트
+  - `src/lib/api.ts`
+    - `TextTranslateResponse` 타입 및 `api.textTranslate()` 추가
+  - `src/components/screens/PlaygroundScreen.tsx`
+    - `에러 번역 / 텍스트 번역` 탭 UI 추가
+    - 텍스트 번역 결과(한국어 요약, 쉬운 비유, 명령어, 관련 용어) 렌더링 추가
+    - 최근 번역 5개 localStorage 저장/재사용 추가
+    - 관련 용어 클릭 시 `GlossaryScreen`으로 이동하도록 localStorage handoff 추가
+  - `src/components/screens/GlossaryScreen.tsx`
+    - 외부에서 전달된 focus term을 읽어 검색/강조/토스트 처리하는 초기 효과 추가
+  - `src/components/screens/PlaygroundScreen.test.tsx`
+    - 텍스트 번역 탭 결과 및 recent history 저장 검증 추가
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/db.py` 오류 없음
+  - `lsp_diagnostics`: `server/main.py` 오류 없음
+  - `lsp_diagnostics`: `src/lib/api.ts` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/PlaygroundScreen.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/GlossaryScreen.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/PlaygroundScreen.test.tsx` 오류 없음
+  - `lsp_diagnostics`: `server/tests/test_translate_api.py` 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_translate_api.py`
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/PlaygroundScreen.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- `VIBE_01`에만 치우쳐 있던 흐름을 다시 `VIBE_01~03` 관점으로 재정렬했고, 실제로 비어 있던 `VIBE_03`의 상위 우선순위 항목 하나를 메웠다.
+- Gemini 키 없이도 번역 MVP가 동작하도록 설계해서 지금 바로 검증 가능한 상태로 만들었다.
+
+#### 아쉬운 점
+- 현재 `/api/translate`는 fallback 중심이라, 더 자연스러운 한국어 설명 품질은 Gemini 연동 이후가 본격 단계다.
+
+#### 다음 액션
+1. Gemini API 키가 준비되면 `/api/translate`에 실제 LLM 응답 경로를 붙인다.
+2. `VIBE_03`의 `오늘의 용어 카드` 또는 `용어 호버 팝업` 중 다음 우선순위 항목을 이어서 구현한다.
+
+## Session 2026-03-07-29
+
+### 1) Goal
+- 직전 세션에서 fallback-first로 붙인 `즉석 번역기`를 한 단계 확장해, `GEMINI_API_KEY`가 있을 때는 `/api/translate`가 실제 Gemini 응답을 우선 사용하도록 만든다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_03_glossary.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 직전 상태: `/api/translate`는 cache + fallback만 동작했고, Gemini 키가 있어도 실제 LLM 호출 경로는 없었다.
+- 제약 조건: 현재 운영 환경에서는 키가 아직 없을 수 있으므로 fallback 동작을 절대 깨지 않도록 유지해야 한다.
+
+### 3) Design Decisions
+- 기존 `server/gemini_curator.py`의 `urllib` 기반 Gemini 호출 패턴을 따라가되, 텍스트 번역은 별도 helper(`translate_text_with_gemini`)로 분리해 테스트에서 독립적으로 monkeypatch 가능하게 만든다.
+- Gemini 호출이 실패하면 endpoint는 예외를 그대로 노출하지 않고 즉시 fallback 응답으로 내려가게 한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/main.py`
+    - `_build_text_translate_prompt()`, `_extract_gemini_text()`, `_normalize_text_translate_result()` 추가
+    - `translate_text_with_gemini()` 추가
+    - `/api/translate`가 `GEMINI_API_KEY` 존재 시 Gemini 우선, 실패 시 fallback으로 전환하도록 변경
+  - `server/tests/test_translate_api.py`
+    - Gemini 성공 경로(`source="gemini"`) 검증 추가
+    - Gemini 예외 발생 시 fallback 유지 검증 추가
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/main.py` 오류 없음
+  - `lsp_diagnostics`: `server/tests/test_translate_api.py` 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_translate_api.py`
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/screens/PlaygroundScreen.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- API 키가 준비되는 즉시 더 자연스러운 번역 품질을 받을 수 있는 경로가 열렸고, 동시에 현재 fallback 기반 운영도 그대로 유지된다.
+
+#### 아쉬운 점
+- 아직 프롬프트/결과 schema는 MVP 수준이라, 실제 Gemini 응답을 더 다듬는 후속 튜닝은 필요하다.
+
+#### 다음 액션
+1. Gemini 실제 응답 품질을 보고 prompt/command extraction을 미세 조정한다.
+2. `VIBE_03`의 다음 우선순위 항목(`오늘의 용어 카드` 또는 `용어 호버 팝업`)으로 넘어간다.
+
+## Session 2026-03-07-30
+
+### 1) Goal
+- `VIBE_03`의 다음 우선순위 항목인 `오늘의 용어 카드`를 현재 앱 구조에 맞는 MVP로 구현해, 챌린지 화면에서 바로 읽고 퀴즈까지 풀 수 있게 한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_03_glossary.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 현재 상태:
+  - glossary 데이터와 `TodayGlossaryCards` browse widget은 이미 존재함
+  - `ChallengesScreen`은 아직 정적 카드 목록 중심이라 `오늘의 용어 카드`와 연결되지 않았음
+- 제약 조건: XP 백엔드는 아직 없으므로 MVP는 localStorage 기반 progress로 먼저 구현
+
+### 3) Design Decisions
+- `ChallengesScreen` 상단에 `TodayGlossaryChallengeCard`를 추가해 `오늘의 챌린지 옆`이라는 기획 의도를 현재 구조 안에서 실현한다.
+- XP와 퀴즈 완료 상태는 localStorage로 저장해 새 backend 없이도 daily loop를 체감하게 만든다.
+- glossary deep link는 기존 `vibecoder_glossary_focus_term` handoff를 재사용한다.
+
+### 4) Implementation Notes
+- 프론트
+  - 신규: `src/components/TodayGlossaryChallengeCard.tsx`
+    - 오늘의 용어 1개 선택
+    - `이해했어요 +5 XP` 버튼
+    - 4지선다 미니 퀴즈와 정답 시 `+10 XP`
+    - localStorage 기반 daily progress / XP 저장
+  - `src/components/screens/ChallengesScreen.tsx`
+    - 화면 상단에 daily glossary card 삽입
+    - `사전에서 자세히 보기` 클릭 시 glossary focus handoff 연결
+  - 신규 테스트: `src/components/TodayGlossaryChallengeCard.test.tsx`
+    - 이해/퀴즈 XP 적립 및 success message 검증
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/components/TodayGlossaryChallengeCard.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/screens/ChallengesScreen.tsx` 오류 없음
+  - `lsp_diagnostics`: `src/components/TodayGlossaryChallengeCard.test.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run --root src components/TodayGlossaryChallengeCard.test.tsx components/screens/PlaygroundScreen.test.tsx`
+- 프론트 빌드
+  - `pnpm build`
+
+### 6) Outcome
+#### 잘된 점
+- glossary 데이터가 읽기용 카드에서 끝나지 않고, daily habit/quiz loop로 확장됐다.
+- backend 없이도 오늘의 용어와 퀴즈 보상을 바로 체험할 수 있게 됐다.
+
+#### 아쉬운 점
+- XP는 아직 localStorage 기준이라 사용자 계정/레벨 시스템과 연동되지는 않는다.
+
+#### 다음 액션
+1. 오늘의 용어 XP를 실제 레벨 시스템과 연결할 backend 준비 여부를 검토한다.
+2. `VIBE_03`의 `용어 호버 팝업` 구현으로 이어간다.
 
 ## Session 2026-03-06-07
 

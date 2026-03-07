@@ -31,6 +31,7 @@ import uuid
 from xml.sax.saxutils import escape as xml_escape
 from urllib.parse import urlparse, urlencode, quote
 from urllib.request import Request as UrlRequest, urlopen
+from urllib.error import HTTPError, URLError
 from threading import Lock
 from contextlib import asynccontextmanager
 from collections import deque
@@ -115,6 +116,8 @@ from db import (
     delete_curated_content,
     get_error_solution,
     upsert_error_solution,
+    get_text_translation,
+    upsert_text_translation,
     increment_error_solution_feedback,
     create_glossary_term_request,
     create_curated_related_click,
@@ -131,6 +134,7 @@ from github_collector import (
     GitHubCollectorConfig,
     build_search_query,
     fetch_github_readme_excerpt,
+    fetch_github_license_file,
     normalize_github_repo_url,
     reached_daily_collect_limit,
     search_github_repositories,
@@ -730,6 +734,7 @@ class CuratedAdminUpdateRequest(BaseModel):
     relevance_score: Optional[int] = None
     beginner_value: Optional[int] = None
     license: Optional[str] = None
+    thumbnail_url: Optional[str] = None
 
 
 class CuratedDuplicateReviewMetadata(TypedDict, total=False):
@@ -751,6 +756,10 @@ class ErrorTranslateRequest(BaseModel):
 class ErrorTranslateFeedbackRequest(BaseModel):
     error_hash: str
     solved: bool
+
+
+class TextTranslateRequest(BaseModel):
+    input_text: str
 
 
 class GlossaryTermRequestCreate(BaseModel):
@@ -832,6 +841,9 @@ LOGIN_ACCOUNT_LIMIT_PER_HOUR = 20
 REGISTER_IP_LIMIT_PER_HOUR = 5
 ERROR_TRANSLATE_IP_LIMIT_PER_MINUTE = int(
     os.getenv("ERROR_TRANSLATE_IP_LIMIT_PER_MINUTE", "20")
+)
+TEXT_TRANSLATE_IP_LIMIT_PER_MINUTE = int(
+    os.getenv("TEXT_TRANSLATE_IP_LIMIT_PER_MINUTE", "20")
 )
 GLOSSARY_TERM_REQUEST_IP_LIMIT_PER_HOUR = int(
     os.getenv("GLOSSARY_TERM_REQUEST_IP_LIMIT_PER_HOUR", "10")
@@ -2140,6 +2152,250 @@ def build_error_solution_fallback(error_message: str) -> dict[str, object]:
     }
 
 
+def find_related_glossary_terms(text: str) -> list[str]:
+    lowered = text.lower()
+    matches: list[str] = []
+    glossary_pairs = [
+        ("API", ["api"]),
+        ("서버", ["server"]),
+        ("클라이언트", ["client"]),
+        ("레포지토리", ["repository", "repo"]),
+        ("pnpm", ["pnpm"]),
+        ("pnpm install", ["pnpm install"]),
+        ("pnpm dev", ["pnpm dev"]),
+        ("git", ["git"]),
+        ("포트", ["port", "localhost:"]),
+        ("node_modules", ["node_modules"]),
+        ("package.json", ["package.json"]),
+        (".env", [".env", "env file", "environment variable"]),
+        ("README.md", ["readme"]),
+        ("배포", ["deploy", "deployment"]),
+        ("도메인", ["domain"]),
+        ("HTTPS", ["https", "ssl"]),
+        ("MCP", ["mcp"]),
+        ("프롬프트", ["prompt"]),
+        ("토큰", ["token"]),
+        ("CORS", ["cors"]),
+    ]
+
+    for label, keywords in glossary_pairs:
+        if any(keyword in lowered for keyword in keywords):
+            matches.append(label)
+
+    return matches[:5]
+
+
+def build_text_translation_fallback(input_text: str) -> dict[str, object]:
+    lowered = input_text.lower()
+    commands = re.findall(
+        r"(?:^|\n)\s*((?:pnpm|npm|git|uv|python|pip|npx|bun|docker)\s+[^\n`]+)",
+        input_text,
+        flags=re.IGNORECASE,
+    )
+    normalized_commands: list[dict[str, str]] = []
+    for raw_command in commands[:3]:
+        command = " ".join(raw_command.strip().split())
+        if not command or is_dangerous_command(command):
+            continue
+        normalized_commands.append(
+            {
+                "description": "원문에 나온 실행 명령어예요.",
+                "command": command,
+            }
+        )
+
+    if "upstream" in lowered and "origin" in lowered and "main" in lowered:
+        korean_summary = "새 Git 저장소를 만들고 GitHub 원격 저장소를 기본 브랜치와 연결하라는 뜻이에요."
+        simple_analogy = (
+            "새 일기장을 만들고 클라우드 백업 주소를 처음 연결하는 단계라고 보면 돼요."
+        )
+        if not normalized_commands:
+            normalized_commands = [
+                {
+                    "description": "새 Git 기록을 시작해요.",
+                    "command": "git init",
+                },
+                {
+                    "description": "GitHub 주소를 origin이라는 이름으로 연결해요.",
+                    "command": "git remote add origin <github-url>",
+                },
+                {
+                    "description": "기본 브랜치를 main으로 맞춰요.",
+                    "command": "git branch -M main",
+                },
+            ]
+    elif "readme" in lowered:
+        korean_summary = (
+            "프로젝트 설명서를 읽고 설치나 실행 순서를 따라가라는 뜻이에요."
+        )
+        simple_analogy = "새 가전제품을 샀을 때 설명서를 먼저 펴보는 상황과 비슷해요."
+    elif commands:
+        korean_summary = "기술 설명 속에 실행해야 할 명령어가 함께 들어 있어요. 순서대로 따라 하면 되는 안내문에 가깝습니다."
+        simple_analogy = (
+            "요리 레시피에서 재료와 조리 순서가 함께 적힌 카드라고 생각하면 쉬워요."
+        )
+    else:
+        korean_summary = "기술적인 문장을 쉬운 한국어로 풀어보면, 무엇을 하려는지와 왜 필요한지를 설명하는 안내문이에요."
+        simple_analogy = (
+            "전문가용 설명서를 친구가 쉬운 말로 다시 읽어주는 느낌이라고 보면 돼요."
+        )
+
+    return {
+        "korean_summary": korean_summary,
+        "simple_analogy": simple_analogy,
+        "commands": normalized_commands,
+        "related_terms": find_related_glossary_terms(input_text),
+    }
+
+
+def _extract_gemini_text(payload: object) -> str:
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("Gemini response payload was not an object")
+
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise RuntimeError("Gemini response did not include candidates")
+
+    first_candidate = candidates[0]
+    if not isinstance(first_candidate, Mapping):
+        raise RuntimeError("Gemini candidate was not an object")
+
+    content = first_candidate.get("content")
+    if not isinstance(content, Mapping):
+        raise RuntimeError("Gemini response did not include content")
+
+    parts = content.get("parts")
+    if not isinstance(parts, list) or not parts:
+        raise RuntimeError("Gemini response did not include text parts")
+
+    text_parts: list[str] = []
+    for part in parts:
+        if isinstance(part, Mapping):
+            text = part.get("text")
+            if isinstance(text, str) and text.strip():
+                text_parts.append(text)
+
+    if not text_parts:
+        raise RuntimeError("Gemini response did not include text parts")
+
+    return "\n".join(text_parts).strip()
+
+
+def _build_text_translate_prompt(input_text: str) -> str:
+    return f"""
+다음 기술적인 텍스트를 코딩을 전혀 모르는 한국인이 이해할 수 있게 설명해줘.
+
+원문:
+{input_text}
+
+다음 형식으로 JSON만 응답:
+{{
+  "korean_summary": "무슨 말인지 2~3줄 한국어 요약 (기술 용어 최소화)",
+  "simple_analogy": "한국 일상으로 비유한 한 줄 설명",
+  "commands": [
+    {{"description": "이 명령어가 하는 일", "command": "실행할 명령어"}}
+  ],
+  "related_terms": ["관련 용어1", "용어2"]
+}}
+
+원칙:
+- 기술 용어를 쓸 때는 바로 뒤에 쉬운 한국어 설명을 붙일 것
+- 비유는 반드시 한국 일상 소재 사용 (식당, 마트, 아파트, 게임 등)
+- 명령어가 없으면 commands는 빈 배열
+- 위험 명령어는 commands에 넣지 말 것 (`rm -rf`, `sudo`, `curl|bash`, `chmod 777` 등)
+""".strip()
+
+
+def _normalize_text_translate_result(
+    parsed: object, input_text: str
+) -> dict[str, object]:
+    if not isinstance(parsed, Mapping):
+        raise RuntimeError("Gemini translation output was not an object")
+
+    korean_summary = str(parsed.get("korean_summary") or "").strip()
+    simple_analogy = str(parsed.get("simple_analogy") or "").strip()
+    if len(korean_summary) < 10 or len(simple_analogy) < 10:
+        raise RuntimeError("Gemini translation output was too short")
+
+    commands: list[dict[str, str]] = []
+    raw_commands = parsed.get("commands")
+    if isinstance(raw_commands, list):
+        for item in raw_commands:
+            if not isinstance(item, Mapping):
+                continue
+            description = str(item.get("description") or "").strip()
+            command = " ".join(str(item.get("command") or "").strip().split())
+            if not description or not command or is_dangerous_command(command):
+                continue
+            commands.append({"description": description, "command": command})
+
+    related_terms: list[str] = []
+    raw_related_terms = parsed.get("related_terms")
+    if isinstance(raw_related_terms, list):
+        for item in raw_related_terms:
+            if (
+                isinstance(item, str)
+                and item.strip()
+                and item.strip() not in related_terms
+            ):
+                related_terms.append(item.strip())
+
+    if not related_terms:
+        related_terms = find_related_glossary_terms(input_text)
+
+    return {
+        "korean_summary": korean_summary,
+        "simple_analogy": simple_analogy,
+        "commands": commands,
+        "related_terms": related_terms[:5],
+    }
+
+
+def translate_text_with_gemini(
+    input_text: str,
+    *,
+    api_key: str,
+    model: str = GEMINI_MODEL,
+    timeout_seconds: int = 20,
+) -> dict[str, object]:
+    cleaned_key = api_key.strip()
+    if not cleaned_key:
+        raise RuntimeError("Gemini API key is required")
+
+    request_payload = {
+        "contents": [{"parts": [{"text": _build_text_translate_prompt(input_text)}]}],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
+    request = UrlRequest(
+        (
+            "https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{model}:generateContent?key={cleaned_key}"
+        ),
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout_seconds) as response:
+            raw_bytes = cast(bytes, response.read())
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(
+            f"Gemini API request failed: {exc.code} {detail}".strip()
+        ) from exc
+    except URLError as exc:
+        raise RuntimeError(f"Gemini API request failed: {exc.reason}") from exc
+
+    payload = json.loads(raw_bytes.decode("utf-8"))
+    response_text = _extract_gemini_text(payload)
+    parsed = json.loads(response_text)
+    return _normalize_text_translate_result(parsed, input_text)
+
+
 def normalize_filter_tabs(
     tabs: object,
     fallback: list[dict[str, str]],
@@ -2791,6 +3047,101 @@ def require_admin_from_request(request: Request) -> UserContext:
     return build_user_context(user)
 
 
+_KNOWN_LICENSE_EXPLANATIONS: dict[str, str] = {
+    "MIT": "자유롭게 사용, 수정, 배포할 수 있어요. 출처(저작권 표시)만 남겨두면 돼요. 상업적으로 써도 괜찮아요.",
+    "Apache-2.0": "자유롭게 사용, 수정, 배포할 수 있어요. 출처 표시가 필요하고, 특허 분쟁으로부터 보호받을 수 있는 조항도 포함돼 있어요.",
+    "GPL-2.0": "사용·수정은 자유롭지만, 이 코드를 포함해 배포할 때는 소스코드를 반드시 함께 공개해야 해요.",
+    "GPL-2.0-only": "사용·수정은 자유롭지만, 이 코드를 포함해 배포할 때는 소스코드를 반드시 함께 공개해야 해요.",
+    "GPL-3.0": "사용·수정은 자유롭지만, 배포 시 소스코드 공개가 필수예요. GPL-2.0보다 특허 보호 조항이 더 강해요.",
+    "GPL-3.0-only": "사용·수정은 자유롭지만, 배포 시 소스코드 공개가 필수예요. GPL-2.0보다 특허 보호 조항이 더 강해요.",
+    "LGPL-2.1": "라이브러리로 가져다 쓰는 건 자유로워요. 단, 이 라이브러리 자체를 수정해서 배포할 때만 소스 공개가 필요해요.",
+    "LGPL-3.0": "라이브러리로 가져다 쓰는 건 자유로워요. 단, 이 라이브러리 자체를 수정해서 배포할 때만 소스 공개가 필요해요.",
+    "LGPL-3.0-only": "라이브러리로 가져다 쓰는 건 자유로워요. 단, 이 라이브러리 자체를 수정해서 배포할 때만 소스 공개가 필요해요.",
+    "AGPL-3.0": "서버에서 서비스로 제공할 때도 소스코드를 공개해야 해요. 웹 서비스에도 오픈소스 의무가 적용돼요.",
+    "AGPL-3.0-only": "서버에서 서비스로 제공할 때도 소스코드를 공개해야 해요. 웹 서비스에도 오픈소스 의무가 적용돼요.",
+    "BSD-2-Clause": "자유롭게 사용, 수정, 배포할 수 있어요. 출처 표시와 라이선스 문구를 유지하면 돼요.",
+    "BSD-3-Clause": "자유롭게 사용, 수정, 배포할 수 있어요. 출처 표시가 필요하고, 제작자 이름을 홍보에 무단으로 쓰면 안 돼요.",
+    "ISC": "MIT와 거의 같아요. 자유롭게 사용·수정·배포 가능하고 출처만 표시하면 돼요.",
+    "MPL-2.0": "수정한 파일만 소스를 공개하면 되고, 나머지 코드는 비공개로 유지해도 돼요.",
+    "CC0-1.0": "저작권을 완전히 포기한 라이선스예요. 아무런 제한 없이 자유롭게 사용해도 돼요.",
+    "Unlicense": "공공 도메인이에요. 출처 표시도 필요 없고 완전히 자유롭게 쓸 수 있어요.",
+    "0BSD": "아무 조건 없이 자유롭게 사용할 수 있어요. 출처 표시도 필요 없어요.",
+}
+
+
+def _get_known_license_explanation(spdx_id: str) -> str | None:
+    normalized = spdx_id.strip()
+    if normalized in _KNOWN_LICENSE_EXPLANATIONS:
+        return _KNOWN_LICENSE_EXPLANATIONS[normalized]
+    return None
+
+
+def _build_license_explain_prompt(license_text: str, repo_title: str) -> str:
+    return (
+        f"다음은 '{repo_title}' 프로젝트의 라이선스 전문이야. "
+        "중학생도 쉽게 이해할 수 있는 한국어로 2~3문장으로 설명해줘. "
+        "상업적 사용 가능 여부, 수정 가능 여부, 배포 시 조건을 반드시 포함해. "
+        "법률 용어 없이 친근한 말투로 써줘.\n\n"
+        f"라이선스 내용:\n{license_text}"
+    )
+
+
+def _explain_license_with_gemini(
+    license_text: str,
+    repo_title: str,
+    *,
+    api_key: str,
+    model: str,
+) -> str:
+    prompt = _build_license_explain_prompt(license_text, repo_title)
+    request_payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.3, "maxOutputTokens": 300},
+    }
+    request = UrlRequest(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}",
+        data=json.dumps(request_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=15) as response:
+            raw_bytes = cast(bytes, response.read())
+        payload = json.loads(raw_bytes.decode("utf-8"))
+        return _extract_gemini_text(payload).strip()
+    except Exception:
+        return ""
+
+
+def generate_license_explanation(
+    spdx_id: str,
+    owner: str,
+    repo_name: str,
+    repo_title: str,
+    github_token: str,
+) -> str:
+    known = _get_known_license_explanation(spdx_id)
+    if known:
+        return known
+
+    if not GEMINI_API_KEY or not github_token:
+        return "라이선스를 자동으로 파악하지 못했어요. 사용 전 GitHub 레포의 LICENSE 파일을 직접 확인해 주세요."
+
+    license_text = fetch_github_license_file(owner, repo_name, github_token)
+    if not license_text:
+        return "라이선스 파일을 찾을 수 없어요. 사용 전 GitHub 레포를 직접 확인해 주세요."
+
+    explanation = _explain_license_with_gemini(
+        license_text,
+        repo_title,
+        api_key=GEMINI_API_KEY,
+        model=GEMINI_MODEL,
+    )
+    if explanation:
+        return explanation
+    return "라이선스를 자동으로 파악하지 못했어요. 사용 전 GitHub 레포의 LICENSE 파일을 직접 확인해 주세요."
+
+
 def serialize_curated_content(row: Mapping[str, object]) -> dict[str, object]:
     raw_review_metadata = row.get("review_metadata")
     review_metadata = (
@@ -2811,6 +3162,8 @@ def serialize_curated_content(row: Mapping[str, object]) -> dict[str, object]:
         "is_korean_dev": bool(row.get("is_korean_dev") or False),
         "stars": safe_int(row.get("stars"), 0),
         "license": str(row.get("license") or ""),
+        "license_explanation": str(row.get("license_explanation") or ""),
+        "thumbnail_url": str(row.get("thumbnail_url") or ""),
         "relevance_score": row.get("relevance_score"),
         "beginner_value": row.get("beginner_value"),
         "quality_score": row.get("quality_score"),
@@ -3291,17 +3644,26 @@ def _load_curated_collection_candidates(
                 GITHUB_TOKEN,
                 max_chars=GITHUB_README_EXCERPT_MAX_CHARS,
             )
+        repo_title = _humanize_repo_title(repo["name"])
+        license_explanation = generate_license_explanation(
+            repo["license"],
+            repo["owner"],
+            repo["name"],
+            repo_title,
+            GITHUB_TOKEN,
+        )
         candidate_seed = {
             "source_type": "github",
             "source_url": repo["source_url"],
             "canonical_url": repo["canonical_url"],
             "repo_name": repo["name"],
             "repo_owner": repo["owner"],
-            "title": _humanize_repo_title(repo["name"]),
+            "title": repo_title,
             "language": repo["language"],
             "is_korean_dev": repo["is_korean_dev"],
             "stars": repo["stars"],
             "license": repo["license"],
+            "license_explanation": license_explanation,
             "has_readme": repo["has_readme"],
             "github_pushed_at": repo["github_pushed_at"],
             "description": repo["description"],
@@ -3654,6 +4016,63 @@ def error_translate_feedback_endpoint(payload: ErrorTranslateFeedbackRequest):
     if not updated:
         raise HTTPException(status_code=404, detail="해당 에러 기록을 찾을 수 없습니다")
     return {"ok": True}
+
+
+@app.post("/api/translate")
+def text_translate_endpoint(payload: TextTranslateRequest, request: Request):
+    client_ip = _extract_client_ip(request)
+    enforce_rate_limit(
+        "text_translate_ip",
+        client_ip,
+        limit=TEXT_TRANSLATE_IP_LIMIT_PER_MINUTE,
+        window_seconds=60.0,
+        detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+
+    input_text = payload.input_text.strip()
+    if not input_text:
+        raise HTTPException(status_code=400, detail="번역할 텍스트를 입력해 주세요")
+    if len(input_text) > 2000:
+        raise HTTPException(
+            status_code=400, detail="번역 텍스트는 2000자 이하로 입력해 주세요"
+        )
+
+    normalized = input_text
+    if contains_prompt_injection(normalized):
+        normalized = "[prompt-injection-filtered] " + normalized
+
+    input_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    cached = get_text_translation(input_hash)
+    if cached:
+        translation = cast(dict[str, object], cached.get("translation") or {})
+        translation["input_hash"] = input_hash
+        translation["source"] = "cache"
+        return translation
+
+    if GEMINI_API_KEY:
+        try:
+            translation = translate_text_with_gemini(
+                input_text,
+                api_key=GEMINI_API_KEY,
+                model=GEMINI_MODEL,
+            )
+            source = "gemini"
+        except RuntimeError:
+            translation = build_text_translation_fallback(input_text)
+            source = "fallback"
+    else:
+        translation = build_text_translation_fallback(input_text)
+        source = "fallback"
+
+    saved = upsert_text_translation(
+        input_hash=input_hash,
+        input_excerpt=input_text[:200],
+        translation=translation,
+    )
+    _ = saved
+    translation["input_hash"] = input_hash
+    translation["source"] = source
+    return translation
 
 
 @app.post("/api/glossary/term-requests")

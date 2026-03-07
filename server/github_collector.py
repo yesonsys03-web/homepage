@@ -84,7 +84,7 @@ def search_github_repositories(
     for topic in config.search_topics:
         query = f"topic:{topic} stars:>={config.min_stars} pushed:>={pushed_cutoff}"
         payload = _github_get_json(
-            f"https://api.github.com/search/repositories?q={query}&sort=updated&order=desc&per_page={safe_per_page}",
+            f"https://api.github.com/search/repositories?q={quote(query)}&sort=updated&order=desc&per_page={safe_per_page}",
             github_token,
         )
         items = payload.get("items") if isinstance(payload, dict) else None
@@ -172,6 +172,37 @@ def fetch_github_readme_excerpt(
     if len(normalized) <= max_chars:
         return normalized
     return normalized[: max_chars - 1].rstrip() + "..."
+
+
+def fetch_github_license_file(
+    owner: str,
+    repo_name: str,
+    github_token: str,
+    *,
+    max_chars: int = 2000,
+) -> str:
+    if not owner.strip() or not repo_name.strip():
+        return ""
+
+    url = (
+        "https://api.github.com/repos/"
+        f"{quote(owner.strip())}/{quote(repo_name.strip())}/license"
+    )
+    try:
+        content = _github_get_text(
+            url,
+            github_token,
+            accept_header="application/vnd.github.raw+json",
+        )
+    except RuntimeError:
+        return ""
+
+    normalized = content.strip()
+    if not normalized:
+        return ""
+    if len(normalized) <= max_chars:
+        return normalized
+    return normalized[:max_chars].rstrip() + "..."
 
 
 def is_korean_github_user(profile: GitHubUserProfile) -> bool:

@@ -349,6 +349,16 @@ def init_db():
                 )
             """)
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS text_translations (
+                    id SERIAL PRIMARY KEY,
+                    input_hash TEXT UNIQUE NOT NULL,
+                    input_excerpt TEXT,
+                    translation JSONB NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS curated_related_clicks (
                     id SERIAL PRIMARY KEY,
                     source_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
@@ -533,6 +543,18 @@ def init_db():
                 ADD COLUMN IF NOT EXISTS review_metadata JSONB DEFAULT '{}'::jsonb
                 """
             )
+            cur.execute(
+                """
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS license_explanation TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS thumbnail_url TEXT
+                """
+            )
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_projects_status_like_count
                 ON projects (status, like_count DESC)
@@ -600,6 +622,10 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_error_solutions_hash
                 ON error_solutions (error_hash)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_text_translations_hash
+                ON text_translations (input_hash)
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_glossary_term_requests_status
@@ -1264,6 +1290,7 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                     is_korean_dev,
                     stars,
                     license,
+                    license_explanation,
                     relevance_score,
                     beginner_value,
                     quality_score,
@@ -1278,7 +1305,7 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (canonical_url)
                 DO UPDATE SET
@@ -1292,6 +1319,7 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                     is_korean_dev = EXCLUDED.is_korean_dev,
                     stars = EXCLUDED.stars,
                     license = EXCLUDED.license,
+                    license_explanation = EXCLUDED.license_explanation,
                     relevance_score = EXCLUDED.relevance_score,
                     beginner_value = EXCLUDED.beginner_value,
                     quality_score = EXCLUDED.quality_score,
@@ -1318,6 +1346,7 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                     bool(payload.get("is_korean_dev", False)),
                     _safe_int(payload.get("stars"), 0),
                     payload.get("license"),
+                    payload.get("license_explanation"),
                     payload.get("relevance_score"),
                     payload.get("beginner_value"),
                     payload.get("quality_score"),
@@ -1350,6 +1379,7 @@ def update_curated_content_admin(content_id: int, updates: Mapping[str, object])
         "relevance_score",
         "beginner_value",
         "license",
+        "thumbnail_url",
     ]
     fields_to_update: list[str] = []
     params: list[object] = []
@@ -1442,6 +1472,40 @@ def increment_error_solution_feedback(error_hash: str, solved: bool):
                 RETURNING *
                 """,
                 (error_hash,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_text_translation(input_hash: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM text_translations WHERE input_hash = %s",
+                (input_hash,),
+            )
+            return cur.fetchone()
+
+
+def upsert_text_translation(
+    input_hash: str,
+    input_excerpt: str,
+    translation: Mapping[str, object],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO text_translations (input_hash, input_excerpt, translation)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (input_hash)
+                DO UPDATE SET
+                    input_excerpt = EXCLUDED.input_excerpt,
+                    translation = EXCLUDED.translation,
+                    updated_at = NOW()
+                RETURNING *
+                """,
+                (input_hash, input_excerpt, Json(translation)),
             )
             conn.commit()
             return cur.fetchone()
