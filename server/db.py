@@ -224,6 +224,7 @@ def init_db():
                     target_type VARCHAR(20) NOT NULL,
                     target_id UUID NOT NULL,
                     reason TEXT,
+                    metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -560,6 +561,9 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_oauth_state_tokens_consumed_at
                 ON oauth_state_tokens (consumed_at)
+            """)
+            cur.execute("""
+                ALTER TABLE admin_action_logs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_admin_action_logs_created_at
@@ -1823,16 +1827,24 @@ def create_admin_action_log(
     target_type: str,
     target_id: str,
     reason: Optional[str] = None,
+    metadata: Optional[Mapping[str, object]] = None,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                INSERT INTO admin_action_logs (admin_id, action_type, target_type, target_id, reason)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO admin_action_logs (admin_id, action_type, target_type, target_id, reason, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
-                (admin_id, action_type, target_type, target_id, reason),
+                (
+                    admin_id,
+                    action_type,
+                    target_type,
+                    target_id,
+                    reason,
+                    Json(dict(metadata or {})),
+                ),
             )
             conn.commit()
             return cur.fetchone()

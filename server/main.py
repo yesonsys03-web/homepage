@@ -2250,6 +2250,7 @@ def write_admin_action_log(
     target_type: str,
     target_id: str,
     reason: Optional[str],
+    metadata: Optional[Mapping[str, object]] = None,
 ) -> None:
     settings = get_effective_moderation_settings()
     mask_enabled = bool(settings.get("admin_log_mask_reasons", True))
@@ -2260,6 +2261,7 @@ def write_admin_action_log(
         target_type=target_type,
         target_id=target_id,
         reason=sanitized_reason,
+        metadata=metadata,
     )
 
 
@@ -2277,6 +2279,64 @@ def log_curated_collection_action(
         target_id=curated_collection_action_target_id(),
         reason=detail,
     )
+
+
+def _coerce_policy_metadata_value(value: object) -> object:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, list):
+        return [_coerce_policy_metadata_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_coerce_policy_metadata_value(item) for item in value]
+    if isinstance(value, Mapping):
+        return {
+            str(key): _coerce_policy_metadata_value(item) for key, item in value.items()
+        }
+    return str(value)
+
+
+def build_policy_update_log_metadata(
+    *,
+    previous_settings: Mapping[str, object],
+    next_settings: Mapping[str, object],
+) -> dict[str, object]:
+    tracked_keys = [
+        "blocked_keywords",
+        "auto_hide_report_threshold",
+        "admin_log_retention_days",
+        "admin_log_view_window_days",
+        "admin_log_mask_reasons",
+        "page_editor_enabled",
+        "page_editor_rollout_stage",
+        "page_editor_pilot_admin_ids",
+        "page_editor_publish_fail_rate_threshold",
+        "page_editor_rollback_ratio_threshold",
+        "page_editor_conflict_rate_threshold",
+        "curated_review_quality_threshold",
+    ]
+    changed_fields: dict[str, dict[str, object]] = {}
+
+    for key in tracked_keys:
+        previous_value = _coerce_policy_metadata_value(previous_settings.get(key))
+        next_value = _coerce_policy_metadata_value(next_settings.get(key))
+        if previous_value != next_value:
+            changed_fields[key] = {
+                "previous": previous_value,
+                "next": next_value,
+            }
+
+    return {
+        "event": "policy_update",
+        "changed_fields": changed_fields,
+        "curated_quality_threshold": {
+            "previous": _coerce_policy_metadata_value(
+                previous_settings.get("curated_review_quality_threshold")
+            ),
+            "next": _coerce_policy_metadata_value(
+                next_settings.get("curated_review_quality_threshold")
+            ),
+        },
+    }
 
 
 def get_effective_moderation_settings() -> dict[str, object]:
@@ -4715,12 +4775,24 @@ def update_admin_policies(
     if not updated:
         raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
 
+    policy_log_metadata = build_policy_update_log_metadata(
+        previous_settings=current_settings,
+        next_settings=updated,
+    )
+    threshold_change = cast(
+        Mapping[str, object], policy_log_metadata["curated_quality_threshold"]
+    )
+    previous_threshold = threshold_change.get("previous")
+    next_threshold = threshold_change.get("next")
+
     write_admin_action_log(
         admin_id=current_user["id"],
         action_type="policy_updated",
         target_type="moderation_settings",
         target_id="00000000-0000-0000-0000-000000000001",
         reason=(
+            f"curated_quality_threshold={next_threshold}, "
+            f"curated_quality_threshold_previous={previous_threshold}, "
             f"keywords={len(effective_keywords)}, "
             f"threshold={payload.auto_hide_report_threshold}, "
             f"retention_days={admin_log_retention_days}, "
@@ -4729,8 +4801,9 @@ def update_admin_policies(
             f"page_editor_enabled={page_editor_enabled}, "
             f"rollout_stage={page_editor_rollout_stage}, "
             f"pilot_admin_count={len(page_editor_pilot_admin_ids)}, "
-            f"curated_quality_threshold={curated_review_quality_threshold}"
+            f"curated_quality_threshold_next={curated_review_quality_threshold}"
         ),
+        metadata=policy_log_metadata,
     )
 
     return get_effective_moderation_settings()
@@ -4879,6 +4952,13 @@ def update_admin_page_draft(
             target_type="page",
             target_id=page_action_target_id(page_id),
             reason=(payload.reason or "draft conflict").strip(),
+            metadata={
+                "page_id": page_id,
+                "source": payload.source,
+                "base_version": payload.baseVersion,
+                "current_version": cast(int, result.get("current_version", 0)),
+                "retryable": True,
+            },
         )
         raise HTTPException(
             status_code=409,
@@ -4901,6 +4981,12 @@ def update_admin_page_draft(
         reason=(
             f"source={payload.source}; reason={(payload.reason or 'draft save').strip()}"
         ),
+        metadata={
+            "page_id": page_id,
+            "source": payload.source,
+            "base_version": payload.baseVersion,
+            "saved_version": cast(int, result.get("saved_version", 0)),
+        },
     )
 
     saved_version = cast(int, result.get("saved_version", 0))
@@ -4945,6 +5031,12 @@ def publish_admin_page(
             target_type="page",
             target_id=page_action_target_id(page_id),
             reason=f"conflict: expected={target_draft_version}, current={current_draft_version}",
+            metadata={
+                "failure_kind": "conflict",
+                "page_id": page_id,
+                "expected_draft_version": target_draft_version,
+                "current_draft_version": current_draft_version,
+            },
         )
         raise HTTPException(
             status_code=409,
@@ -4970,6 +5062,12 @@ def publish_admin_page(
             target_type="page",
             target_id=page_action_target_id(page_id),
             reason="validation_failed",
+            metadata={
+                "failure_kind": "validation_failed",
+                "page_id": page_id,
+                "blocking_error_count": len(issues["blocking"]),
+                "warning_count": len(issues["warnings"]),
+            },
         )
         raise HTTPException(
             status_code=422,
@@ -5005,6 +5103,11 @@ def publish_admin_page(
         target_type="page",
         target_id=page_action_target_id(page_id),
         reason=reason,
+        metadata={
+            "page_id": page_id,
+            "draft_version": target_draft_version,
+            "published_version": published_version,
+        },
     )
 
     return {
@@ -5399,6 +5502,13 @@ def rollback_admin_page(
         target_type="page",
         target_id=page_action_target_id(page_id),
         reason=reason,
+        metadata={
+            "page_id": page_id,
+            "target_version": payload.targetVersion,
+            "restored_draft_version": cast(int, restored["restored_draft_version"]),
+            "published_version": published_version,
+            "publish_now": payload.publishNow,
+        },
     )
 
     return {
