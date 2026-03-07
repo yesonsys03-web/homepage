@@ -1,14 +1,35 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useSearchParams } from "react-router-dom"
 
 import { api } from "@/lib/api"
 
 export function AdminLogs() {
-  const [query, setQuery] = useState("")
-  const [actionType, setActionType] = useState("")
-  const [actorId, setActorId] = useState("")
-  const [pageId, setPageId] = useState("")
-  const [windowDays, setWindowDays] = useState(30)
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [query, setQuery] = useState(searchParams.get("query") ?? "")
+  const [actionType, setActionType] = useState(searchParams.get("actionType") ?? "")
+  const [actorId, setActorId] = useState(searchParams.get("actorId") ?? "")
+  const [pageId, setPageId] = useState(searchParams.get("pageId") ?? "")
+  const [windowDays, setWindowDays] = useState(Number(searchParams.get("windowDays") ?? "30") || 30)
+  const targetLogId = searchParams.get("targetLogId") ?? ""
+
+  useEffect(() => {
+    const nextParams = new URLSearchParams(searchParams)
+    const syncValue = (key: string, value: string) => {
+      if (value.trim()) nextParams.set(key, value.trim())
+      else nextParams.delete(key)
+    }
+
+    syncValue("query", query)
+    syncValue("actionType", actionType)
+    syncValue("actorId", actorId)
+    syncValue("pageId", pageId)
+    nextParams.set("windowDays", String(windowDays))
+
+    if (nextParams.toString() !== searchParams.toString()) {
+      setSearchParams(nextParams, { replace: true })
+    }
+  }, [actionType, actorId, pageId, query, searchParams, setSearchParams, windowDays])
 
   const logsQuery = useQuery({
     queryKey: ["admin-actions", "logs-page", actionType, actorId, pageId],
@@ -109,6 +130,13 @@ export function AdminLogs() {
               <MetricCard label="publish 실패 건수" value={String((observabilityQuery.data?.publish_failure_distribution ?? []).reduce((acc, item) => acc + item.count, 0))} />
             </div>
 
+            <div className="mt-2 grid gap-2 md:grid-cols-4">
+              <MetricCard label="자동 수집 성공" value={String(observabilityQuery.data?.curated_collection_summary.succeeded ?? 0)} />
+              <MetricCard label="자동 수집 건너뜀" value={String(observabilityQuery.data?.curated_collection_summary.skipped ?? 0)} />
+              <MetricCard label="자동 수집 실패" value={String(observabilityQuery.data?.curated_collection_summary.failed ?? 0)} />
+              <MetricCard label="자동 생성 카드 수" value={String(observabilityQuery.data?.curated_collection_summary.created_total ?? 0)} />
+            </div>
+
             <div className="mt-3 grid gap-3 md:grid-cols-2">
               <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
                 <p className="mb-2 text-xs font-semibold text-slate-400">일별 publish 횟수</p>
@@ -138,11 +166,50 @@ export function AdminLogs() {
                 </div>
               </div>
             </div>
+
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+                <p className="mb-2 text-xs font-semibold text-slate-400">일별 자동 수집 실행</p>
+                <div className="max-h-40 space-y-1 overflow-auto text-xs text-slate-300">
+                  {(observabilityQuery.data?.daily_curated_collection_counts ?? []).length === 0 ? (
+                    <p className="text-slate-500">자동 수집 이력이 없습니다.</p>
+                  ) : (
+                    observabilityQuery.data?.daily_curated_collection_counts.map((row) => (
+                      <div key={row.day} className="flex items-center justify-between rounded border border-slate-700 px-2 py-1">
+                        <span>{row.day}</span>
+                        <span>{row.run_count}회 / {row.created_total}건</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+                <p className="mb-2 text-xs font-semibold text-slate-400">자동 수집 실패 원인 분포</p>
+                <div className="max-h-40 space-y-1 overflow-auto text-xs text-slate-300">
+                  {(observabilityQuery.data?.curated_collection_failure_distribution ?? []).length === 0 ? (
+                    <p className="text-slate-500">자동 수집 실패 이력이 없습니다.</p>
+                  ) : (
+                    observabilityQuery.data?.curated_collection_failure_distribution.map((row) => (
+                      <div key={`${row.reason}-${row.count}`} className="flex items-center justify-between rounded border border-slate-700 px-2 py-1">
+                        <span>{row.reason}</span>
+                        <span>{row.count}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
           </>
         )}
       </div>
 
       <div className="overflow-hidden rounded-xl border border-slate-700 bg-slate-800">
+        {targetLogId ? (
+          <div className="border-b border-amber-400/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+            threshold history에서 이동한 로그를 강조 표시하고 있습니다.
+          </div>
+        ) : null}
         <table className="w-full">
           <thead className="bg-slate-900">
             <tr>
@@ -169,15 +236,25 @@ export function AdminLogs() {
                 </td>
               </tr>
             ) : (
-              filtered.map((log, index) => (
-                <tr key={log.id} className={index % 2 === 0 ? "border-b border-slate-700/50 bg-slate-800" : "border-b border-slate-700/50 bg-slate-800/70"}>
+              filtered.map((log, index) => {
+                const isTargetLog = targetLogId !== "" && log.id === targetLogId
+                return (
+                <tr
+                  key={log.id}
+                  data-highlighted={isTargetLog ? "true" : "false"}
+                  className={isTargetLog
+                    ? "border-b border-amber-400/30 bg-amber-500/10 ring-1 ring-inset ring-amber-400/30"
+                    : index % 2 === 0
+                      ? "border-b border-slate-700/50 bg-slate-800"
+                      : "border-b border-slate-700/50 bg-slate-800/70"}
+                >
                   <td className="px-4 py-3 text-sm text-slate-100">{log.action_type}</td>
                   <td className="px-4 py-3 text-sm text-slate-300">{log.target_type}:{log.target_id}</td>
                   <td className="px-4 py-3 text-sm text-slate-300">{log.reason || "-"}</td>
                   <td className="px-4 py-3 text-sm text-slate-300">{log.admin_nickname || "admin"}</td>
                   <td className="px-4 py-3 text-sm text-slate-300">{new Date(log.created_at).toLocaleString("ko-KR")}</td>
                 </tr>
-              ))
+              )})
             )}
           </tbody>
         </table>

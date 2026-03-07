@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   getAdminStats: vi.fn(),
   getAdminActionLogs: vi.fn(),
   getAdminCuratedRelatedClicksSummary: vi.fn(),
+  getAdminActionObservability: vi.fn(),
+  getAdminPolicies: vi.fn(),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -14,6 +16,8 @@ vi.mock("@/lib/api", () => ({
     getAdminStats: mocks.getAdminStats,
     getAdminActionLogs: mocks.getAdminActionLogs,
     getAdminCuratedRelatedClicksSummary: mocks.getAdminCuratedRelatedClicksSummary,
+    getAdminActionObservability: mocks.getAdminActionObservability,
+    getAdminPolicies: mocks.getAdminPolicies,
   },
 }))
 
@@ -61,6 +65,15 @@ describe("AdminDashboard analytics", () => {
           target_id: "7",
           created_at: "2026-03-07T00:00:00Z",
         },
+        {
+          id: "log-2",
+          admin_nickname: "ops",
+          action_type: "policy_updated",
+          target_type: "moderation_settings",
+          target_id: "00000000-0000-0000-0000-000000000001",
+          reason: "keywords=1, threshold=3, retention_days=180, view_window_days=14, mask_reasons=false, page_editor_enabled=true, rollout_stage=qa, pilot_admin_count=1, curated_quality_threshold=52",
+          created_at: "2026-03-07T01:00:00Z",
+        },
       ],
     })
     mocks.getAdminCuratedRelatedClicksSummary.mockResolvedValue({
@@ -87,6 +100,53 @@ describe("AdminDashboard analytics", () => {
       ],
       available_sources: [{ content_id: 1, title: "Starter Repo" }],
     })
+    mocks.getAdminActionObservability.mockResolvedValue({
+      window_days: 30,
+      daily_publish_counts: [{ day: "2026-03-04", publish_count: 2 }],
+      summary: {
+        published: 2,
+        rolled_back: 1,
+        draft_saved: 4,
+        conflicts: 1,
+        rollback_ratio: 0.5,
+        conflict_rate: 0.2,
+      },
+      publish_failure_distribution: [{ reason: "validation_failed", count: 1 }],
+      daily_curated_collection_counts: [{ day: "2026-03-04", run_count: 1, created_total: 2 }],
+      curated_collection_summary: {
+        succeeded: 1,
+        failed: 0,
+        skipped: 0,
+        created_total: 2,
+      },
+      curated_review_queue_summary: {
+        pending: 3,
+        review_license: 1,
+        review_duplicate: 2,
+        review_quality: 4,
+        total: 10,
+      },
+      curated_collection_failure_distribution: [],
+    })
+    mocks.getAdminPolicies.mockResolvedValue({
+      blocked_keywords: [],
+      custom_blocked_keywords: [],
+      baseline_keyword_categories: {},
+      auto_hide_report_threshold: 3,
+      home_filter_tabs: [],
+      explore_filter_tabs: [],
+      admin_log_retention_days: 180,
+      admin_log_view_window_days: 14,
+      admin_log_mask_reasons: false,
+      page_editor_enabled: true,
+      page_editor_rollout_stage: "qa",
+      page_editor_pilot_admin_ids: ["admin-1"],
+      page_editor_publish_fail_rate_threshold: 0.2,
+      page_editor_rollback_ratio_threshold: 0.3,
+      page_editor_conflict_rate_threshold: 0.25,
+      curated_review_quality_threshold: 52,
+      updated_at: "2026-03-04T00:00:00Z",
+    })
   })
 
   afterEach(() => {
@@ -96,11 +156,22 @@ describe("AdminDashboard analytics", () => {
   it("renders curated related click widget data", async () => {
     renderScreen()
 
+    expect(await screen.findByText("Curated 검수 큐")).toBeInTheDocument()
+    expect(await screen.findByText("현재 검수 대기 총합")).toBeInTheDocument()
+    expect(screen.getByText("현재 품질 기준")).toBeInTheDocument()
+    expect(screen.getAllByText("Q 52").length).toBeGreaterThan(0)
+    expect(screen.getByText("최근 기준 변경")).toBeInTheDocument()
+    expect(screen.getByText("라이선스 검토")).toBeInTheDocument()
+    expect(screen.getByText("중복 검토")).toBeInTheDocument()
+    expect(screen.getByText("품질 검토")).toBeInTheDocument()
     expect(await screen.findByText("Curated 추천 클릭")).toBeInTheDocument()
     expect(await screen.findByText("Starter Repo → Deploy Kit")).toBeInTheDocument()
     expect(screen.getByText("총 클릭")).toBeInTheDocument()
     expect(screen.getAllByText("태그 일치").length).toBeGreaterThan(0)
     expect(mocks.getAdminCuratedRelatedClicksSummary).toHaveBeenCalledWith(30, 5)
+    expect(mocks.getAdminActionObservability).toHaveBeenCalledWith(30)
+    expect(mocks.getAdminPolicies).toHaveBeenCalled()
+    expect(mocks.getAdminActionLogs).toHaveBeenCalledWith(6, { actionType: "policy_updated" })
   })
 
   it("renders an error state when curated click summary fails", async () => {

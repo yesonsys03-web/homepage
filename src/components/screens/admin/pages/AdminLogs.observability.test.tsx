@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { beforeEach, describe, expect, it, vi } from "vitest"
+import { MemoryRouter } from "react-router-dom"
 
 const mocks = vi.hoisted(() => ({
   getAdminActionLogs: vi.fn(),
@@ -25,7 +26,26 @@ function renderWithQueryClient(ui: ReactNode) {
       },
     },
   })
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>)
+  return render(
+    <MemoryRouter>
+      <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+  )
+}
+
+function renderWithRoute(ui: ReactNode, initialEntries: string[]) {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  })
+  return render(
+    <MemoryRouter initialEntries={initialEntries}>
+      <QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>
+    </MemoryRouter>,
+  )
 }
 
 describe("AdminLogs observability", () => {
@@ -43,6 +63,16 @@ describe("AdminLogs observability", () => {
           reason: "release",
           created_at: "2026-03-04T00:00:00Z",
         },
+        {
+          id: "policy-log-1",
+          admin_id: "admin-2",
+          admin_nickname: "ops",
+          action_type: "policy_updated",
+          target_type: "moderation_settings",
+          target_id: "00000000-0000-0000-0000-000000000001",
+          reason: "curated_quality_threshold=52",
+          created_at: "2026-03-07T00:00:00Z",
+        },
       ],
       next_cursor: null,
     })
@@ -58,6 +88,18 @@ describe("AdminLogs observability", () => {
         conflict_rate: 0.2,
       },
       publish_failure_distribution: [{ reason: "validation_failed", count: 1 }],
+      daily_curated_collection_counts: [
+        { day: "2026-03-04", run_count: 2, created_total: 3 },
+      ],
+      curated_collection_summary: {
+        succeeded: 1,
+        failed: 1,
+        skipped: 0,
+        created_total: 3,
+      },
+      curated_collection_failure_distribution: [
+        { reason: "GitHub API request failed", count: 1 },
+      ],
     })
   })
 
@@ -71,6 +113,10 @@ describe("AdminLogs observability", () => {
     expect(screen.getByText("50.0%")).toBeInTheDocument()
     expect(screen.getByText("20.0%")).toBeInTheDocument()
     expect(screen.getByText("validation_failed")).toBeInTheDocument()
+    expect(screen.getByText("자동 수집 성공")).toBeInTheDocument()
+    expect(screen.getByText("자동 수집 실패")).toBeInTheDocument()
+    expect(screen.getByText("2회 / 3건")).toBeInTheDocument()
+    expect(screen.getByText("GitHub API request failed")).toBeInTheDocument()
 
     fireEvent.change(screen.getByPlaceholderText("action_type"), {
       target: { value: "page_published" },
@@ -89,5 +135,26 @@ describe("AdminLogs observability", () => {
         },
       )
     })
+  })
+
+  it("reads admin log filters from query string", async () => {
+    renderWithRoute(<AdminLogs />, ["/admin/logs?actionType=policy_updated&query=curated_quality_threshold&windowDays=60&targetLogId=policy-log-1"])
+
+    expect(await screen.findByDisplayValue("policy_updated")).toBeInTheDocument()
+    expect(screen.getByDisplayValue("curated_quality_threshold")).toBeInTheDocument()
+    expect(screen.getByText("threshold history에서 이동한 로그를 강조 표시하고 있습니다.")).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(mocks.getAdminActionLogs).toHaveBeenLastCalledWith(200, {
+        actionType: "policy_updated",
+        actorId: undefined,
+        pageId: undefined,
+      })
+    })
+    expect(mocks.getAdminActionObservability).toHaveBeenLastCalledWith(60)
+    const highlightedRows = screen
+      .getAllByRole("row", { name: /policy_updated.*curated_quality_threshold=52.*ops/i })
+      .filter((row) => row.getAttribute("data-highlighted") === "true")
+    expect(highlightedRows).toHaveLength(1)
   })
 })

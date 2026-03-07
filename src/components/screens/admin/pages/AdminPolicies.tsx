@@ -1,7 +1,19 @@
 import { useEffect, useState } from "react"
+import { useQuery } from "@tanstack/react-query"
+import { Link } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
+
+function extractCuratedThresholdHistory(reason?: string) {
+  const text = (reason || "").trim()
+  if (!text) return null
+
+  const match = text.match(/(?:^|,\s*)curated_quality_threshold=(\d+)/)
+  if (!match) return null
+
+  return Number(match[1])
+}
 
 export function AdminPolicies() {
   const [loading, setLoading] = useState(true)
@@ -19,10 +31,15 @@ export function AdminPolicies() {
   const [pageEditorPublishFailRateThreshold, setPageEditorPublishFailRateThreshold] = useState(0.2)
   const [pageEditorRollbackRatioThreshold, setPageEditorRollbackRatioThreshold] = useState(0.3)
   const [pageEditorConflictRateThreshold, setPageEditorConflictRateThreshold] = useState(0.25)
+  const [curatedReviewQualityThreshold, setCuratedReviewQualityThreshold] = useState(45)
   const [oauthEnabled, setOauthEnabled] = useState(false)
   const [oauthGoogleRedirectUri, setOauthGoogleRedirectUri] = useState("")
   const [oauthFrontendRedirectUri, setOauthFrontendRedirectUri] = useState("")
   const [oauthHealthText, setOauthHealthText] = useState("확인 중")
+  const policyHistoryQuery = useQuery({
+    queryKey: ["admin-actions", "policy-threshold-history", "policies"],
+    queryFn: async () => api.getAdminActionLogs(8, { actionType: "policy_updated" }),
+  })
 
   useEffect(() => {
     const load = async () => {
@@ -47,6 +64,7 @@ export function AdminPolicies() {
         setPageEditorPublishFailRateThreshold(policy.page_editor_publish_fail_rate_threshold ?? 0.2)
         setPageEditorRollbackRatioThreshold(policy.page_editor_rollback_ratio_threshold ?? 0.3)
         setPageEditorConflictRateThreshold(policy.page_editor_conflict_rate_threshold ?? 0.25)
+        setCuratedReviewQualityThreshold(policy.curated_review_quality_threshold ?? 45)
 
         setOauthEnabled(oauthSettings.google_oauth_enabled)
         setOauthGoogleRedirectUri(oauthSettings.google_redirect_uri || "")
@@ -86,6 +104,7 @@ export function AdminPolicies() {
         pageEditorPublishFailRateThreshold,
         pageEditorRollbackRatioThreshold,
         pageEditorConflictRateThreshold,
+        curatedReviewQualityThreshold,
       )
     } finally {
       setSaving(false)
@@ -106,6 +125,19 @@ export function AdminPolicies() {
       setSavingOauth(false)
     }
   }
+
+  const thresholdHistory = (policyHistoryQuery.data?.items ?? [])
+    .map((log) => {
+      const threshold = extractCuratedThresholdHistory(log.reason)
+      if (threshold === null) return null
+      return {
+        id: log.id,
+        threshold,
+        admin: log.admin_nickname || "admin",
+        at: new Date(log.created_at).toLocaleString("ko-KR"),
+      }
+    })
+    .filter((entry): entry is { id: string; threshold: number; admin: string; at: string } => entry !== null)
 
   return (
     <section className="space-y-4">
@@ -239,6 +271,40 @@ export function AdminPolicies() {
               className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
             />
           </label>
+          <label className="block text-sm text-slate-300">
+            Curated 품질 검토 기준(1~100)
+            <input
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              value={curatedReviewQualityThreshold}
+              onChange={(event) => setCuratedReviewQualityThreshold(Number(event.target.value) || 1)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+        </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+          현재 설정 기준에서는 quality score가 <span className="font-semibold text-slate-50">{curatedReviewQualityThreshold}</span> 미만이면 `review_quality`로 분류됩니다.
+        </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-4">
+          <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">최근 품질 기준 변경</p>
+          <div className="mt-2 space-y-2 text-sm text-slate-300">
+            {thresholdHistory.length === 0 ? (
+              <p className="text-slate-500">기록된 변경 이력이 없습니다.</p>
+            ) : (
+              thresholdHistory.slice(0, 5).map((entry) => (
+                <Link
+                  key={entry.id}
+                  to={`/admin/logs?actionType=policy_updated&query=${encodeURIComponent("curated_quality_threshold")}&targetLogId=${encodeURIComponent(entry.id)}`}
+                  className="flex items-center justify-between gap-3 rounded border border-slate-700 px-3 py-2 transition hover:border-slate-500 hover:bg-slate-950/60"
+                >
+                  <span className="font-medium text-slate-100">Q {entry.threshold}</span>
+                  <span className="text-xs text-slate-400">{entry.admin} · {entry.at}</span>
+                </Link>
+              ))
+            )}
+          </div>
         </div>
       </article>
 
