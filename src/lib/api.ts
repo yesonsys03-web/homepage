@@ -100,6 +100,54 @@ export interface CuratedRelatedClickResponse {
   id: number
 }
 
+export interface CuratedReason {
+  code: string
+  label: string
+}
+
+export interface CuratedRelatedRecommendation {
+  item: CuratedContent
+  reasons: CuratedReason[]
+}
+
+export interface CuratedRelatedResponse {
+  items: CuratedRelatedRecommendation[]
+  source: string
+}
+
+export interface AdminCuratedRelatedClicksPair {
+  source_content_id: number
+  source_title: string
+  target_content_id: number
+  target_title: string
+  click_count: number
+  last_clicked_at: string
+  top_reason_code: string
+  top_reason_label: string
+  top_reason_count: number
+}
+
+export interface AdminCuratedRelatedClicksReason {
+  reason_code: string
+  reason_label: string
+  click_count: number
+}
+
+export interface AdminCuratedRelatedClicksSource {
+  content_id: number
+  title: string
+}
+
+export interface AdminCuratedRelatedClicksSummary {
+  window_days: number
+  source_content_id: number | null
+  total_clicks: number
+  unique_pairs: number
+  top_pairs: AdminCuratedRelatedClicksPair[]
+  top_reasons: AdminCuratedRelatedClicksReason[]
+  available_sources: AdminCuratedRelatedClicksSource[]
+}
+
 export interface Comment {
   id: string
   project_id: string
@@ -941,11 +989,22 @@ export const api = {
     return res.json() as Promise<CuratedContent>
   },
 
-  trackCuratedRelatedClick: async (source_content_id: number, target_content_id: number, reason?: string) => {
+  getCuratedRelatedContent: async (contentId: number, limit: number = 4) => {
+    const searchParams = new URLSearchParams({ limit: String(limit) })
+    const res = await fetch(`${API_BASE}/api/curated/${contentId}/related?${searchParams.toString()}`)
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({ detail: "관련 큐레이션 조회에 실패했습니다" }))
+      const detail = (error as { detail?: unknown }).detail ?? "관련 큐레이션 조회에 실패했습니다"
+      throw new ApiRequestError(res.status, detail)
+    }
+    return res.json() as Promise<CuratedRelatedResponse>
+  },
+
+  trackCuratedRelatedClick: async (source_content_id: number, target_content_id: number, reason_code?: string) => {
     const res = await fetch(`${API_BASE}/api/curated/related-clicks`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source_content_id, target_content_id, reason }),
+      body: JSON.stringify({ source_content_id, target_content_id, reason_code }),
     })
     if (!res.ok) {
       const error = await res.json().catch(() => ({ detail: "추천 클릭 기록에 실패했습니다" }))
@@ -1164,6 +1223,19 @@ export const api = {
       },
       options,
     )
+  },
+
+  getAdminCuratedRelatedClicksSummary: async (
+    days: number = 30,
+    limit: number = 5,
+    sourceContentId?: number,
+  ) => {
+    const params = new URLSearchParams({ days: String(days), limit: String(limit) })
+    if (typeof sourceContentId === "number" && sourceContentId > 0) {
+      params.set("source_content_id", String(sourceContentId))
+    }
+    const res = await authFetch(`${API_BASE}/api/admin/curated/related-clicks/summary?${params.toString()}`)
+    return res.json() as Promise<AdminCuratedRelatedClicksSummary>
   },
 
   getReports: async (

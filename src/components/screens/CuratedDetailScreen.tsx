@@ -5,7 +5,7 @@ import { TopNav } from "@/components/TopNav"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { api, type CuratedContent } from "@/lib/api"
+import { api, type CuratedContent, type CuratedRelatedRecommendation } from "@/lib/api"
 
 type Screen =
   | "home"
@@ -26,33 +26,12 @@ interface ScreenProps {
   onNavigate?: (screen: Screen) => void
 }
 
-type RelatedRecommendation = {
-  item: CuratedContent
-  reasons: string[]
-}
-
-function parseDateMs(value: string): number | null {
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : null
-}
-
-function freshnessScore(item: CuratedContent, nowMs: number): number {
-  const sourceMs = parseDateMs(item.github_pushed_at) ?? parseDateMs(item.collected_at)
-  if (sourceMs === null) {
-    return 0
-  }
-
-  const dayMs = 24 * 60 * 60 * 1000
-  const elapsedDays = Math.max(0, (nowMs - sourceMs) / dayMs)
-  return Math.max(0, 30 - elapsedDays)
-}
-
 export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
   const navigate = useNavigate()
   const params = useParams<{ contentId: string }>()
   const contentId = Number(params.contentId)
   const [item, setItem] = useState<CuratedContent | null>(null)
-  const [relatedItems, setRelatedItems] = useState<RelatedRecommendation[]>([])
+  const [relatedItems, setRelatedItems] = useState<CuratedRelatedRecommendation[]>([])
   const [relatedLoading, setRelatedLoading] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -93,63 +72,8 @@ export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
     const fetchRelated = async () => {
       setRelatedLoading(true)
       try {
-        const response = await api.getCuratedContent({
-          category: item.category || undefined,
-          sort: "latest",
-          limit: 24,
-          offset: 0,
-        })
-
-        const nowMs = Date.now()
-        const currentTagSet = new Set((item.tags || []).map((tag) => tag.trim().toLowerCase()).filter(Boolean))
-        const scored = (response.items || [])
-          .filter((candidate) => candidate.id !== item.id)
-          .map((candidate) => {
-            const candidateTags = (candidate.tags || []).map((tag) => tag.trim().toLowerCase()).filter(Boolean)
-            const overlapCount = candidateTags.reduce((count, tag) => count + (currentTagSet.has(tag) ? 1 : 0), 0)
-            const quality = typeof candidate.quality_score === "number" ? candidate.quality_score : 0
-            const relevance = typeof candidate.relevance_score === "number" ? candidate.relevance_score : 0
-            const freshness = freshnessScore(candidate, nowMs)
-            const languageMatch = item.language && candidate.language && item.language === candidate.language ? 1 : 0
-            const koreanMatch = item.is_korean_dev && candidate.is_korean_dev ? 1 : 0
-
-            const reasons: string[] = []
-            if (overlapCount > 0) {
-              reasons.push(`태그 ${overlapCount}개 일치`)
-            }
-            if (freshness >= 20) {
-              reasons.push("최근 업데이트")
-            }
-            if (quality >= 8) {
-              reasons.push("품질 점수 높음")
-            }
-            if (languageMatch > 0 && item.language) {
-              reasons.push(`${item.language} 언어 일치`)
-            }
-            if (koreanMatch > 0) {
-              reasons.push("KR Dev 일치")
-            }
-            if (reasons.length === 0) {
-              reasons.push("유사 카테고리")
-            }
-
-            return {
-              candidate,
-              reasons,
-              score:
-                overlapCount * 120
-                + quality * 9
-                + relevance * 8
-                + freshness * 2
-                + languageMatch * 12
-                + koreanMatch * 8,
-            }
-          })
-          .sort((a, b) => b.score - a.score)
-          .slice(0, 4)
-          .map((entry) => ({ item: entry.candidate, reasons: entry.reasons }))
-
-        setRelatedItems(scored)
+        const response = await api.getCuratedRelatedContent(item.id, 4)
+        setRelatedItems(response.items || [])
       } catch {
         setRelatedItems([])
       } finally {
@@ -260,7 +184,7 @@ export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
                         void api.trackCuratedRelatedClick(
                           item.id,
                           related.item.id,
-                          related.reasons[0] || "관련 추천 클릭",
+                          related.reasons[0]?.code,
                         ).catch((error) => {
                           console.error("Failed to log curated related click:", error)
                         })
@@ -273,8 +197,8 @@ export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
                     <p className="mt-1 text-xs text-[#8A96BE]">{related.item.repo_owner}/{related.item.repo_name} · ⭐ {related.item.stars}</p>
                     <div className="mt-2 flex flex-wrap gap-1">
                       {related.reasons.slice(0, 3).map((reason) => (
-                        <span key={`${related.item.id}-${reason}`} className="rounded-full bg-[#111936] px-2 py-0.5 text-[11px] text-[#B8C3E6]">
-                          {reason}
+                        <span key={`${related.item.id}-${reason.code}`} className="rounded-full bg-[#111936] px-2 py-0.5 text-[11px] text-[#B8C3E6]">
+                          {reason.label}
                         </span>
                       ))}
                     </div>
