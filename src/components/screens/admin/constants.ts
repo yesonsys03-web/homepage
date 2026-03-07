@@ -7,6 +7,7 @@ export type AdminRouteKey =
   | "pages"
   | "policies"
   | "logs"
+  | "manual"
 
 export const ADMIN_ROUTE_META: Record<AdminRouteKey, { label: string; path: string }> = {
   dashboard: { label: "개요", path: "/admin" },
@@ -17,4 +18,5 @@ export const ADMIN_ROUTE_META: Record<AdminRouteKey, { label: string; path: stri
   pages: { label: "페이지", path: "/admin/pages" },
   policies: { label: "정책", path: "/admin/policies" },
   logs: { label: "로그", path: "/admin/logs" },
+  manual: { label: "운영 메뉴얼", path: "/admin/manual" },
 }

@@ -38,6 +38,7 @@ export function AdminHeader({ user, onOpenMobileNav }: AdminHeaderProps) {
     if (location.pathname.startsWith("/admin/pages")) return ADMIN_ROUTE_META.pages.label
     if (location.pathname.startsWith("/admin/policies")) return ADMIN_ROUTE_META.policies.label
     if (location.pathname.startsWith("/admin/logs")) return ADMIN_ROUTE_META.logs.label
+    if (location.pathname.startsWith("/admin/manual")) return ADMIN_ROUTE_META.manual.label
     return ADMIN_ROUTE_META.dashboard.label
   }, [location.pathname])
 

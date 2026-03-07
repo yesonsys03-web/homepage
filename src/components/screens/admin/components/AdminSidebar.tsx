@@ -1,4 +1,5 @@
 import {
+  BookOpenText,
   FileText,
   Flag,
   FolderOpen,
@@ -23,6 +24,7 @@ const NAV_ITEMS: Array<{ key: AdminRouteKey; icon: typeof LayoutDashboard }> = [
   { key: "pages", icon: FileText },
   { key: "policies", icon: Settings },
   { key: "logs", icon: ScrollText },
+  { key: "manual", icon: BookOpenText },
 ]
 
 interface AdminSidebarProps {

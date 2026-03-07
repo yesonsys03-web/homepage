@@ -81,6 +81,11 @@ const AdminCurated = lazy(async () => {
   return { default: module.AdminCurated }
 })
 
+const AdminCuratedAnalytics = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminCuratedAnalytics')
+  return { default: module.AdminCuratedAnalytics }
+})
+
 const AdminReports = lazy(async () => {
   const module = await import('./components/screens/admin/pages/AdminReports')
   return { default: module.AdminReports }
@@ -99,6 +104,11 @@ const AdminPolicies = lazy(async () => {
 const AdminLogs = lazy(async () => {
   const module = await import('./components/screens/admin/pages/AdminLogs')
   return { default: module.AdminLogs }
+})
+
+const AdminManual = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminManual')
+  return { default: module.AdminManual }
 })
 
 const ExploreScreen = lazy(async () => {
@@ -602,10 +612,12 @@ function AppContent() {
               <Route path="users" element={<AdminUsers />} />
               <Route path="content" element={<AdminContent />} />
               <Route path="curated" element={<AdminCurated />} />
+              <Route path="curated/analytics" element={<AdminCuratedAnalytics />} />
               <Route path="reports" element={<AdminReports />} />
               <Route path="pages" element={<AdminPages />} />
               <Route path="policies" element={<AdminPolicies />} />
               <Route path="logs" element={<AdminLogs />} />
+              <Route path="manual" element={<AdminManual />} />
             </Route>
             <Route path="/login" element={<LoginScreen onSwitchToRegister={handleRegisterSwitch} onClose={handleAuthSuccess} />} />
             <Route path="/register" element={<RegisterScreen onSwitchToLogin={handleLoginSwitch} onClose={handleAuthSuccess} />} />

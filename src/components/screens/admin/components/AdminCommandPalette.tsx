@@ -18,6 +18,7 @@ const COMMAND_KEYS: AdminRouteKey[] = [
   "pages",
   "policies",
   "logs",
+  "manual",
 ]
 
 export function AdminCommandPalette({ open, onOpenChange }: AdminCommandPaletteProps) {
