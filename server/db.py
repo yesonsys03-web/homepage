@@ -243,6 +243,7 @@ def init_db():
                     page_editor_publish_fail_rate_threshold DOUBLE PRECISION DEFAULT 0.2,
                     page_editor_rollback_ratio_threshold DOUBLE PRECISION DEFAULT 0.3,
                     page_editor_conflict_rate_threshold DOUBLE PRECISION DEFAULT 0.25,
+                    curated_review_quality_threshold INTEGER DEFAULT 45,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -314,6 +315,7 @@ def init_db():
                     tags TEXT[] DEFAULT '{}',
                     status TEXT DEFAULT 'pending',
                     reject_reason TEXT,
+                    review_metadata JSONB DEFAULT '{}'::jsonb,
                     approved_at TIMESTAMP,
                     approved_by UUID REFERENCES users(id),
                     github_pushed_at TIMESTAMP,
@@ -502,6 +504,12 @@ def init_db():
             )
             cur.execute(
                 """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS curated_review_quality_threshold INTEGER DEFAULT 45
+                """
+            )
+            cur.execute(
+                """
                 INSERT INTO oauth_runtime_settings (id, google_oauth_enabled)
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
@@ -517,6 +525,13 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_projects_status_created_at
                 ON projects (status, created_at DESC)
             """)
+
+            cur.execute(
+                """
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS review_metadata JSONB DEFAULT '{}'::jsonb
+                """
+            )
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_projects_status_like_count
                 ON projects (status, like_count DESC)
@@ -1254,11 +1269,12 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                     tags,
                     status,
                     reject_reason,
+                    review_metadata,
                     github_pushed_at
                 )
                 VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                 )
                 ON CONFLICT (canonical_url)
                 DO UPDATE SET
@@ -1281,9 +1297,10 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                     tags = EXCLUDED.tags,
                     status = EXCLUDED.status,
                     reject_reason = EXCLUDED.reject_reason,
+                    review_metadata = EXCLUDED.review_metadata,
                     github_pushed_at = EXCLUDED.github_pushed_at,
                     updated_at = NOW()
-                RETURNING *
+                RETURNING *, (xmax = 0) AS inserted
                 """,
                 (
                     payload.get("source_type", "github"),
@@ -1306,6 +1323,7 @@ def create_or_update_curated_content(payload: Mapping[str, object]):
                     payload.get("tags", []),
                     payload.get("status", "pending"),
                     payload.get("reject_reason"),
+                    Json(payload.get("review_metadata", {})),
                     payload.get("github_pushed_at"),
                 ),
             )
@@ -1323,6 +1341,7 @@ def update_curated_content_admin(content_id: int, updates: Mapping[str, object])
         "tags",
         "status",
         "reject_reason",
+        "review_metadata",
         "quality_score",
         "relevance_score",
         "beginner_value",
@@ -1934,6 +1953,28 @@ def get_admin_action_observability(view_window_days: int = 30):
             )
             failure_distribution = cur.fetchall() or []
 
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                )
+                SELECT
+                    date_trunc('day', created_at)::date AS day,
+                    action_type,
+                    COALESCE(reason, '') AS reason
+                FROM admin_action_logs
+                WHERE action_type IN (
+                    'curated_collection_succeeded',
+                    'curated_collection_failed',
+                    'curated_collection_skipped'
+                )
+                  AND created_at >= (SELECT since FROM bounds)
+                ORDER BY created_at ASC
+                """,
+                (view_window_days,),
+            )
+            curated_collection_events = cur.fetchall() or []
+
             published = int(counts.get("published", 0))
             rolled_back = int(counts.get("rolled_back", 0))
             draft_saved = int(counts.get("draft_saved", 0))
@@ -1944,6 +1985,64 @@ def get_admin_action_observability(view_window_days: int = 30):
                 if (draft_saved + conflicts) > 0
                 else 0.0
             )
+            curated_daily_counts: dict[str, dict[str, int]] = defaultdict(
+                lambda: {"run_count": 0, "created_total": 0}
+            )
+            curated_success_count = 0
+            curated_failure_count = 0
+            curated_skipped_count = 0
+            curated_created_total = 0
+            curated_failure_reasons: dict[str, int] = defaultdict(int)
+
+            cur.execute(
+                """
+                SELECT status, COUNT(*)::int AS count
+                FROM curated_content
+                WHERE status IN ('pending', 'review_license', 'review_duplicate', 'review_quality')
+                GROUP BY status
+                ORDER BY status ASC
+                """
+            )
+            curated_review_rows = cur.fetchall() or []
+
+            for row in curated_collection_events:
+                day_value = row.get("day")
+                if isinstance(day_value, datetime):
+                    day_key = day_value.date().isoformat()
+                else:
+                    day_key = str(day_value)
+                action_type = str(row.get("action_type") or "")
+                reason_text = str(row.get("reason") or "")
+                created_match = re.search(r"created=(\d+)", reason_text)
+                created_value = int(created_match.group(1)) if created_match else 0
+                curated_daily_counts[day_key]["run_count"] += 1
+                curated_daily_counts[day_key]["created_total"] += created_value
+                curated_created_total += created_value
+
+                if action_type == "curated_collection_succeeded":
+                    curated_success_count += 1
+                elif action_type == "curated_collection_failed":
+                    curated_failure_count += 1
+                    message_match = re.search(r"message=(.*)$", reason_text)
+                    failure_reason = (
+                        message_match.group(1).strip()
+                        if message_match and message_match.group(1).strip()
+                        else "unknown"
+                    )
+                    curated_failure_reasons[failure_reason] += 1
+                elif action_type == "curated_collection_skipped":
+                    curated_skipped_count += 1
+
+            curated_review_queue_counts = {
+                "pending": 0,
+                "review_license": 0,
+                "review_duplicate": 0,
+                "review_quality": 0,
+            }
+            for row in curated_review_rows:
+                status = str(row.get("status") or "")
+                if status in curated_review_queue_counts:
+                    curated_review_queue_counts[status] = int(row.get("count") or 0)
 
             return {
                 "window_days": view_window_days,
@@ -1968,6 +2067,31 @@ def get_admin_action_observability(view_window_days: int = 30):
                         "count": int(row["count"]),
                     }
                     for row in failure_distribution
+                ],
+                "daily_curated_collection_counts": [
+                    {
+                        "day": day,
+                        "run_count": counts["run_count"],
+                        "created_total": counts["created_total"],
+                    }
+                    for day, counts in sorted(curated_daily_counts.items())
+                ],
+                "curated_collection_summary": {
+                    "succeeded": curated_success_count,
+                    "failed": curated_failure_count,
+                    "skipped": curated_skipped_count,
+                    "created_total": curated_created_total,
+                },
+                "curated_review_queue_summary": {
+                    **curated_review_queue_counts,
+                    "total": sum(curated_review_queue_counts.values()),
+                },
+                "curated_collection_failure_distribution": [
+                    {"reason": reason, "count": count}
+                    for reason, count in sorted(
+                        curated_failure_reasons.items(),
+                        key=lambda item: (-item[1], item[0]),
+                    )
                 ],
             }
 
@@ -2316,7 +2440,7 @@ def get_moderation_settings():
                        admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons,
                        page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
                        page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
-                       page_editor_conflict_rate_threshold,
+                       page_editor_conflict_rate_threshold, curated_review_quality_threshold,
                        updated_at
                 FROM moderation_settings
                 WHERE id = 1
@@ -2339,6 +2463,7 @@ def update_moderation_settings(
     page_editor_publish_fail_rate_threshold: float,
     page_editor_rollback_ratio_threshold: float,
     page_editor_conflict_rate_threshold: float,
+    curated_review_quality_threshold: int,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -2358,13 +2483,14 @@ def update_moderation_settings(
                     page_editor_publish_fail_rate_threshold = %s,
                     page_editor_rollback_ratio_threshold = %s,
                     page_editor_conflict_rate_threshold = %s,
+                    curated_review_quality_threshold = %s,
                     updated_at = NOW()
                 WHERE id = 1
                 RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
                           admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons,
                           page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
                           page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
-                          page_editor_conflict_rate_threshold,
+                          page_editor_conflict_rate_threshold, curated_review_quality_threshold,
                           updated_at
                 """,
                 (
@@ -2381,6 +2507,7 @@ def update_moderation_settings(
                     page_editor_publish_fail_rate_threshold,
                     page_editor_rollback_ratio_threshold,
                     page_editor_conflict_rate_threshold,
+                    curated_review_quality_threshold,
                 ),
             )
             conn.commit()

@@ -881,6 +881,23 @@ def test_get_admin_action_logs_observability(monkeypatch: Any) -> None:
             "publish_failure_distribution": [
                 {"reason": "validation_failed", "count": 1}
             ],
+            "daily_curated_collection_counts": [
+                {"day": "2026-03-04", "run_count": 1, "created_total": 2}
+            ],
+            "curated_collection_summary": {
+                "succeeded": 1,
+                "failed": 0,
+                "skipped": 1,
+                "created_total": 2,
+            },
+            "curated_review_queue_summary": {
+                "pending": 3,
+                "review_license": 1,
+                "review_duplicate": 2,
+                "review_quality": 4,
+                "total": 10,
+            },
+            "curated_collection_failure_distribution": [],
         },
     )
 
@@ -890,6 +907,8 @@ def test_get_admin_action_logs_observability(monkeypatch: Any) -> None:
     body = response.json()
     assert body["summary"]["published"] == 2
     assert body["publish_failure_distribution"][0]["reason"] == "validation_failed"
+    assert body["curated_collection_summary"]["created_total"] == 2
+    assert body["curated_review_queue_summary"]["review_quality"] == 4
 
     main.app.dependency_overrides.clear()
 

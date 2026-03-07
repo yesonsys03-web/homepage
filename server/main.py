@@ -32,7 +32,7 @@ from xml.sax.saxutils import escape as xml_escape
 from urllib.parse import urlparse, urlencode, quote
 from urllib.request import Request as UrlRequest, urlopen
 from threading import Lock
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from collections import deque
 
 from db import (
@@ -126,16 +126,24 @@ from auth import (
     create_access_token,
     decode_token,
 )
+from scheduler import cancel_background_task, run_periodic_async_loop
 from github_collector import (
     GitHubCollectorConfig,
     build_search_query,
+    fetch_github_readme_excerpt,
     normalize_github_repo_url,
     reached_daily_collect_limit,
+    search_github_repositories,
 )
 from gemini_curator import (
+    CurationEvaluation,
     QualityInputs,
+    ThreeLevelSummary,
     calc_quality_score,
+    curate_repository_with_gemini,
     fallback_summary_template,
+    heuristic_curation_evaluation,
+    summarize_repository_without_llm,
     should_auto_reject,
 )
 
@@ -147,6 +155,20 @@ CURATED_REASON_LANGUAGE_MATCH = "language_match"
 CURATED_REASON_KOREAN_DEV_MATCH = "korean_dev_match"
 CURATED_REASON_CATEGORY_MATCH = "category_match"
 CURATED_REASON_CONTEXTUAL_MATCH = "contextual_match"
+
+CURATED_STATUS_PENDING = "pending"
+CURATED_STATUS_REVIEW_LICENSE = "review_license"
+CURATED_STATUS_REVIEW_DUPLICATE = "review_duplicate"
+CURATED_STATUS_REVIEW_QUALITY = "review_quality"
+CURATED_STATUS_APPROVED = "approved"
+CURATED_STATUS_REJECTED = "rejected"
+CURATED_STATUS_AUTO_REJECTED = "auto_rejected"
+CURATED_REVIEW_QUEUE_STATUSES = {
+    CURATED_STATUS_PENDING,
+    CURATED_STATUS_REVIEW_LICENSE,
+    CURATED_STATUS_REVIEW_DUPLICATE,
+    CURATED_STATUS_REVIEW_QUALITY,
+}
 
 CURATED_REASON_LABELS: dict[str, str] = {
     CURATED_REASON_UNKNOWN: "기타",
@@ -692,12 +714,34 @@ class CuratedAdminUpdateRequest(BaseModel):
     summary_mid: Optional[str] = None
     summary_expert: Optional[str] = None
     tags: Optional[list[str]] = None
-    status: Optional[Literal["pending", "approved", "rejected", "auto_rejected"]] = None
+    status: Optional[
+        Literal[
+            "pending",
+            "review_license",
+            "review_duplicate",
+            "review_quality",
+            "approved",
+            "rejected",
+            "auto_rejected",
+        ]
+    ] = None
     reject_reason: Optional[str] = None
     quality_score: Optional[int] = None
     relevance_score: Optional[int] = None
     beginner_value: Optional[int] = None
     license: Optional[str] = None
+
+
+class CuratedDuplicateReviewMetadata(TypedDict, total=False):
+    reason_codes: list[str]
+    canonical_url_match: bool
+    owner_repo_match: bool
+    title_match: bool
+    matched_existing_ids: list[int]
+    matched_processed_titles: list[str]
+    license_value: str
+    quality_score_value: int
+    quality_threshold: int
 
 
 class ErrorTranslateRequest(BaseModel):
@@ -758,11 +802,14 @@ DEFAULT_PAGE_EDITOR_ROLLOUT_STAGE = "qa"
 DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD = 0.2
 DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD = 0.3
 DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD = 0.25
+DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD = 45
 ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
+AUTO_CURATED_COLLECTION_MIN_INTERVAL_SECONDS = 60
 SYSTEM_ADMIN_USER_ID = "11111111-1111-1111-1111-111111111111"
 ADMIN_ALLOWED_ROLES = {"admin", "super_admin"}
 SUPER_ADMIN_BOOTSTRAP_EMAIL = "topyeson@gmail.com"
 _admin_log_cleanup_task: Optional[asyncio.Task[None]] = None
+_curated_collection_task: Optional[asyncio.Task[None]] = None
 
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
@@ -798,6 +845,24 @@ GITHUB_SEARCH_TOPICS = [
     if topic.strip()
 ]
 GITHUB_MIN_STARS = int(os.getenv("GITHUB_MIN_STARS", "30"))
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = (
+    os.getenv("GEMINI_MODEL", "gemini-2.0-flash").strip() or "gemini-2.0-flash"
+)
+GITHUB_README_EXCERPT_MAX_CHARS = int(
+    os.getenv("GITHUB_README_EXCERPT_MAX_CHARS", "4000")
+)
+AUTO_CURATED_COLLECTION_ENABLED = os.getenv(
+    "AUTO_CURATED_COLLECTION_ENABLED", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+AUTO_CURATED_COLLECTION_RUN_ON_STARTUP = os.getenv(
+    "AUTO_CURATED_COLLECTION_RUN_ON_STARTUP", "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+AUTO_CURATED_COLLECTION_INTERVAL_SECONDS = max(
+    AUTO_CURATED_COLLECTION_MIN_INTERVAL_SECONDS,
+    int(os.getenv("AUTO_CURATED_COLLECTION_INTERVAL_SECONDS", "21600")),
+)
 _RATE_LIMIT_BUCKETS: dict[str, deque[float]] = {}
 _RATE_LIMIT_LOCK = Lock()
 
@@ -874,6 +939,7 @@ class AdminPolicyUpdateRequest(BaseModel):
     page_editor_publish_fail_rate_threshold: Optional[float] = None
     page_editor_rollback_ratio_threshold: Optional[float] = None
     page_editor_conflict_rate_threshold: Optional[float] = None
+    curated_review_quality_threshold: Optional[int] = None
 
 
 class AdminOAuthSettingsUpdateRequest(BaseModel):
@@ -1832,6 +1898,10 @@ def page_action_target_id(page_id: str) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"vibecoder:page:{page_id}"))
 
 
+def curated_collection_action_target_id() -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "vibecoder:curated-collection:scheduler"))
+
+
 def parse_schedule_publish_at(raw: str) -> datetime:
     normalized = raw.strip()
     if not normalized:
@@ -2193,6 +2263,22 @@ def write_admin_action_log(
     )
 
 
+def log_curated_collection_action(
+    *, action_type: str, created: int, message: Optional[str] = None
+) -> None:
+    detail = f"created={max(created, 0)}"
+    normalized_message = str(message or "").strip()
+    if normalized_message:
+        detail = f"{detail}; message={normalized_message}"
+    write_admin_action_log(
+        admin_id=SYSTEM_ADMIN_USER_ID,
+        action_type=action_type,
+        target_type="system",
+        target_id=curated_collection_action_target_id(),
+        reason=detail,
+    )
+
+
 def get_effective_moderation_settings() -> dict[str, object]:
     settings = get_moderation_settings()
     if not settings:
@@ -2261,6 +2347,12 @@ def get_effective_moderation_settings() -> dict[str, object]:
         settings.get("page_editor_conflict_rate_threshold"),
         DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
     )
+    curated_review_quality_threshold = normalize_positive_int(
+        settings.get("curated_review_quality_threshold"),
+        DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+        minimum=1,
+        maximum=100,
+    )
     baseline_categories = {
         category: normalize_keyword_list(keywords)
         for category, keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.items()
@@ -2293,6 +2385,7 @@ def get_effective_moderation_settings() -> dict[str, object]:
         "page_editor_publish_fail_rate_threshold": page_editor_publish_fail_rate_threshold,
         "page_editor_rollback_ratio_threshold": page_editor_rollback_ratio_threshold,
         "page_editor_conflict_rate_threshold": page_editor_conflict_rate_threshold,
+        "curated_review_quality_threshold": curated_review_quality_threshold,
         "updated_at": settings["updated_at"],
         "last_updated_by": last_updated_by,
         "last_updated_by_id": last_updated_by_id,
@@ -2354,6 +2447,12 @@ def ensure_baseline_moderation_settings() -> None:
         settings.get("page_editor_conflict_rate_threshold"),
         DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
     )
+    curated_review_quality_threshold = normalize_positive_int(
+        settings.get("curated_review_quality_threshold"),
+        DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+        minimum=1,
+        maximum=100,
+    )
     if (
         effective_keywords != (settings.get("blocked_keywords") or [])
         or home_filter_tabs != (settings.get("home_filter_tabs") or [])
@@ -2380,6 +2479,13 @@ def ensure_baseline_moderation_settings() -> None:
             settings.get("page_editor_conflict_rate_threshold"),
             DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD,
         )
+        or curated_review_quality_threshold
+        != normalize_positive_int(
+            settings.get("curated_review_quality_threshold"),
+            DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+            minimum=1,
+            maximum=100,
+        )
     ):
         update_moderation_settings(
             blocked_keywords=effective_keywords,
@@ -2395,6 +2501,7 @@ def ensure_baseline_moderation_settings() -> None:
             page_editor_publish_fail_rate_threshold=page_editor_publish_fail_rate_threshold,
             page_editor_rollback_ratio_threshold=page_editor_rollback_ratio_threshold,
             page_editor_conflict_rate_threshold=page_editor_conflict_rate_threshold,
+            curated_review_quality_threshold=curated_review_quality_threshold,
         )
 
 
@@ -2430,6 +2537,36 @@ async def run_admin_log_cleanup_loop() -> None:
         await asyncio.sleep(ADMIN_LOG_CLEANUP_INTERVAL_SECONDS)
 
 
+async def run_curated_collection_scheduler_iteration() -> None:
+    try:
+        result = perform_curated_collection_run(allow_sample_fallback=False)
+        created = safe_int(result.get("created"), 0)
+        message = str(result.get("message") or "").strip()
+        action_type = "curated_collection_succeeded"
+        if message and created == 0:
+            action_type = "curated_collection_skipped"
+        log_curated_collection_action(
+            action_type=action_type,
+            created=created,
+            message=message,
+        )
+        if created > 0 or message:
+            log_line = (
+                f"[curated-scheduler] created={created} "
+                f"collected_today={safe_int(result.get('collected_today'), 0)} "
+                f"daily_limit={safe_int(result.get('daily_limit'), 0)} "
+                f"message={message or 'none'}"
+            )
+            print(log_line)
+    except Exception as error:
+        log_curated_collection_action(
+            action_type="curated_collection_failed",
+            created=0,
+            message=str(error),
+        )
+        print(f"[curated-scheduler] loop error: {error}")
+
+
 # ============ Startup Event ============
 
 
@@ -2447,21 +2584,28 @@ async def _startup_event_impl() -> None:
         _set_cached_projects(
             sort="latest", platform=None, tag=None, items=get_projects(sort="latest")
         )
-        global _admin_log_cleanup_task
+        global _admin_log_cleanup_task, _curated_collection_task
         if _admin_log_cleanup_task is None or _admin_log_cleanup_task.done():
             _admin_log_cleanup_task = asyncio.create_task(run_admin_log_cleanup_loop())
+        if AUTO_CURATED_COLLECTION_ENABLED and (
+            _curated_collection_task is None or _curated_collection_task.done()
+        ):
+            _curated_collection_task = asyncio.create_task(
+                run_periodic_async_loop(
+                    interval_seconds=AUTO_CURATED_COLLECTION_INTERVAL_SECONDS,
+                    callback=run_curated_collection_scheduler_iteration,
+                    run_immediately=AUTO_CURATED_COLLECTION_RUN_ON_STARTUP,
+                )
+            )
     except Exception as e:
         print(f"⚠️  DB initialization warning: {e}")
 
 
 async def _shutdown_event_impl() -> None:
-    global _admin_log_cleanup_task
-    if _admin_log_cleanup_task is None:
-        return
-
-    _ = _admin_log_cleanup_task.cancel()
-    with suppress(asyncio.CancelledError):
-        await _admin_log_cleanup_task
+    global _admin_log_cleanup_task, _curated_collection_task
+    await cancel_background_task(_curated_collection_task)
+    _curated_collection_task = None
+    await cancel_background_task(_admin_log_cleanup_task)
     _admin_log_cleanup_task = None
 
 
@@ -2588,6 +2732,12 @@ def require_admin_from_request(request: Request) -> UserContext:
 
 
 def serialize_curated_content(row: Mapping[str, object]) -> dict[str, object]:
+    raw_review_metadata = row.get("review_metadata")
+    review_metadata = (
+        cast(dict[str, object], raw_review_metadata)
+        if isinstance(raw_review_metadata, dict)
+        else {}
+    )
     return {
         "id": safe_int(row.get("id"), 0),
         "source_type": str(row.get("source_type") or "github"),
@@ -2610,6 +2760,7 @@ def serialize_curated_content(row: Mapping[str, object]) -> dict[str, object]:
         "tags": cast(list[str], row.get("tags") or []),
         "status": str(row.get("status") or "pending"),
         "reject_reason": str(row.get("reject_reason") or ""),
+        "review_metadata": review_metadata,
         "approved_at": str(row.get("approved_at") or ""),
         "approved_by": str(row.get("approved_by") or ""),
         "github_pushed_at": str(row.get("github_pushed_at") or ""),
@@ -2934,6 +3085,13 @@ def run_curated_collection_endpoint(
 ):
     _ = require_admin_from_request(request)
 
+    return perform_curated_collection_run(allow_sample_fallback=True)
+
+
+def perform_curated_collection_run(
+    *, allow_sample_fallback: bool = True
+) -> dict[str, object]:
+
     config = GitHubCollectorConfig(
         search_topics=GITHUB_SEARCH_TOPICS,
         min_stars=GITHUB_MIN_STARS,
@@ -2942,6 +3100,14 @@ def run_curated_collection_endpoint(
     _ = build_search_query(config)
 
     existing = list_admin_curated_content(status=None, limit=500, offset=0)
+    moderation_settings = get_effective_moderation_settings()
+    quality_review_threshold = cast(
+        int,
+        moderation_settings.get(
+            "curated_review_quality_threshold",
+            DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+        ),
+    )
     today = datetime.now(timezone.utc).date()
     collected_today = sum(
         1
@@ -2957,7 +3123,149 @@ def run_curated_collection_endpoint(
             "collected_today": collected_today,
         }
 
-    samples: list[dict[str, object]] = [
+    candidates, collection_message = _load_curated_collection_candidates(
+        config,
+        allow_sample_fallback=allow_sample_fallback,
+    )
+
+    created_count = 0
+    processed_candidates: list[dict[str, object]] = []
+    for repo in candidates:
+        if reached_daily_collect_limit(collected_today + created_count, config):
+            break
+
+        summary = ThreeLevelSummary(
+            beginner=str(repo.get("summary_beginner") or "").strip(),
+            mid=str(repo.get("summary_mid") or "").strip(),
+            expert=str(repo.get("summary_expert") or "").strip(),
+        )
+        if (
+            not summary.beginner.strip()
+            or not summary.mid.strip()
+            or not summary.expert.strip()
+        ):
+            summary = summarize_repository_without_llm(repo)
+        if (
+            not summary.beginner.strip()
+            or not summary.mid.strip()
+            or not summary.expert.strip()
+        ):
+            summary = fallback_summary_template(str(repo.get("title") or "GitHub Repo"))
+        quality_score = calc_quality_score(
+            QualityInputs(
+                stars=safe_int(repo.get("stars"), 0),
+                is_korean_dev=bool(repo.get("is_korean_dev") or False),
+                has_readme=bool(repo.get("has_readme") or False),
+                relevance_score=safe_int(repo.get("relevance_score"), 0),
+                beginner_value=safe_int(repo.get("beginner_value"), 0),
+            )
+        )
+        status = determine_curated_collection_status(
+            repo,
+            quality_score,
+            quality_threshold=quality_review_threshold,
+            existing_items=existing,
+            processed_items=processed_candidates,
+        )
+        review_metadata = build_curated_review_metadata(
+            repo,
+            quality_score,
+            quality_threshold=quality_review_threshold,
+            existing_items=existing,
+            processed_items=processed_candidates,
+        )
+
+        payload = {
+            **repo,
+            "summary_beginner": summary.beginner,
+            "summary_mid": summary.mid,
+            "summary_expert": summary.expert,
+            "quality_score": quality_score,
+            "status": status,
+            "reject_reason": (
+                "auto_cutoff" if status == CURATED_STATUS_AUTO_REJECTED else None
+            ),
+            "review_metadata": (
+                review_metadata if status in CURATED_REVIEW_QUEUE_STATUSES else {}
+            ),
+            "github_pushed_at": repo.get("github_pushed_at")
+            or datetime.now(timezone.utc),
+        }
+        saved = create_or_update_curated_content(payload)
+        processed_candidates.append(payload)
+        if saved and bool(saved.get("inserted", False)):
+            created_count += 1
+
+    return {
+        "created": created_count,
+        "daily_limit": config.daily_collect_limit,
+        "collected_today": collected_today + created_count,
+        **({"message": collection_message} if collection_message else {}),
+    }
+
+
+def _load_curated_collection_candidates(
+    config: GitHubCollectorConfig,
+    *,
+    allow_sample_fallback: bool,
+) -> tuple[list[dict[str, object]], str | None]:
+    if not GITHUB_TOKEN:
+        if not allow_sample_fallback:
+            return [], "GITHUB_TOKEN이 없어 자동 수집을 건너뛰었습니다"
+        return (
+            _build_sample_curated_candidates(),
+            "GITHUB_TOKEN이 없어 개발용 샘플 후보로 대체했습니다",
+        )
+
+    search_results = search_github_repositories(config, GITHUB_TOKEN, per_page=20)
+    if not search_results:
+        return [], "GitHub 검색 결과가 없어 새 후보를 만들지 못했습니다"
+
+    candidates: list[dict[str, object]] = []
+    for repo in search_results:
+        readme_excerpt = ""
+        if repo["has_readme"]:
+            readme_excerpt = fetch_github_readme_excerpt(
+                repo["owner"],
+                repo["name"],
+                GITHUB_TOKEN,
+                max_chars=GITHUB_README_EXCERPT_MAX_CHARS,
+            )
+        candidate_seed = {
+            "source_type": "github",
+            "source_url": repo["source_url"],
+            "canonical_url": repo["canonical_url"],
+            "repo_name": repo["name"],
+            "repo_owner": repo["owner"],
+            "title": _humanize_repo_title(repo["name"]),
+            "language": repo["language"],
+            "is_korean_dev": repo["is_korean_dev"],
+            "stars": repo["stars"],
+            "license": repo["license"],
+            "has_readme": repo["has_readme"],
+            "github_pushed_at": repo["github_pushed_at"],
+            "description": repo["description"],
+            "readme_excerpt": readme_excerpt,
+        }
+        evaluation, summary = _build_curated_candidate_intelligence(candidate_seed)
+        candidates.append(
+            {
+                **candidate_seed,
+                "category": evaluation.category,
+                "relevance_score": evaluation.relevance_score,
+                "beginner_value": evaluation.beginner_value,
+                "tags": evaluation.tags,
+                "reason": evaluation.reason,
+                "summary_beginner": summary.beginner,
+                "summary_mid": summary.mid,
+                "summary_expert": summary.expert,
+            }
+        )
+    return candidates, None
+
+
+def _build_sample_curated_candidates() -> list[dict[str, object]]:
+    return [
         {
             "source_type": "github",
             "source_url": "https://github.com/example/claude-mcp-starter",
@@ -2975,6 +3283,8 @@ def run_curated_collection_endpoint(
             "relevance_score": 8,
             "beginner_value": 8,
             "tags": ["MCP", "Claude", "Starter"],
+            "has_readme": True,
+            "description": "Claude와 MCP 기반 바이브코딩 흐름을 바로 시작할 수 있는 스타터 키트입니다.",
         },
         {
             "source_type": "github",
@@ -2993,51 +3303,215 @@ def run_curated_collection_endpoint(
             "relevance_score": 7,
             "beginner_value": 7,
             "tags": ["Template", "VibeCoding"],
+            "has_readme": True,
+            "description": "반복 설정 없이 바로 실행하고 수정해볼 수 있는 템플릿 모음입니다.",
         },
     ]
 
-    created_count = 0
-    for repo in samples:
-        if reached_daily_collect_limit(collected_today + created_count, config):
-            break
 
-        summary = fallback_summary_template(str(repo.get("title") or "GitHub Repo"))
-        quality_score = calc_quality_score(
-            QualityInputs(
-                stars=safe_int(repo.get("stars"), 0),
-                is_korean_dev=bool(repo.get("is_korean_dev") or False),
-                has_readme=True,
-                relevance_score=safe_int(repo.get("relevance_score"), 0),
-                beginner_value=safe_int(repo.get("beginner_value"), 0),
-            )
-        )
-        status = (
-            "auto_rejected"
-            if should_auto_reject(
-                quality_score, safe_int(repo.get("relevance_score"), 0)
-            )
-            else "pending"
-        )
+def _humanize_repo_title(repo_name: str) -> str:
+    words = [part for part in re.split(r"[-_]+", repo_name.strip()) if part]
+    if not words:
+        return repo_name
+    return " ".join(
+        word.upper() if word.isupper() else word.capitalize() for word in words
+    )
 
-        payload = {
-            **repo,
-            "summary_beginner": summary.beginner,
-            "summary_mid": summary.mid,
-            "summary_expert": summary.expert,
-            "quality_score": quality_score,
-            "status": status,
-            "reject_reason": "auto_cutoff" if status == "auto_rejected" else None,
-            "github_pushed_at": datetime.now(timezone.utc),
+
+def _build_curated_candidate_intelligence(
+    candidate: Mapping[str, object],
+) -> tuple[CurationEvaluation, ThreeLevelSummary]:
+    heuristic_evaluation = heuristic_curation_evaluation(candidate)
+    heuristic_summary = summarize_repository_without_llm(
+        {**candidate, "category": heuristic_evaluation.category}
+    )
+    if not GEMINI_API_KEY:
+        return heuristic_evaluation, heuristic_summary
+
+    try:
+        gemini_result = curate_repository_with_gemini(
+            {**candidate, "category": heuristic_evaluation.category},
+            GEMINI_API_KEY,
+            model=GEMINI_MODEL,
+        )
+    except RuntimeError:
+        return heuristic_evaluation, heuristic_summary
+
+    summary = gemini_result.summary
+    if (
+        not summary.beginner.strip()
+        or not summary.mid.strip()
+        or not summary.expert.strip()
+    ):
+        summary = heuristic_summary
+    return gemini_result.evaluation, summary
+
+
+def determine_curated_collection_status(
+    repo: Mapping[str, object],
+    quality_score: int,
+    *,
+    quality_threshold: int = DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+    existing_items: Sequence[Mapping[str, object]] | None = None,
+    processed_items: Sequence[Mapping[str, object]] | None = None,
+) -> str:
+    relevance_score = safe_int(repo.get("relevance_score"), 0)
+    if should_auto_reject(quality_score, relevance_score):
+        return CURATED_STATUS_AUTO_REJECTED
+
+    if is_curated_duplicate_candidate(
+        repo,
+        existing_items=existing_items,
+        processed_items=processed_items,
+    ):
+        return CURATED_STATUS_REVIEW_DUPLICATE
+
+    license_value = str(repo.get("license") or "").strip().lower()
+    if not license_value or license_value in {"unknown", "noassertion", "other"}:
+        return CURATED_STATUS_REVIEW_LICENSE
+
+    if quality_score < quality_threshold:
+        return CURATED_STATUS_REVIEW_QUALITY
+
+    return CURATED_STATUS_PENDING
+
+
+def is_curated_duplicate_candidate(
+    repo: Mapping[str, object],
+    *,
+    existing_items: Sequence[Mapping[str, object]] | None = None,
+    processed_items: Sequence[Mapping[str, object]] | None = None,
+) -> bool:
+    return bool(
+        build_curated_duplicate_review_metadata(
+            repo,
+            existing_items=existing_items,
+            processed_items=processed_items,
+        )
+    )
+
+
+def build_curated_review_metadata(
+    repo: Mapping[str, object],
+    quality_score: int,
+    *,
+    quality_threshold: int = DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+    existing_items: Sequence[Mapping[str, object]] | None = None,
+    processed_items: Sequence[Mapping[str, object]] | None = None,
+) -> CuratedDuplicateReviewMetadata:
+    duplicate_metadata = build_curated_duplicate_review_metadata(
+        repo,
+        existing_items=existing_items,
+        processed_items=processed_items,
+    )
+    if duplicate_metadata:
+        return duplicate_metadata
+
+    license_value = str(repo.get("license") or "").strip()
+    normalized_license = license_value.lower()
+    if not normalized_license:
+        return {
+            "reason_codes": ["license_missing"],
+            "license_value": license_value,
         }
-        saved = create_or_update_curated_content(payload)
-        if saved:
-            created_count += 1
+    if normalized_license in {"unknown", "noassertion", "other"}:
+        return {
+            "reason_codes": ["license_unrecognized"],
+            "license_value": license_value,
+        }
 
-    return {
-        "created": created_count,
-        "daily_limit": config.daily_collect_limit,
-        "collected_today": collected_today + created_count,
-    }
+    if quality_score < quality_threshold:
+        return {
+            "reason_codes": ["quality_below_threshold"],
+            "quality_score_value": quality_score,
+            "quality_threshold": quality_threshold,
+        }
+
+    return {}
+
+
+def build_curated_duplicate_review_metadata(
+    repo: Mapping[str, object],
+    *,
+    existing_items: Sequence[Mapping[str, object]] | None = None,
+    processed_items: Sequence[Mapping[str, object]] | None = None,
+) -> CuratedDuplicateReviewMetadata:
+    candidate_canonical = normalize_github_repo_url(
+        str(repo.get("canonical_url") or "").strip()
+    )
+    candidate_repo_name = str(repo.get("repo_name") or "").strip().lower()
+    candidate_repo_owner = str(repo.get("repo_owner") or "").strip().lower()
+    candidate_title = _normalize_curated_title(str(repo.get("title") or ""))
+
+    comparison_pool = list(existing_items or []) + list(processed_items or [])
+    review_metadata: CuratedDuplicateReviewMetadata = {"reason_codes": []}
+    matched_existing_ids: list[int] = []
+    matched_processed_titles: list[str] = []
+    for item in comparison_pool:
+        item_id = safe_int(item.get("id"), 0)
+        repo_id = safe_int(repo.get("id"), 0)
+        if repo_id > 0 and item_id == repo_id:
+            continue
+
+        matched = False
+
+        existing_canonical = normalize_github_repo_url(
+            str(item.get("canonical_url") or "").strip()
+        )
+        if (
+            candidate_canonical
+            and existing_canonical
+            and candidate_canonical == existing_canonical
+        ):
+            review_metadata["canonical_url_match"] = True
+            review_metadata["reason_codes"].append("canonical_url_match")
+            matched = True
+
+        existing_repo_name = str(item.get("repo_name") or "").strip().lower()
+        existing_repo_owner = str(item.get("repo_owner") or "").strip().lower()
+        if (
+            candidate_repo_name
+            and candidate_repo_owner
+            and candidate_repo_name == existing_repo_name
+            and candidate_repo_owner == existing_repo_owner
+        ):
+            review_metadata["owner_repo_match"] = True
+            review_metadata["reason_codes"].append("owner_repo_match")
+            matched = True
+
+        existing_title = _normalize_curated_title(str(item.get("title") or ""))
+        if candidate_title and existing_title and candidate_title == existing_title:
+            review_metadata["title_match"] = True
+            review_metadata["reason_codes"].append("title_match")
+            matched = True
+
+        if matched:
+            if item_id > 0:
+                matched_existing_ids.append(item_id)
+            else:
+                processed_title = str(item.get("title") or "").strip()
+                if processed_title:
+                    matched_processed_titles.append(processed_title)
+
+    if matched_existing_ids:
+        review_metadata["matched_existing_ids"] = sorted(set(matched_existing_ids))
+    if matched_processed_titles:
+        review_metadata["matched_processed_titles"] = sorted(
+            set(matched_processed_titles)
+        )
+
+    reason_codes = sorted(set(review_metadata.get("reason_codes") or []))
+    if reason_codes:
+        review_metadata["reason_codes"] = reason_codes
+    else:
+        review_metadata.pop("reason_codes", None)
+
+    return review_metadata
+
+
+def _normalize_curated_title(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", value.strip().lower())
+    return " ".join(part for part in normalized.split() if part)
 
 
 @app.get("/api/admin/curated/related-clicks/summary")
@@ -4209,6 +4683,18 @@ def update_admin_policies(
             ),
         ),
     )
+    curated_review_quality_threshold = normalize_positive_int(
+        payload.curated_review_quality_threshold,
+        cast(
+            int,
+            current_settings.get(
+                "curated_review_quality_threshold",
+                DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD,
+            ),
+        ),
+        minimum=1,
+        maximum=100,
+    )
 
     updated = update_moderation_settings(
         blocked_keywords=effective_keywords,
@@ -4224,6 +4710,7 @@ def update_admin_policies(
         page_editor_publish_fail_rate_threshold=page_editor_publish_fail_rate_threshold,
         page_editor_rollback_ratio_threshold=page_editor_rollback_ratio_threshold,
         page_editor_conflict_rate_threshold=page_editor_conflict_rate_threshold,
+        curated_review_quality_threshold=curated_review_quality_threshold,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
@@ -4241,7 +4728,8 @@ def update_admin_policies(
             f"mask_reasons={admin_log_mask_reasons}, "
             f"page_editor_enabled={page_editor_enabled}, "
             f"rollout_stage={page_editor_rollout_stage}, "
-            f"pilot_admin_count={len(page_editor_pilot_admin_ids)}"
+            f"pilot_admin_count={len(page_editor_pilot_admin_ids)}, "
+            f"curated_quality_threshold={curated_review_quality_threshold}"
         ),
     )
 
