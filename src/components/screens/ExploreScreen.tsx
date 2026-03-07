@@ -7,7 +7,7 @@ import { ProjectMeta } from "@/components/ProjectMeta"
 import { Button } from "@/components/ui/button"
 import { api, type FilterTab, type Project } from "@/lib/api"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 const HOT_PROJECT_THRESHOLD = 30
 
@@ -135,7 +135,7 @@ export function ExploreScreen({ onNavigate, onOpenProject }: ScreenProps) {
             <Card key={project.id} onClick={() => onOpenProject?.(project.id)} className="bg-[#161F42] border-[#111936] overflow-hidden hover:border-[#23D5AB]/50 transition-colors cursor-pointer">
               <div className="aspect-video bg-gradient-to-br from-[#161F42] to-[#0B1020] flex items-center justify-center">
                 {project.thumbnail_url ? (
-                  <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
+                  <img src={project.thumbnail_url} alt={project.title} loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 ) : (
                   <ProjectCoverPlaceholder
                     seedKey={project.id}

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { Helmet } from "react-helmet-async"
 
 import { Button } from "@/components/ui/button"
 import { TopNav } from "@/components/TopNav"
@@ -8,7 +9,7 @@ import aboutMasterImage from "../../../img/About_master.webp"
 import aboutTabletImage from "../../../img/About_tablet.webp"
 import aboutMobileImage from "../../../img/About_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -64,11 +65,33 @@ const ABOUT_FALLBACK_CONTENT: AboutContent = {
 
 export function AboutScreen({ onNavigate }: ScreenProps) {
   const [content, setContent] = useState<AboutContent>(ABOUT_FALLBACK_CONTENT)
+  const hasHeroContent =
+    content.hero_title.trim().length > 0 ||
+    content.hero_highlight.trim().length > 0 ||
+    content.hero_description.trim().length > 0
+  const faqJsonLd = useMemo(() => {
+    if (content.faqs.length === 0) {
+      return null
+    }
+
+    return JSON.stringify({
+      "@context": "https://schema.org",
+      "@type": "FAQPage",
+      mainEntity: content.faqs.map((faq) => ({
+        "@type": "Question",
+        name: faq.question,
+        acceptedAnswer: {
+          "@type": "Answer",
+          text: faq.answer,
+        },
+      })),
+    })
+  }, [content.faqs])
 
   useEffect(() => {
     const loadAboutContent = async () => {
       try {
-        const data = await api.getAboutContent()
+        const data = await api.getAboutContent({ force: true })
         setContent(data)
       } catch (error) {
         console.error("Failed to load about content:", error)
@@ -80,100 +103,117 @@ export function AboutScreen({ onNavigate }: ScreenProps) {
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
+      {faqJsonLd ? (
+        <Helmet>
+          <script id="about-faq-jsonld" type="application/ld+json">
+            {faqJsonLd}
+          </script>
+        </Helmet>
+      ) : null}
       <TopNav active="about" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
-        <HeroBanner
-          className="text-center py-16 rounded-2xl border border-[#111936]"
-          title={
-            <>
-              {content.hero_title}
-              <br />
-              <span className="text-[#23D5AB]">{content.hero_highlight}</span>
-            </>
-          }
-          description={content.hero_description}
-          cta={
-            <div className="flex gap-4 justify-center">
-              <Button onClick={() => onNavigate?.("explore")} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold text-lg px-8">
-                시작하기
-              </Button>
-            </div>
-          }
-          background={
-            <>
-              <picture className="absolute inset-0">
-                <source media="(max-width: 767px)" srcSet={aboutMobileImage} />
-                <source media="(max-width: 1279px)" srcSet={aboutTabletImage} />
-                <img
-                  src={aboutMasterImage}
-                  alt=""
-                  aria-hidden="true"
-                  className="h-full w-full object-cover opacity-65"
-                  style={{ filter: "brightness(1.6)" }}
-                />
-              </picture>
-              <div className="absolute inset-0 bg-gradient-to-b from-[#0B1020]/39 via-[#0B1020]/46 to-[#0B1020]/55" />
-            </>
-          }
-        />
+        {hasHeroContent ? (
+          <HeroBanner
+            className="text-center py-16 rounded-2xl border border-[#111936]"
+            title={
+              <>
+                {content.hero_title}
+                <br />
+                <span className="text-[#23D5AB]">{content.hero_highlight}</span>
+              </>
+            }
+            description={content.hero_description}
+            cta={
+              <div className="flex gap-4 justify-center">
+                <Button onClick={() => onNavigate?.("explore")} className="bg-[#23D5AB] hover:bg-[#23D5AB]/90 text-[#0B1020] font-semibold text-lg px-8">
+                  시작하기
+                </Button>
+              </div>
+            }
+            background={
+              <>
+                <picture className="absolute inset-0">
+                  <source media="(max-width: 767px)" srcSet={aboutMobileImage} />
+                  <source media="(max-width: 1279px)" srcSet={aboutTabletImage} />
+                  <img
+                    src={aboutMasterImage}
+                    alt=""
+                    aria-hidden="true"
+                    className="h-full w-full object-cover opacity-65"
+                    style={{ filter: "brightness(1.6)" }}
+                  />
+                </picture>
+                <div className="absolute inset-0 bg-gradient-to-b from-[#0B1020]/39 via-[#0B1020]/46 to-[#0B1020]/55" />
+              </>
+            }
+          />
+        ) : null}
 
-        <section className="py-12 grid grid-cols-1 md:grid-cols-3 gap-6">
-          {content.values.map((value) => (
-            <div key={`${value.emoji}-${value.title}`} className="bg-[#161F42] p-6 rounded-xl border border-[#111936]">
-              <div className="text-4xl mb-4">{value.emoji}</div>
-              <h3 className="font-display text-xl font-bold text-[#F4F7FF] mb-2">{value.title}</h3>
-              <p className="text-[#B8C3E6]">{value.description}</p>
-            </div>
-          ))}
-        </section>
+        {content.values.length > 0 ? (
+          <section className="py-12 grid grid-cols-1 md:grid-cols-3 gap-6">
+            {content.values.map((value) => (
+              <div key={`${value.emoji}-${value.title}`} className="bg-[#161F42] p-6 rounded-xl border border-[#111936]">
+                <div className="text-4xl mb-4">{value.emoji}</div>
+                <h3 className="font-display text-xl font-bold text-[#F4F7FF] mb-2">{value.title}</h3>
+                <p className="text-[#B8C3E6]">{value.description}</p>
+              </div>
+            ))}
+          </section>
+        ) : null}
 
-        <section className="py-12">
-          <h2 className="font-display text-3xl font-bold text-[#F4F7FF] text-center mb-8">
-            👥 Team
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {content.team_members.map((member) => (
-              <div key={member.name} className="bg-[#161F42] p-6 rounded-xl border border-[#111936] text-center">
-                <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-br from-[#23D5AB] to-[#FF5D8F] flex items-center justify-center text-2xl font-bold text-[#0B1020]">
-                  {member.name[0].toUpperCase()}
+        {content.team_members.length > 0 ? (
+          <section className="py-12">
+            <h2 className="font-display text-3xl font-bold text-[#F4F7FF] text-center mb-8">
+              👥 Team
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {content.team_members.map((member) => (
+                <div key={member.name} className="bg-[#161F42] p-6 rounded-xl border border-[#111936] text-center">
+                  <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-br from-[#23D5AB] to-[#FF5D8F] flex items-center justify-center text-2xl font-bold text-[#0B1020]">
+                    {member.name[0].toUpperCase()}
+                  </div>
+                  <h3 className="font-display font-bold text-[#F4F7FF] mb-1">{member.name}</h3>
+                  <p className="text-[#23D5AB] text-sm mb-2">{member.role}</p>
+                  <p className="text-[#B8C3E6] text-sm">{member.description}</p>
                 </div>
-                <h3 className="font-display font-bold text-[#F4F7FF] mb-1">{member.name}</h3>
-                <p className="text-[#23D5AB] text-sm mb-2">{member.role}</p>
-                <p className="text-[#B8C3E6] text-sm">{member.description}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-        <section className="py-12">
-          <h2 className="font-display text-3xl font-bold text-[#F4F7FF] text-center mb-8">
-            ❓ FAQ
-          </h2>
-          <div className="max-w-2xl mx-auto space-y-4">
-            {content.faqs.map((faq) => (
-              <div key={faq.question} className="bg-[#161F42] p-6 rounded-xl border border-[#111936]">
-                <h3 className="font-display font-bold text-[#F4F7FF] mb-2">{faq.question}</h3>
-                <p className="text-[#B8C3E6]">{faq.answer}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+        {content.faqs.length > 0 ? (
+          <section className="py-12">
+            <h2 className="font-display text-3xl font-bold text-[#F4F7FF] text-center mb-8">
+              ❓ FAQ
+            </h2>
+            <div className="max-w-2xl mx-auto space-y-4">
+              {content.faqs.map((faq) => (
+                <div key={faq.question} className="bg-[#161F42] p-6 rounded-xl border border-[#111936]">
+                  <h3 className="font-display font-bold text-[#F4F7FF] mb-2">{faq.question}</h3>
+                  <p className="text-[#B8C3E6]">{faq.answer}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
 
-        <section className="py-12 text-center">
-          <h2 className="font-display text-3xl font-bold text-[#F4F7FF] mb-4">
-            📮 Contact Us
-          </h2>
-          <p className="text-[#B8C3E6] mb-6">
-            버그 신고, 기능 제안, 비즈니스 협업 등은 아래 이메일로 문의하세요
-          </p>
-          <a
-            href={`mailto:${content.contact_email}`}
-            className="text-[#23D5AB] text-lg hover:underline"
-          >
-            {content.contact_email}
-          </a>
-        </section>
+        {content.contact_email.trim().length > 0 ? (
+          <section className="py-12 text-center">
+            <h2 className="font-display text-3xl font-bold text-[#F4F7FF] mb-4">
+              📮 Contact Us
+            </h2>
+            <p className="text-[#B8C3E6] mb-6">
+              버그 신고, 기능 제안, 비즈니스 협업 등은 아래 이메일로 문의하세요
+            </p>
+            <a
+              href={`mailto:${content.contact_email}`}
+              className="text-[#23D5AB] text-lg hover:underline"
+            >
+              {content.contact_email}
+            </a>
+          </section>
+        ) : null}
       </main>
 
       <footer className="border-t border-[#111936] py-8">

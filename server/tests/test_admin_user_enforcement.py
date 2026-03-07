@@ -97,6 +97,101 @@ def test_require_super_admin_guard() -> None:
     assert exc.value.status_code == 403
 
 
+def test_require_admin_allows_super_admin() -> None:
+    context = asyncio.run(main.require_admin(_admin_context(role="super_admin")))
+    assert context["role"] == "super_admin"
+
+
+def test_admin_stats_requires_admin_role(client: TestClient) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: (_ for _ in ()).throw(
+        HTTPException(status_code=403, detail="관리자 권한이 필요합니다")
+    )
+
+    response = client.get("/api/admin/stats")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "관리자 권한이 필요합니다"
+
+
+def test_admin_stats_response_shape(client: TestClient, monkeypatch: Any) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "admin-1"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_admin_stats",
+        lambda: {
+            "total_users": 120,
+            "total_projects": 45,
+            "open_reports": 7,
+            "pending_user_approvals": 3,
+            "users_this_week": 8,
+            "users_last_week": 5,
+            "projects_this_week": 4,
+            "projects_last_week": 2,
+            "users_week_delta": 3,
+            "projects_week_delta": 2,
+            "weekly_trend": [
+                {
+                    "day": "2026-03-02",
+                    "new_users": 2,
+                    "new_projects": 1,
+                }
+            ],
+        },
+    )
+
+    response = client.get("/api/admin/stats")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total_users"] == 120
+    assert body["users_week_delta"] == 3
+    assert body["weekly_trend"][0]["day"] == "2026-03-02"
+
+
+def test_update_user_role_requires_super_admin(client: TestClient) -> None:
+    main.app.dependency_overrides[main.require_super_admin] = lambda: (
+        _ for _ in ()
+    ).throw(HTTPException(status_code=403, detail="슈퍼 관리자 권한이 필요합니다"))
+
+    response = client.patch(
+        "/api/admin/users/target-1/role",
+        json={"role": "admin"},
+    )
+
+    assert response.status_code == 403
+
+
+def test_update_user_role_flow(client: TestClient, monkeypatch: Any) -> None:
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-1",
+            "role": "user",
+            "email": "target@example.com",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "set_user_role",
+        lambda user_id, role: {"id": user_id, "role": role, "status": "active"},
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.patch(
+        "/api/admin/users/target-1/role",
+        json={"role": "admin"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "admin"
+
+
 def test_revoked_token_version_blocks_me_endpoint(
     client: TestClient, monkeypatch: Any
 ) -> None:
@@ -157,6 +252,155 @@ def test_login_blocks_suspended_user(client: TestClient, monkeypatch: Any) -> No
         response.json()["detail"]
         == "보안 정책으로 계정이 정지되었습니다. 관리자에게 문의해 주세요"
     )
+
+
+def test_unsuspend_admin_target_requires_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "admin-1", role="admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+
+    response = client.delete("/api/admin/users/target-admin/suspend")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "관리자 계정에는 적용할 수 없습니다"
+
+
+def test_unsuspend_admin_target_allowed_for_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "unsuspend_user",
+        lambda user_id: {
+            "id": user_id,
+            "status": "active",
+            "role": "admin",
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.delete("/api/admin/users/target-admin/suspend")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "active"
+    assert response.json()["role"] == "admin"
+
+
+def test_suspend_admin_target_requires_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "admin-1", role="admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+
+    response = client.post(
+        "/api/admin/users/target-admin/suspend",
+        json={"reason": "policy"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "관리자 계정에는 적용할 수 없습니다"
+
+
+def test_suspend_admin_target_allowed_for_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "suspend_user",
+        lambda **_: {
+            "id": "target-admin",
+            "status": "suspended",
+            "role": "admin",
+            "suspended_by": "super-1",
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/users/target-admin/suspend",
+        json={"reason": "policy"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "suspended"
+    assert response.json()["role"] == "admin"
+
+
+def test_delete_now_admin_target_allowed_for_super_admin(
+    client: TestClient, monkeypatch: Any
+) -> None:
+    main.app.dependency_overrides[main.require_super_admin] = lambda: _admin_context(
+        "super-1", role="super_admin"
+    )
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _user_id: {
+            "id": "target-admin",
+            "role": "admin",
+        },
+    )
+    monkeypatch.setattr(
+        main,
+        "delete_user_now",
+        lambda **_: {
+            "id": "target-admin",
+            "status": "deleted",
+            "role": "admin",
+            "deleted_by": "super-1",
+        },
+    )
+    monkeypatch.setattr(main, "write_admin_action_log", lambda **_: None)
+
+    response = client.post(
+        "/api/admin/users/target-admin/delete-now",
+        json={"reason": "incident"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "deleted"
+    assert response.json()["role"] == "admin"
 
 
 def test_due_deletion_cleanup_logs_deleted_users(monkeypatch: Any) -> None:

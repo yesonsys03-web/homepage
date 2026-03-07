@@ -12,7 +12,7 @@ import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
 import heroMobileImage from "../../../img/master_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface HomeScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -62,7 +62,7 @@ function ProjectCard({
       <StickerBadge type={project.isNew ? "new" : project.isHot ? "hot" : "new"} />
       <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center overflow-hidden">
         {project.thumbnail_url ? (
-          <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
+          <img src={project.thumbnail_url} alt={project.title} loading="lazy" decoding="async" className="w-full h-full object-cover" />
         ) : (
           <ProjectCoverPlaceholder
             seedKey={project.id}
@@ -174,6 +174,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <TopNav active="home" onNavigate={onNavigate} />
+      <main>
 
       <HeroBanner
         title={
@@ -277,6 +278,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
           <p>© 2026 VibeCoder Playground. Made with ❤️ byバイブコダー</p>
         </div>
       </footer>
+      </main>
     </div>
   )
 }

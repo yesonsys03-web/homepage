@@ -6,9 +6,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { TopNav } from "@/components/TopNav"
 import { ProjectMeta } from "@/components/ProjectMeta"
-import { api } from "@/lib/api"
+import { api, type ProfileComment as ApiProfileComment } from "@/lib/api"
+import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -25,15 +26,13 @@ interface Project {
   createdAt: string
 }
 
-const myComments = [
-  { id: "1", projectTitle: "AI Music Generator", content: "정말 amazing해요!", likes: 5, createdAt: "1시간 전" },
-  { id: "2", projectTitle: "React Dashboard", content: "디자인이很漂亮", likes: 3, createdAt: "3시간 전" },
-]
-
-const likedProjects = [
-  { id: "4", title: "Three.js Game", summary: "3D 브라우저 게임", thumbnail: "/placeholder.jpg", likes: 156, comments: 42, createdAt: "2026-02-18" },
-  { id: "5", title: "Chat App", summary: "실시간 채팅 앱", thumbnail: "/placeholder.jpg", likes: 92, comments: 28, createdAt: "2026-02-12" },
-]
+interface ProfileComment {
+  id: string
+  projectTitle: string
+  content: string
+  likes: number
+  createdAt: string
+}
 
 const PROFILE_NICKNAME_MIN_LEN = 2
 const PROFILE_NICKNAME_MAX_LEN = 24
@@ -51,6 +50,8 @@ function isValidHttpUrl(value: string): boolean {
 export function ProfileScreen({ onNavigate }: ScreenProps) {
   const { user, updateUser } = useAuth()
   const [myProjects, setMyProjects] = useState<Project[]>([])
+  const [myComments, setMyComments] = useState<ProfileComment[]>([])
+  const [likedProjects, setLikedProjects] = useState<Project[]>([])
   const [isEditingProfile, setIsEditingProfile] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
   const [avatarLoadError, setAvatarLoadError] = useState(false)
@@ -78,35 +79,57 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
   }, [user])
 
   useEffect(() => {
-    const fetchMyProjects = async () => {
+    const mapProject = (item: {
+      id: string
+      title: string
+      summary: string
+      thumbnail_url?: string
+      like_count: number
+      comment_count: number
+      created_at: string
+    }): Project => ({
+      id: item.id,
+      title: item.title,
+      summary: item.summary,
+      thumbnail: item.thumbnail_url || "/placeholder.jpg",
+      likes: item.like_count,
+      comments: item.comment_count,
+      createdAt: item.created_at,
+    })
+
+    const fetchProfileData = async () => {
       try {
-        const data = await api.getMyProjects()
-        const items = Array.isArray(data.items) ? data.items : []
-        const mapped: Project[] = items.map((item: {
-          id: string
-          title: string
-          summary: string
-          thumbnail_url?: string
-          like_count: number
-          comment_count: number
-          created_at: string
-        }) => ({
-          id: item.id,
-          title: item.title,
-          summary: item.summary,
-          thumbnail: item.thumbnail_url || "/placeholder.jpg",
-          likes: item.like_count,
-          comments: item.comment_count,
-          createdAt: item.created_at,
-        }))
-        setMyProjects(mapped)
+        const [projectsData, commentsData, likedProjectsData] = await Promise.all([
+          api.getMyProjects(),
+          api.getMyComments(100),
+          api.getMyLikedProjects(100),
+        ])
+
+        const projectItems = Array.isArray(projectsData.items) ? projectsData.items : []
+        setMyProjects(projectItems.map(mapProject))
+
+        const commentItems = Array.isArray(commentsData.items) ? commentsData.items : []
+        setMyComments(
+          commentItems.map((item: ApiProfileComment) => ({
+            id: item.id,
+            projectTitle: item.project_title,
+            content: item.content,
+            likes: item.like_count,
+            createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
+          })),
+        )
+
+        const likedItems = Array.isArray(likedProjectsData.items) ? likedProjectsData.items : []
+        setLikedProjects(likedItems.map(mapProject))
       } catch (error) {
-        console.error("Failed to fetch my projects:", error)
+        console.error("Failed to fetch profile data:", error)
         setMyProjects([])
+        setMyComments([])
+        setLikedProjects([])
       }
     }
 
-    fetchMyProjects()
+    void fetchProfileData()
   }, [])
 
   const handleSaveProfile = async () => {
@@ -170,6 +193,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
               <img
                 src={user.avatar_url}
                 alt={user.nickname}
+                loading="lazy"
+                decoding="async"
                 className="w-full h-full object-cover"
                 onError={() => setAvatarLoadError(true)}
               />
@@ -183,8 +208,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             {user?.bio ? <p className="text-[#B8C3E6] mb-3">{user.bio}</p> : null}
             <div className="flex gap-4 text-sm text-[#B8C3E6]">
               <span><strong className="text-[#F4F7FF]">{myProjects.length}</strong> 작품</span>
-              <span><strong className="text-[#F4F7FF]">12</strong> 댓글</span>
-              <span><strong className="text-[#F4F7FF]">{myProjects.reduce((acc, cur) => acc + cur.likes, 0)}</strong> 좋아요</span>
+              <span><strong className="text-[#F4F7FF]">{myComments.length}</strong> 댓글</span>
+              <span><strong className="text-[#F4F7FF]">{likedProjects.reduce((acc, cur) => acc + cur.likes, 0)}</strong> 좋아요</span>
             </div>
           </div>
           <Button
@@ -233,6 +258,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                         <img
                           src={trimmedAvatarUrl}
                           alt="avatar preview"
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                           onError={() => setDraftAvatarLoadError(true)}
                         />
@@ -310,7 +337,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             <TabsTrigger value="projects" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">작품</TabsTrigger>
             <TabsTrigger value="comments" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">댓글</TabsTrigger>
             <TabsTrigger value="liked" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">좋아요</TabsTrigger>
-            {user?.role === "admin" && (
+            {isAdminRole(user?.role) && (
               <TabsTrigger value="admin" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-[#0B1020]">⚠️ 관리자</TabsTrigger>
             )}
           </TabsList>
@@ -321,6 +348,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                 <ProjectCard key={project.id} project={project} index={index} />
               ))}
             </div>
+            {myProjects.length === 0 ? <p className="text-[#B8C3E6] text-sm">등록한 작품이 없습니다.</p> : null}
           </TabsContent>
 
           <TabsContent value="comments">
@@ -338,6 +366,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                 </Card>
               ))}
             </div>
+            {myComments.length === 0 ? <p className="text-[#B8C3E6] text-sm">작성한 댓글이 없습니다.</p> : null}
           </TabsContent>
 
           <TabsContent value="liked">
@@ -346,9 +375,10 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                 <ProjectCard key={project.id} project={project} index={index} />
               ))}
             </div>
+            {likedProjects.length === 0 ? <p className="text-[#B8C3E6] text-sm">좋아요한 작품이 없습니다.</p> : null}
           </TabsContent>
 
-          {user?.role === "admin" && (
+          {isAdminRole(user?.role) && (
             <TabsContent value="admin">
               <AdminPanel />
             </TabsContent>

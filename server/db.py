@@ -2,12 +2,81 @@
 
 import os
 import hashlib
+import re
+from collections import defaultdict
+from datetime import datetime
 from psycopg2.extras import Json, RealDictCursor
 from psycopg2.pool import SimpleConnectionPool
 from contextlib import contextmanager
-from typing import Mapping, Optional
+from typing import Mapping, Optional, cast
 from dotenv import load_dotenv
 from threading import Lock
+
+CURATED_REASON_UNKNOWN = "unknown"
+CURATED_REASON_TAG_OVERLAP = "tag_overlap"
+CURATED_REASON_RECENT_UPDATE = "recent_update"
+CURATED_REASON_HIGH_QUALITY = "high_quality"
+CURATED_REASON_LANGUAGE_MATCH = "language_match"
+CURATED_REASON_KOREAN_DEV_MATCH = "korean_dev_match"
+CURATED_REASON_CATEGORY_MATCH = "category_match"
+CURATED_REASON_CONTEXTUAL_MATCH = "contextual_match"
+
+CURATED_REASON_LABELS: dict[str, str] = {
+    CURATED_REASON_UNKNOWN: "기타",
+    CURATED_REASON_TAG_OVERLAP: "태그 일치",
+    CURATED_REASON_RECENT_UPDATE: "최근 업데이트",
+    CURATED_REASON_HIGH_QUALITY: "품질 점수 높음",
+    CURATED_REASON_LANGUAGE_MATCH: "언어 일치",
+    CURATED_REASON_KOREAN_DEV_MATCH: "KR Dev 일치",
+    CURATED_REASON_CATEGORY_MATCH: "유사 카테고리",
+    CURATED_REASON_CONTEXTUAL_MATCH: "추천 맥락 일치",
+}
+CURATED_REASON_TAG_PATTERN = re.compile(r"^태그\s+\d+개\s+일치$")
+
+
+def normalize_curated_reason_code(value: object | None) -> str:
+    if not isinstance(value, str):
+        return CURATED_REASON_UNKNOWN
+
+    candidate = value.strip()
+    if not candidate:
+        return CURATED_REASON_UNKNOWN
+    if candidate in CURATED_REASON_LABELS:
+        return candidate
+    if (
+        CURATED_REASON_TAG_PATTERN.match(candidate)
+        or candidate == CURATED_REASON_LABELS[CURATED_REASON_TAG_OVERLAP]
+    ):
+        return CURATED_REASON_TAG_OVERLAP
+    if candidate.endswith("언어 일치"):
+        return CURATED_REASON_LANGUAGE_MATCH
+
+    exact_matches = {
+        CURATED_REASON_LABELS[
+            CURATED_REASON_RECENT_UPDATE
+        ]: CURATED_REASON_RECENT_UPDATE,
+        CURATED_REASON_LABELS[CURATED_REASON_HIGH_QUALITY]: CURATED_REASON_HIGH_QUALITY,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_KOREAN_DEV_MATCH
+        ]: CURATED_REASON_KOREAN_DEV_MATCH,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_CATEGORY_MATCH
+        ]: CURATED_REASON_CATEGORY_MATCH,
+        CURATED_REASON_LABELS[
+            CURATED_REASON_CONTEXTUAL_MATCH
+        ]: CURATED_REASON_CONTEXTUAL_MATCH,
+        "관련 추천 클릭": CURATED_REASON_CONTEXTUAL_MATCH,
+        "unknown": CURATED_REASON_UNKNOWN,
+    }
+    return exact_matches.get(candidate, CURATED_REASON_UNKNOWN)
+
+
+def get_curated_reason_label(code: object | None) -> str:
+    normalized = normalize_curated_reason_code(code)
+    return CURATED_REASON_LABELS.get(
+        normalized, CURATED_REASON_LABELS[CURATED_REASON_UNKNOWN]
+    )
+
 
 # .env 파일 로드
 _ = load_dotenv(".env")
@@ -21,6 +90,21 @@ _db_pool_lock = Lock()
 
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set. Please check server/.env file")
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
 
 
 @contextmanager
@@ -108,6 +192,15 @@ def init_db():
                 )
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS project_likes (
+                    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+                    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (project_id, user_id)
+                )
+            """)
+
             # Reports 테이블
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS reports (
@@ -131,6 +224,7 @@ def init_db():
                     target_type VARCHAR(20) NOT NULL,
                     target_id UUID NOT NULL,
                     reason TEXT,
+                    metadata JSONB DEFAULT '{}'::jsonb,
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -144,6 +238,13 @@ def init_db():
                     admin_log_retention_days INTEGER DEFAULT 365,
                     admin_log_view_window_days INTEGER DEFAULT 30,
                     admin_log_mask_reasons BOOLEAN DEFAULT TRUE,
+                    page_editor_enabled BOOLEAN DEFAULT TRUE,
+                    page_editor_rollout_stage VARCHAR(20) DEFAULT 'qa',
+                    page_editor_pilot_admin_ids TEXT[] DEFAULT '{}',
+                    page_editor_publish_fail_rate_threshold DOUBLE PRECISION DEFAULT 0.2,
+                    page_editor_rollback_ratio_threshold DOUBLE PRECISION DEFAULT 0.3,
+                    page_editor_conflict_rate_threshold DOUBLE PRECISION DEFAULT 0.25,
+                    curated_review_quality_threshold INTEGER DEFAULT 45,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -152,6 +253,27 @@ def init_db():
                     content_key VARCHAR(100) PRIMARY KEY,
                     content_json JSONB NOT NULL,
                     updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS page_documents_current (
+                    page_id VARCHAR(100) PRIMARY KEY,
+                    draft_version INTEGER NOT NULL DEFAULT 0,
+                    published_version INTEGER NOT NULL DEFAULT 0,
+                    updated_by UUID REFERENCES users(id),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS page_document_versions (
+                    page_id VARCHAR(100) NOT NULL,
+                    version INTEGER NOT NULL,
+                    status VARCHAR(20) NOT NULL,
+                    document_json JSONB NOT NULL,
+                    reason TEXT,
+                    created_by UUID REFERENCES users(id),
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    PRIMARY KEY (page_id, version)
                 )
             """)
             cur.execute("""
@@ -171,6 +293,82 @@ def init_db():
                     created_at TIMESTAMP DEFAULT NOW()
                 )
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS curated_content (
+                    id SERIAL PRIMARY KEY,
+                    source_type TEXT NOT NULL DEFAULT 'github',
+                    source_url TEXT UNIQUE NOT NULL,
+                    canonical_url TEXT UNIQUE NOT NULL,
+                    repo_name TEXT,
+                    repo_owner TEXT,
+                    title TEXT NOT NULL,
+                    category TEXT,
+                    language TEXT,
+                    is_korean_dev BOOLEAN DEFAULT FALSE,
+                    stars INTEGER DEFAULT 0,
+                    license TEXT,
+                    relevance_score INTEGER,
+                    beginner_value INTEGER,
+                    quality_score INTEGER,
+                    summary_beginner TEXT,
+                    summary_mid TEXT,
+                    summary_expert TEXT,
+                    tags TEXT[] DEFAULT '{}',
+                    status TEXT DEFAULT 'pending',
+                    reject_reason TEXT,
+                    review_metadata JSONB DEFAULT '{}'::jsonb,
+                    approved_at TIMESTAMP,
+                    approved_by UUID REFERENCES users(id),
+                    github_pushed_at TIMESTAMP,
+                    collected_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS error_solutions (
+                    id SERIAL PRIMARY KEY,
+                    error_hash TEXT UNIQUE NOT NULL,
+                    error_type TEXT NOT NULL,
+                    error_excerpt TEXT,
+                    solution JSONB NOT NULL,
+                    solved_count INTEGER DEFAULT 0,
+                    failed_count INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS glossary_term_requests (
+                    id SERIAL PRIMARY KEY,
+                    requested_term TEXT NOT NULL,
+                    context_note TEXT,
+                    requester_id UUID REFERENCES users(id),
+                    requester_ip TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS text_translations (
+                    id SERIAL PRIMARY KEY,
+                    input_hash TEXT UNIQUE NOT NULL,
+                    input_excerpt TEXT,
+                    translation JSONB NOT NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS curated_related_clicks (
+                    id SERIAL PRIMARY KEY,
+                    source_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
+                    target_content_id INTEGER REFERENCES curated_content(id) ON DELETE CASCADE,
+                    reason TEXT,
+                    reason_code TEXT,
+                    clicked_at TIMESTAMP DEFAULT NOW(),
+                    client_ip TEXT
+                )
+            """)
 
             # 기본 사용자 생성 (테스트용)
             cur.execute(
@@ -179,6 +377,16 @@ def init_db():
                 VALUES ('11111111-1111-1111-1111-111111111111', 'devkim', 'admin')
                 ON CONFLICT DO NOTHING
                 """
+            )
+            cur.execute(
+                """
+                UPDATE users
+                SET role = 'super_admin',
+                    status = 'active',
+                    updated_at = NOW()
+                WHERE lower(email) = lower(%s)
+                """,
+                ("topyeson@gmail.com",),
             )
             # 컬럼 추가 (password - 해시된 비밀번호)
             cur.execute("""
@@ -271,6 +479,48 @@ def init_db():
             )
             cur.execute(
                 """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_enabled BOOLEAN DEFAULT TRUE
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_rollout_stage VARCHAR(20) DEFAULT 'qa'
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_pilot_admin_ids TEXT[] DEFAULT '{}'
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_publish_fail_rate_threshold DOUBLE PRECISION DEFAULT 0.2
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_rollback_ratio_threshold DOUBLE PRECISION DEFAULT 0.3
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS page_editor_conflict_rate_threshold DOUBLE PRECISION DEFAULT 0.25
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS curated_review_quality_threshold INTEGER DEFAULT 45
+                """
+            )
+            cur.execute(
+                """
                 INSERT INTO oauth_runtime_settings (id, google_oauth_enabled)
                 VALUES (1, FALSE)
                 ON CONFLICT (id) DO NOTHING
@@ -286,6 +536,25 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_projects_status_created_at
                 ON projects (status, created_at DESC)
             """)
+
+            cur.execute(
+                """
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS review_metadata JSONB DEFAULT '{}'::jsonb
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS license_explanation TEXT
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS thumbnail_url TEXT
+                """
+            )
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_projects_status_like_count
                 ON projects (status, like_count DESC)
@@ -297,6 +566,10 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_projects_tags_gin
                 ON projects USING GIN (tags)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_project_likes_user_id_created_at
+                ON project_likes (user_id, created_at DESC)
             """)
             cur.execute("""
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_provider_provider_user_id
@@ -312,6 +585,9 @@ def init_db():
                 ON oauth_state_tokens (consumed_at)
             """)
             cur.execute("""
+                ALTER TABLE admin_action_logs ADD COLUMN IF NOT EXISTS metadata JSONB DEFAULT '{}'::jsonb
+            """)
+            cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_admin_action_logs_created_at
                 ON admin_action_logs (created_at DESC)
             """)
@@ -323,6 +599,67 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_admin_action_logs_action_type
                 ON admin_action_logs (action_type)
             """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_page_document_versions_page_created_at
+                ON page_document_versions (page_id, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_status
+                ON curated_content (status)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_category
+                ON curated_content (category)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_score
+                ON curated_content (quality_score DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_approved
+                ON curated_content (approved_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_error_solutions_hash
+                ON error_solutions (error_hash)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_text_translations_hash
+                ON text_translations (input_hash)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_glossary_term_requests_status
+                ON glossary_term_requests (status, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_source_target
+                ON curated_related_clicks (source_content_id, target_content_id)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_clicked_at
+                ON curated_related_clicks (clicked_at DESC)
+            """)
+            cur.execute("""
+                ALTER TABLE curated_related_clicks
+                ADD COLUMN IF NOT EXISTS reason_code TEXT
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_related_clicks_reason_code
+                ON curated_related_clicks (reason_code)
+            """)
+            cur.execute(
+                """
+                SELECT id, reason
+                FROM curated_related_clicks
+                WHERE reason_code IS NULL OR BTRIM(reason_code) = ''
+                """
+            )
+            missing_reason_code_rows = cur.fetchall()
+            for row in missing_reason_code_rows:
+                cur.execute(
+                    "UPDATE curated_related_clicks SET reason_code = %s WHERE id = %s",
+                    (normalize_curated_reason_code(row[1]), row[0]),
+                )
 
             conn.commit()
             print("✅ Database tables initialized successfully!")
@@ -336,6 +673,69 @@ def ensure_site_contents_table(cur):
             content_json JSONB NOT NULL,
             updated_at TIMESTAMP DEFAULT NOW()
         )
+        """
+    )
+
+
+def ensure_page_documents_tables(cur):
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS page_documents_current (
+            page_id VARCHAR(100) PRIMARY KEY,
+            draft_version INTEGER NOT NULL DEFAULT 0,
+            published_version INTEGER NOT NULL DEFAULT 0,
+            updated_by UUID REFERENCES users(id),
+            updated_at TIMESTAMP DEFAULT NOW()
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS page_document_versions (
+            page_id VARCHAR(100) NOT NULL,
+            version INTEGER NOT NULL,
+            status VARCHAR(20) NOT NULL,
+            document_json JSONB NOT NULL,
+            reason TEXT,
+            created_by UUID REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT NOW(),
+            PRIMARY KEY (page_id, version)
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS page_publish_schedules (
+            schedule_id VARCHAR(64) PRIMARY KEY,
+            page_id VARCHAR(100) NOT NULL,
+            draft_version INTEGER NOT NULL,
+            publish_at TIMESTAMP NOT NULL,
+            timezone VARCHAR(64) NOT NULL DEFAULT 'Asia/Seoul',
+            status VARCHAR(20) NOT NULL DEFAULT 'scheduled',
+            reason TEXT,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 3,
+            last_error TEXT,
+            next_retry_at TIMESTAMP,
+            created_by UUID REFERENCES users(id),
+            created_at TIMESTAMP DEFAULT NOW(),
+            updated_at TIMESTAMP DEFAULT NOW(),
+            cancelled_at TIMESTAMP,
+            published_version INTEGER,
+            published_at TIMESTAMP
+        )
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_page_publish_schedules_page_status
+        ON page_publish_schedules (page_id, status, publish_at)
+        """
+    )
+    cur.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_page_publish_schedules_due
+        ON page_publish_schedules (status, next_retry_at, publish_at)
         """
     )
 
@@ -542,38 +942,116 @@ def create_project(data: dict[str, object]):
             return cur.fetchone()
 
 
-def like_project(project_id: str):
+def like_project(project_id: str, user_id: str):
     """프로젝트 좋아요 증가"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                UPDATE projects SET like_count = like_count + 1
-                WHERE id = %s
-                RETURNING like_count
-            """,
-                (project_id,),
+                INSERT INTO project_likes (project_id, user_id)
+                VALUES (%s, %s)
+                ON CONFLICT (project_id, user_id) DO NOTHING
+                RETURNING project_id
+                """,
+                (project_id, user_id),
             )
+
+            inserted = cur.fetchone()
+            if inserted:
+                cur.execute(
+                    """
+                    UPDATE projects SET like_count = like_count + 1
+                    WHERE id = %s
+                    RETURNING like_count
+                    """,
+                    (project_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT like_count
+                    FROM projects
+                    WHERE id = %s
+                    """,
+                    (project_id,),
+                )
+
             conn.commit()
             result = cur.fetchone()
             return result["like_count"] if result else 0
 
 
-def unlike_project(project_id: str):
+def unlike_project(project_id: str, user_id: str):
     """프로젝트 좋아요 취소"""
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                UPDATE projects SET like_count = GREATEST(0, like_count - 1)
-                WHERE id = %s
-                RETURNING like_count
-            """,
-                (project_id,),
+                DELETE FROM project_likes
+                WHERE project_id = %s AND user_id = %s
+                RETURNING project_id
+                """,
+                (project_id, user_id),
             )
+
+            deleted = cur.fetchone()
+            if deleted:
+                cur.execute(
+                    """
+                    UPDATE projects SET like_count = GREATEST(0, like_count - 1)
+                    WHERE id = %s
+                    RETURNING like_count
+                    """,
+                    (project_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    SELECT like_count
+                    FROM projects
+                    WHERE id = %s
+                    """,
+                    (project_id,),
+                )
+
             conn.commit()
             result = cur.fetchone()
             return result["like_count"] if result else 0
+
+
+def get_user_comments(user_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT c.*, p.title as project_title
+                FROM comments c
+                JOIN projects p ON p.id = c.project_id
+                WHERE c.author_id = %s
+                ORDER BY c.created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            return cur.fetchall()
+
+
+def get_user_liked_projects(user_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT p.*, u.nickname as author_nickname, pl.created_at as liked_at
+                FROM project_likes pl
+                JOIN projects p ON p.id = pl.project_id
+                JOIN users u ON u.id = p.author_id
+                WHERE pl.user_id = %s
+                ORDER BY pl.created_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+            return cur.fetchall()
 
 
 def get_comments(project_id: str, sort: str = "latest"):
@@ -678,6 +1156,709 @@ def get_reports_count(status: Optional[str] = None):
             return int(result["count"]) if result else 0
 
 
+def list_curated_content(
+    status: str = "approved",
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    is_korean_dev: Optional[bool] = None,
+    sort: str = "latest",
+    limit: int = 20,
+    offset: int = 0,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                SELECT *
+                FROM curated_content
+                WHERE status = %s
+            """
+            params: list[object] = [status]
+
+            if category and category != "all":
+                query += " AND category = %s"
+                params.append(category)
+
+            if is_korean_dev is not None:
+                query += " AND is_korean_dev = %s"
+                params.append(is_korean_dev)
+
+            if search:
+                query += (
+                    " AND (title ILIKE %s OR COALESCE(summary_beginner, '') ILIKE %s)"
+                )
+                params.extend([f"%{search}%", f"%{search}%"])
+
+            if sort == "quality":
+                query += " ORDER BY quality_score DESC NULLS LAST, approved_at DESC NULLS LAST"
+            else:
+                query += " ORDER BY approved_at DESC NULLS LAST, collected_at DESC"
+
+            safe_limit = max(1, min(limit, 100))
+            safe_offset = max(0, offset)
+            query += " LIMIT %s OFFSET %s"
+            params.extend([safe_limit, safe_offset])
+
+            cur.execute(query, params)
+            return cur.fetchall()
+
+
+def get_curated_content_count(
+    status: str = "approved",
+    category: Optional[str] = None,
+    search: Optional[str] = None,
+    is_korean_dev: Optional[bool] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = "SELECT COUNT(*) AS count FROM curated_content WHERE status = %s"
+            params: list[object] = [status]
+
+            if category and category != "all":
+                query += " AND category = %s"
+                params.append(category)
+
+            if is_korean_dev is not None:
+                query += " AND is_korean_dev = %s"
+                params.append(is_korean_dev)
+
+            if search:
+                query += (
+                    " AND (title ILIKE %s OR COALESCE(summary_beginner, '') ILIKE %s)"
+                )
+                params.extend([f"%{search}%", f"%{search}%"])
+
+            cur.execute(query, params)
+            result = cur.fetchone()
+            return int(result["count"]) if result else 0
+
+
+def get_curated_content_by_id(content_id: int):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT * FROM curated_content WHERE id = %s", (content_id,))
+            return cur.fetchone()
+
+
+def list_admin_curated_content(
+    status: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = "SELECT * FROM curated_content"
+            params: list[object] = []
+
+            if status and status != "all":
+                query += " WHERE status = %s"
+                params.append(status)
+
+            query += " ORDER BY collected_at DESC LIMIT %s OFFSET %s"
+            params.extend([max(1, min(limit, 200)), max(0, offset)])
+            cur.execute(query, params)
+            return cur.fetchall()
+
+
+def get_admin_curated_content_count(status: Optional[str] = None):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            if status and status != "all":
+                cur.execute(
+                    "SELECT COUNT(*) AS count FROM curated_content WHERE status = %s",
+                    (status,),
+                )
+            else:
+                cur.execute("SELECT COUNT(*) AS count FROM curated_content")
+            result = cur.fetchone()
+            return int(result["count"]) if result else 0
+
+
+def create_or_update_curated_content(payload: Mapping[str, object]):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO curated_content (
+                    source_type,
+                    source_url,
+                    canonical_url,
+                    repo_name,
+                    repo_owner,
+                    title,
+                    category,
+                    language,
+                    is_korean_dev,
+                    stars,
+                    license,
+                    license_explanation,
+                    relevance_score,
+                    beginner_value,
+                    quality_score,
+                    summary_beginner,
+                    summary_mid,
+                    summary_expert,
+                    tags,
+                    status,
+                    reject_reason,
+                    review_metadata,
+                    github_pushed_at
+                )
+                VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                )
+                ON CONFLICT (canonical_url)
+                DO UPDATE SET
+                    source_type = EXCLUDED.source_type,
+                    source_url = EXCLUDED.source_url,
+                    repo_name = EXCLUDED.repo_name,
+                    repo_owner = EXCLUDED.repo_owner,
+                    title = EXCLUDED.title,
+                    category = EXCLUDED.category,
+                    language = EXCLUDED.language,
+                    is_korean_dev = EXCLUDED.is_korean_dev,
+                    stars = EXCLUDED.stars,
+                    license = EXCLUDED.license,
+                    license_explanation = EXCLUDED.license_explanation,
+                    relevance_score = EXCLUDED.relevance_score,
+                    beginner_value = EXCLUDED.beginner_value,
+                    quality_score = EXCLUDED.quality_score,
+                    summary_beginner = EXCLUDED.summary_beginner,
+                    summary_mid = EXCLUDED.summary_mid,
+                    summary_expert = EXCLUDED.summary_expert,
+                    tags = EXCLUDED.tags,
+                    status = EXCLUDED.status,
+                    reject_reason = EXCLUDED.reject_reason,
+                    review_metadata = EXCLUDED.review_metadata,
+                    github_pushed_at = EXCLUDED.github_pushed_at,
+                    updated_at = NOW()
+                RETURNING *, (xmax = 0) AS inserted
+                """,
+                (
+                    payload.get("source_type", "github"),
+                    payload.get("source_url"),
+                    payload.get("canonical_url"),
+                    payload.get("repo_name"),
+                    payload.get("repo_owner"),
+                    payload.get("title"),
+                    payload.get("category"),
+                    payload.get("language"),
+                    bool(payload.get("is_korean_dev", False)),
+                    _safe_int(payload.get("stars"), 0),
+                    payload.get("license"),
+                    payload.get("license_explanation"),
+                    payload.get("relevance_score"),
+                    payload.get("beginner_value"),
+                    payload.get("quality_score"),
+                    payload.get("summary_beginner"),
+                    payload.get("summary_mid"),
+                    payload.get("summary_expert"),
+                    payload.get("tags", []),
+                    payload.get("status", "pending"),
+                    payload.get("reject_reason"),
+                    Json(payload.get("review_metadata", {})),
+                    payload.get("github_pushed_at"),
+                ),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def update_curated_content_admin(content_id: int, updates: Mapping[str, object]):
+    allowed_fields = [
+        "title",
+        "category",
+        "summary_beginner",
+        "summary_mid",
+        "summary_expert",
+        "tags",
+        "status",
+        "reject_reason",
+        "review_metadata",
+        "quality_score",
+        "relevance_score",
+        "beginner_value",
+        "license",
+        "thumbnail_url",
+    ]
+    fields_to_update: list[str] = []
+    params: list[object] = []
+
+    for field in allowed_fields:
+        if field in updates:
+            fields_to_update.append(f"{field} = %s")
+            params.append(updates[field])
+
+    if updates.get("status") == "approved":
+        fields_to_update.append("approved_at = NOW()")
+        if "approved_by" in updates:
+            fields_to_update.append("approved_by = %s")
+            params.append(updates["approved_by"])
+
+    if not fields_to_update:
+        return None
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+                UPDATE curated_content
+                SET {", ".join(fields_to_update)}, updated_at = NOW()
+                WHERE id = %s
+                RETURNING *
+            """
+            params.append(content_id)
+            cur.execute(query, params)
+            conn.commit()
+            return cur.fetchone()
+
+
+def delete_curated_content(content_id: int):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "DELETE FROM curated_content WHERE id = %s RETURNING id",
+                (content_id,),
+            )
+            deleted = cur.fetchone()
+            conn.commit()
+            return deleted
+
+
+def get_error_solution(error_hash: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM error_solutions WHERE error_hash = %s",
+                (error_hash,),
+            )
+            return cur.fetchone()
+
+
+def upsert_error_solution(
+    error_hash: str,
+    error_type: str,
+    error_excerpt: str,
+    solution: Mapping[str, object],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO error_solutions (error_hash, error_type, error_excerpt, solution)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (error_hash)
+                DO UPDATE SET
+                    error_type = EXCLUDED.error_type,
+                    error_excerpt = EXCLUDED.error_excerpt,
+                    solution = EXCLUDED.solution,
+                    updated_at = NOW()
+                RETURNING *
+                """,
+                (error_hash, error_type, error_excerpt, Json(solution)),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def increment_error_solution_feedback(error_hash: str, solved: bool):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            field = "solved_count" if solved else "failed_count"
+            cur.execute(
+                f"""
+                UPDATE error_solutions
+                SET {field} = {field} + 1, updated_at = NOW()
+                WHERE error_hash = %s
+                RETURNING *
+                """,
+                (error_hash,),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_text_translation(input_hash: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT * FROM text_translations WHERE input_hash = %s",
+                (input_hash,),
+            )
+            return cur.fetchone()
+
+
+def upsert_text_translation(
+    input_hash: str,
+    input_excerpt: str,
+    translation: Mapping[str, object],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO text_translations (input_hash, input_excerpt, translation)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (input_hash)
+                DO UPDATE SET
+                    input_excerpt = EXCLUDED.input_excerpt,
+                    translation = EXCLUDED.translation,
+                    updated_at = NOW()
+                RETURNING *
+                """,
+                (input_hash, input_excerpt, Json(translation)),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def create_glossary_term_request(
+    requested_term: str,
+    context_note: Optional[str],
+    requester_ip: str,
+    requester_id: Optional[str] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO glossary_term_requests (
+                    requested_term,
+                    context_note,
+                    requester_id,
+                    requester_ip
+                )
+                VALUES (%s, %s, %s, %s)
+                RETURNING *
+                """,
+                (requested_term, context_note, requester_id, requester_ip),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def create_curated_related_click(
+    source_content_id: int,
+    target_content_id: int,
+    reason_code: Optional[str],
+    reason: Optional[str],
+    client_ip: Optional[str],
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                INSERT INTO curated_related_clicks (
+                    source_content_id,
+                    target_content_id,
+                    reason_code,
+                    reason,
+                    client_ip
+                )
+                VALUES (%s, %s, %s, %s, %s)
+                RETURNING *
+                """,
+                (source_content_id, target_content_id, reason_code, reason, client_ip),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def get_curated_related_click_summary(
+    days: int = 30,
+    limit: int = 5,
+    source_content_id: Optional[int] = None,
+):
+    safe_days = max(1, min(days, 365))
+    safe_limit = max(1, min(limit, 20))
+    safe_source_content_id = (
+        source_content_id if source_content_id and source_content_id > 0 else None
+    )
+    params: list[object] = [safe_days]
+    summary_where = "WHERE clicked_at >= NOW() - (%s * INTERVAL '1 day')"
+    detail_where = "WHERE c.clicked_at >= NOW() - (%s * INTERVAL '1 day')"
+    if safe_source_content_id is not None:
+        summary_where += " AND source_content_id = %s"
+        detail_where += " AND c.source_content_id = %s"
+        params.append(safe_source_content_id)
+
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*)::int AS total_clicks,
+                    COUNT(DISTINCT (source_content_id, target_content_id))::int AS unique_pairs
+                FROM curated_related_clicks
+                {summary_where}
+                """,
+                params,
+            )
+            summary = cur.fetchone() or {}
+
+            cur.execute(
+                f"""
+                SELECT
+                    c.source_content_id,
+                    source.title AS source_title,
+                    c.target_content_id,
+                    target.title AS target_title,
+                    COALESCE(NULLIF(BTRIM(c.reason_code), ''), NULLIF(BTRIM(c.reason), ''), 'unknown') AS normalized_reason,
+                    c.clicked_at
+                FROM curated_related_clicks c
+                JOIN curated_content source ON source.id = c.source_content_id
+                JOIN curated_content target ON target.id = c.target_content_id
+                {detail_where}
+                ORDER BY c.clicked_at DESC
+                """,
+                params,
+            )
+            raw_rows = cur.fetchall() or []
+
+    pair_totals: dict[tuple[int, int], dict[str, object]] = {}
+    pair_reasons: dict[tuple[int, int], dict[str, int]] = defaultdict(dict)
+    reason_totals: dict[str, int] = defaultdict(int)
+
+    for row in raw_rows:
+        source_content_id = _safe_int(row.get("source_content_id"), 0)
+        target_content_id = _safe_int(row.get("target_content_id"), 0)
+        pair_key = (source_content_id, target_content_id)
+        reason_code = normalize_curated_reason_code(row.get("normalized_reason"))
+        clicked_at_value = row.get("clicked_at")
+        clicked_at = (
+            clicked_at_value if isinstance(clicked_at_value, datetime) else None
+        )
+        existing = pair_totals.get(pair_key)
+        if existing is None:
+            pair_totals[pair_key] = {
+                "source_content_id": source_content_id,
+                "source_title": str(row.get("source_title") or ""),
+                "target_content_id": target_content_id,
+                "target_title": str(row.get("target_title") or ""),
+                "click_count": 0,
+                "last_clicked_at": clicked_at,
+            }
+            existing = pair_totals[pair_key]
+
+        existing_click_count = _safe_int(existing.get("click_count"), 0)
+        existing["click_count"] = existing_click_count + 1
+        existing_last_clicked_at_value = existing.get("last_clicked_at")
+        existing_last_clicked_at = (
+            existing_last_clicked_at_value
+            if isinstance(existing_last_clicked_at_value, datetime)
+            else None
+        )
+        if clicked_at is not None and (
+            existing_last_clicked_at is None or clicked_at > existing_last_clicked_at
+        ):
+            existing["last_clicked_at"] = clicked_at
+
+        pair_reason_counts = pair_reasons[pair_key]
+        pair_reason_counts[reason_code] = pair_reason_counts.get(reason_code, 0) + 1
+        reason_totals[reason_code] += 1
+
+    sorted_pairs = sorted(
+        pair_totals.values(),
+        key=lambda row: (
+            _safe_int(row.get("click_count"), 0),
+            (
+                cast(datetime, row.get("last_clicked_at")).timestamp()
+                if isinstance(row.get("last_clicked_at"), datetime)
+                else 0.0
+            ),
+            _safe_int(row.get("source_content_id"), 0),
+            _safe_int(row.get("target_content_id"), 0),
+        ),
+        reverse=True,
+    )[:safe_limit]
+
+    top_pairs = []
+    for row in sorted_pairs:
+        pair_key = (
+            _safe_int(row.get("source_content_id"), 0),
+            _safe_int(row.get("target_content_id"), 0),
+        )
+        reason_counts = pair_reasons.get(pair_key, {})
+        top_reason_code = (
+            sorted(
+                reason_counts.items(),
+                key=lambda item: (item[1], item[0]),
+                reverse=True,
+            )[0][0]
+            if reason_counts
+            else "unknown"
+        )
+        top_reason_count = reason_counts.get(top_reason_code, 0)
+        last_clicked_at_value = row.get("last_clicked_at")
+        last_clicked_at = (
+            last_clicked_at_value
+            if isinstance(last_clicked_at_value, datetime)
+            else None
+        )
+        top_pairs.append(
+            {
+                "source_content_id": _safe_int(row.get("source_content_id"), 0),
+                "source_title": str(row.get("source_title") or ""),
+                "target_content_id": _safe_int(row.get("target_content_id"), 0),
+                "target_title": str(row.get("target_title") or ""),
+                "click_count": _safe_int(row.get("click_count"), 0),
+                "last_clicked_at": last_clicked_at.isoformat()
+                if last_clicked_at is not None
+                else "",
+                "top_reason_code": top_reason_code,
+                "top_reason_label": get_curated_reason_label(top_reason_code),
+                "top_reason_count": top_reason_count,
+            }
+        )
+
+    top_reasons = [
+        {
+            "reason_code": reason_code,
+            "reason_label": get_curated_reason_label(reason_code),
+            "click_count": click_count,
+        }
+        for reason_code, click_count in sorted(
+            reason_totals.items(),
+            key=lambda item: (item[1], item[0]),
+            reverse=True,
+        )[:safe_limit]
+    ]
+
+    return {
+        "window_days": safe_days,
+        "source_content_id": safe_source_content_id,
+        "total_clicks": int(summary.get("total_clicks") or 0),
+        "unique_pairs": int(summary.get("unique_pairs") or 0),
+        "top_pairs": top_pairs,
+        "top_reasons": top_reasons,
+        "available_sources": [
+            {
+                "content_id": content_id,
+                "title": title,
+            }
+            for content_id, title in sorted(
+                {
+                    (
+                        _safe_int(row.get("source_content_id"), 0),
+                        str(row.get("source_title") or ""),
+                    )
+                    for row in raw_rows
+                    if _safe_int(row.get("source_content_id"), 0) > 0
+                },
+                key=lambda item: (item[1].lower(), item[0]),
+            )
+        ],
+    }
+
+
+def get_admin_stats():
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT
+                        date_trunc('week', NOW()) AS this_week_start,
+                        date_trunc('week', NOW()) - INTERVAL '7 day' AS last_week_start
+                )
+                SELECT
+                    (SELECT COUNT(*)::int FROM users) AS total_users,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM users
+                        WHERE created_at >= (SELECT this_week_start FROM bounds)
+                    ) AS users_this_week,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM users
+                        WHERE created_at >= (SELECT last_week_start FROM bounds)
+                          AND created_at < (SELECT this_week_start FROM bounds)
+                    ) AS users_last_week,
+                    (SELECT COUNT(*)::int FROM projects) AS total_projects,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM projects
+                        WHERE created_at >= (SELECT this_week_start FROM bounds)
+                    ) AS projects_this_week,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM projects
+                        WHERE created_at >= (SELECT last_week_start FROM bounds)
+                          AND created_at < (SELECT this_week_start FROM bounds)
+                    ) AS projects_last_week,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM reports
+                        WHERE status = 'open'
+                    ) AS open_reports,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM users
+                        WHERE status = 'pending'
+                    ) AS pending_user_approvals
+                """
+            )
+            summary = cur.fetchone() or {}
+
+            cur.execute(
+                """
+                WITH week_days AS (
+                    SELECT generate_series(
+                        date_trunc('week', NOW()),
+                        date_trunc('week', NOW()) + INTERVAL '6 day',
+                        INTERVAL '1 day'
+                    )::date AS day
+                )
+                SELECT
+                    wd.day,
+                    COALESCE(u.count, 0)::int AS new_users,
+                    COALESCE(p.count, 0)::int AS new_projects
+                FROM week_days wd
+                LEFT JOIN (
+                    SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+                    FROM users
+                    WHERE created_at >= date_trunc('week', NOW())
+                    GROUP BY 1
+                ) u ON wd.day = u.day
+                LEFT JOIN (
+                    SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+                    FROM projects
+                    WHERE created_at >= date_trunc('week', NOW())
+                    GROUP BY 1
+                ) p ON wd.day = p.day
+                ORDER BY wd.day ASC
+                """
+            )
+            weekly_rows = cur.fetchall() or []
+
+            users_this_week = int(summary.get("users_this_week") or 0)
+            users_last_week = int(summary.get("users_last_week") or 0)
+            projects_this_week = int(summary.get("projects_this_week") or 0)
+            projects_last_week = int(summary.get("projects_last_week") or 0)
+
+            return {
+                "total_users": int(summary.get("total_users") or 0),
+                "total_projects": int(summary.get("total_projects") or 0),
+                "open_reports": int(summary.get("open_reports") or 0),
+                "pending_user_approvals": int(
+                    summary.get("pending_user_approvals") or 0
+                ),
+                "users_this_week": users_this_week,
+                "users_last_week": users_last_week,
+                "projects_this_week": projects_this_week,
+                "projects_last_week": projects_last_week,
+                "users_week_delta": users_this_week - users_last_week,
+                "projects_week_delta": projects_this_week - projects_last_week,
+                "weekly_trend": [
+                    {
+                        "day": row["day"].isoformat(),
+                        "new_users": int(row["new_users"] or 0),
+                        "new_projects": int(row["new_projects"] or 0),
+                    }
+                    for row in weekly_rows
+                ],
+            }
+
+
 def update_report(report_id: str, new_status: str):
     """신고 처리 상태 변경"""
     with get_db_connection() as conn:
@@ -710,48 +1891,285 @@ def create_admin_action_log(
     target_type: str,
     target_id: str,
     reason: Optional[str] = None,
+    metadata: Optional[Mapping[str, object]] = None,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
                 """
-                INSERT INTO admin_action_logs (admin_id, action_type, target_type, target_id, reason)
-                VALUES (%s, %s, %s, %s, %s)
+                INSERT INTO admin_action_logs (admin_id, action_type, target_type, target_id, reason, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """,
-                (admin_id, action_type, target_type, target_id, reason),
+                (
+                    admin_id,
+                    action_type,
+                    target_type,
+                    target_id,
+                    reason,
+                    Json(dict(metadata or {})),
+                ),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def get_admin_action_logs(limit: int = 50, view_window_days: Optional[int] = None):
+def get_admin_action_logs(
+    limit: int = 50,
+    view_window_days: Optional[int] = None,
+    action_type: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    target_type: Optional[str] = None,
+    target_id: Optional[str] = None,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            conditions: list[str] = []
+            params: list[object] = []
+
             if view_window_days and view_window_days > 0:
-                cur.execute(
-                    """
-                    SELECT l.*, u.nickname as admin_nickname
-                    FROM admin_action_logs l
-                    LEFT JOIN users u ON l.admin_id = u.id
-                    WHERE l.created_at >= NOW() - (%s * INTERVAL '1 day')
-                    ORDER BY l.created_at DESC
-                    LIMIT %s
-                    """,
-                    (view_window_days, limit),
-                )
-            else:
-                cur.execute(
-                    """
-                    SELECT l.*, u.nickname as admin_nickname
-                    FROM admin_action_logs l
-                    LEFT JOIN users u ON l.admin_id = u.id
-                    ORDER BY l.created_at DESC
-                    LIMIT %s
-                    """,
-                    (limit,),
-                )
+                conditions.append("l.created_at >= NOW() - (%s * INTERVAL '1 day')")
+                params.append(view_window_days)
+            if action_type:
+                conditions.append("l.action_type = %s")
+                params.append(action_type)
+            if actor_id:
+                conditions.append("l.admin_id = %s")
+                params.append(actor_id)
+            if target_type:
+                conditions.append("l.target_type = %s")
+                params.append(target_type)
+            if target_id:
+                conditions.append("l.target_id = %s")
+                params.append(target_id)
+
+            query = """
+                SELECT l.*, u.nickname as admin_nickname
+                FROM admin_action_logs l
+                LEFT JOIN users u ON l.admin_id = u.id
+            """
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY l.created_at DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(query, params)
             return cur.fetchall()
+
+
+def get_admin_action_observability(view_window_days: int = 30):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                ),
+                day_buckets AS (
+                    SELECT generate_series(
+                        date_trunc('day', (SELECT since FROM bounds)),
+                        date_trunc('day', NOW()),
+                        INTERVAL '1 day'
+                    )::date AS day
+                ),
+                publish_counts AS (
+                    SELECT date_trunc('day', created_at)::date AS day, COUNT(*)::int AS count
+                    FROM admin_action_logs
+                    WHERE action_type = 'page_published'
+                      AND created_at >= (SELECT since FROM bounds)
+                    GROUP BY 1
+                )
+                SELECT
+                    d.day,
+                    COALESCE(p.count, 0)::int AS publish_count
+                FROM day_buckets d
+                LEFT JOIN publish_counts p ON p.day = d.day
+                ORDER BY d.day ASC
+                """,
+                (view_window_days,),
+            )
+            daily_publish_counts = cur.fetchall() or []
+
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                )
+                SELECT
+                    COALESCE(SUM(CASE WHEN action_type = 'page_published' THEN 1 ELSE 0 END), 0)::int AS published,
+                    COALESCE(SUM(CASE WHEN action_type = 'page_rolled_back' THEN 1 ELSE 0 END), 0)::int AS rolled_back,
+                    COALESCE(SUM(CASE WHEN action_type = 'page_draft_saved' THEN 1 ELSE 0 END), 0)::int AS draft_saved,
+                    COALESCE(SUM(CASE WHEN action_type = 'page_conflict_detected' THEN 1 ELSE 0 END), 0)::int AS conflicts
+                FROM admin_action_logs
+                WHERE created_at >= (SELECT since FROM bounds)
+                """,
+                (view_window_days,),
+            )
+            counts = cur.fetchone() or {
+                "published": 0,
+                "rolled_back": 0,
+                "draft_saved": 0,
+                "conflicts": 0,
+            }
+
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                )
+                SELECT
+                    COALESCE(NULLIF(reason, ''), 'unknown') AS reason_group,
+                    COUNT(*)::int AS count
+                FROM admin_action_logs
+                WHERE action_type = 'page_publish_failed'
+                  AND created_at >= (SELECT since FROM bounds)
+                GROUP BY 1
+                ORDER BY count DESC, reason_group ASC
+                """,
+                (view_window_days,),
+            )
+            failure_distribution = cur.fetchall() or []
+
+            cur.execute(
+                """
+                WITH bounds AS (
+                    SELECT NOW() - (%s * INTERVAL '1 day') AS since
+                )
+                SELECT
+                    date_trunc('day', created_at)::date AS day,
+                    action_type,
+                    COALESCE(reason, '') AS reason
+                FROM admin_action_logs
+                WHERE action_type IN (
+                    'curated_collection_succeeded',
+                    'curated_collection_failed',
+                    'curated_collection_skipped'
+                )
+                  AND created_at >= (SELECT since FROM bounds)
+                ORDER BY created_at ASC
+                """,
+                (view_window_days,),
+            )
+            curated_collection_events = cur.fetchall() or []
+
+            published = int(counts.get("published", 0))
+            rolled_back = int(counts.get("rolled_back", 0))
+            draft_saved = int(counts.get("draft_saved", 0))
+            conflicts = int(counts.get("conflicts", 0))
+            rollback_ratio = (rolled_back / published) if published > 0 else 0.0
+            conflict_rate = (
+                conflicts / (draft_saved + conflicts)
+                if (draft_saved + conflicts) > 0
+                else 0.0
+            )
+            curated_daily_counts: dict[str, dict[str, int]] = defaultdict(
+                lambda: {"run_count": 0, "created_total": 0}
+            )
+            curated_success_count = 0
+            curated_failure_count = 0
+            curated_skipped_count = 0
+            curated_created_total = 0
+            curated_failure_reasons: dict[str, int] = defaultdict(int)
+
+            cur.execute(
+                """
+                SELECT status, COUNT(*)::int AS count
+                FROM curated_content
+                WHERE status IN ('pending', 'review_license', 'review_duplicate', 'review_quality')
+                GROUP BY status
+                ORDER BY status ASC
+                """
+            )
+            curated_review_rows = cur.fetchall() or []
+
+            for row in curated_collection_events:
+                day_value = row.get("day")
+                if isinstance(day_value, datetime):
+                    day_key = day_value.date().isoformat()
+                else:
+                    day_key = str(day_value)
+                action_type = str(row.get("action_type") or "")
+                reason_text = str(row.get("reason") or "")
+                created_match = re.search(r"created=(\d+)", reason_text)
+                created_value = int(created_match.group(1)) if created_match else 0
+                curated_daily_counts[day_key]["run_count"] += 1
+                curated_daily_counts[day_key]["created_total"] += created_value
+                curated_created_total += created_value
+
+                if action_type == "curated_collection_succeeded":
+                    curated_success_count += 1
+                elif action_type == "curated_collection_failed":
+                    curated_failure_count += 1
+                    message_match = re.search(r"message=(.*)$", reason_text)
+                    failure_reason = (
+                        message_match.group(1).strip()
+                        if message_match and message_match.group(1).strip()
+                        else "unknown"
+                    )
+                    curated_failure_reasons[failure_reason] += 1
+                elif action_type == "curated_collection_skipped":
+                    curated_skipped_count += 1
+
+            curated_review_queue_counts = {
+                "pending": 0,
+                "review_license": 0,
+                "review_duplicate": 0,
+                "review_quality": 0,
+            }
+            for row in curated_review_rows:
+                status = str(row.get("status") or "")
+                if status in curated_review_queue_counts:
+                    curated_review_queue_counts[status] = int(row.get("count") or 0)
+
+            return {
+                "window_days": view_window_days,
+                "daily_publish_counts": [
+                    {
+                        "day": row["day"].isoformat(),
+                        "publish_count": int(row["publish_count"]),
+                    }
+                    for row in daily_publish_counts
+                ],
+                "summary": {
+                    "published": published,
+                    "rolled_back": rolled_back,
+                    "draft_saved": draft_saved,
+                    "conflicts": conflicts,
+                    "rollback_ratio": rollback_ratio,
+                    "conflict_rate": conflict_rate,
+                },
+                "publish_failure_distribution": [
+                    {
+                        "reason": str(row["reason_group"]),
+                        "count": int(row["count"]),
+                    }
+                    for row in failure_distribution
+                ],
+                "daily_curated_collection_counts": [
+                    {
+                        "day": day,
+                        "run_count": counts["run_count"],
+                        "created_total": counts["created_total"],
+                    }
+                    for day, counts in sorted(curated_daily_counts.items())
+                ],
+                "curated_collection_summary": {
+                    "succeeded": curated_success_count,
+                    "failed": curated_failure_count,
+                    "skipped": curated_skipped_count,
+                    "created_total": curated_created_total,
+                },
+                "curated_review_queue_summary": {
+                    **curated_review_queue_counts,
+                    "total": sum(curated_review_queue_counts.values()),
+                },
+                "curated_collection_failure_distribution": [
+                    {"reason": reason, "count": count}
+                    for reason, count in sorted(
+                        curated_failure_reasons.items(),
+                        key=lambda item: (-item[1], item[0]),
+                    )
+                ],
+            }
 
 
 def cleanup_admin_action_logs(retention_days: int) -> int:
@@ -801,7 +2219,12 @@ def get_admin_users(limit: int = 200):
             return cur.fetchall()
 
 
-def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
+def limit_user(
+    user_id: str,
+    hours: int = 24,
+    reason: Optional[str] = None,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -809,17 +2232,19 @@ def limit_user(user_id: str, hours: int = 24, reason: Optional[str] = None):
                 UPDATE users
                 SET limited_until = NOW() + (%s || ' hours')::INTERVAL,
                     limited_reason = %s
-                WHERE id = %s AND role != 'admin'
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (hours, reason, user_id),
+                (hours, reason, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def unlimit_user(user_id: str):
+def unlimit_user(user_id: str, allow_admin_target: bool = False):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -827,11 +2252,13 @@ def unlimit_user(user_id: str):
                 UPDATE users
                 SET limited_until = NULL,
                     limited_reason = NULL
-                WHERE id = %s AND role != 'admin'
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (user_id,),
+                (user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
@@ -875,7 +2302,30 @@ def reject_user(user_id: str):
             return cur.fetchone()
 
 
-def suspend_user(user_id: str, admin_id: str, reason: str):
+def set_user_role(user_id: str, role: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET role = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
+                          suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
+                """,
+                (role, user_id),
+            )
+            conn.commit()
+            return cur.fetchone()
+
+
+def suspend_user(
+    user_id: str,
+    admin_id: str,
+    reason: str,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -887,11 +2337,13 @@ def suspend_user(user_id: str, admin_id: str, reason: str):
                     suspended_by = %s,
                     token_version = token_version + 1,
                     updated_at = NOW()
-                WHERE id = %s AND role != 'admin'
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (reason, admin_id, user_id),
+                (reason, admin_id, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
@@ -908,7 +2360,7 @@ def unsuspend_user(user_id: str):
                     suspended_at = NULL,
                     suspended_by = NULL,
                     updated_at = NOW()
-                WHERE id = %s AND role != 'admin' AND status = 'suspended'
+                WHERE id = %s AND role != 'super_admin' AND status = 'suspended'
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
@@ -936,7 +2388,13 @@ def revoke_user_tokens(user_id: str):
             return cur.fetchone()
 
 
-def schedule_user_deletion(user_id: str, admin_id: str, days: int, reason: str):
+def schedule_user_deletion(
+    user_id: str,
+    admin_id: str,
+    days: int,
+    reason: str,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -949,17 +2407,19 @@ def schedule_user_deletion(user_id: str, admin_id: str, days: int, reason: str):
                     suspended_by = %s,
                     token_version = token_version + 1,
                     updated_at = NOW()
-                WHERE id = %s AND role NOT IN ('admin', 'super_admin')
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (days, reason, admin_id, user_id),
+                (days, reason, admin_id, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def cancel_user_deletion(user_id: str):
+def cancel_user_deletion(user_id: str, allow_admin_target: bool = False):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -971,17 +2431,25 @@ def cancel_user_deletion(user_id: str):
                     suspended_at = NULL,
                     suspended_by = NULL,
                     updated_at = NOW()
-                WHERE id = %s AND status = 'pending_delete' AND role NOT IN ('admin', 'super_admin')
+                WHERE id = %s
+                  AND status = 'pending_delete'
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (user_id,),
+                (user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
 
 
-def delete_user_now(user_id: str, admin_id: str, reason: str):
+def delete_user_now(
+    user_id: str,
+    admin_id: str,
+    reason: str,
+    allow_admin_target: bool = False,
+):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(
@@ -996,11 +2464,13 @@ def delete_user_now(user_id: str, admin_id: str, reason: str):
                     suspended_by = %s,
                     token_version = token_version + 1,
                     updated_at = NOW()
-                WHERE id = %s AND role NOT IN ('admin', 'super_admin')
+                WHERE id = %s
+                  AND role != 'super_admin'
+                  AND (%s OR role != 'admin')
                 RETURNING id, email, nickname, role, status, created_at, limited_until, limited_reason,
                           suspended_reason, suspended_at, suspended_by, delete_scheduled_at, deleted_at, deleted_by, token_version
                 """,
-                (admin_id, reason, admin_id, user_id),
+                (admin_id, reason, admin_id, user_id, allow_admin_target),
             )
             conn.commit()
             return cur.fetchone()
@@ -1043,7 +2513,11 @@ def get_moderation_settings():
             cur.execute(
                 """
                 SELECT id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
-                       admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons, updated_at
+                       admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons,
+                       page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
+                       page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
+                       page_editor_conflict_rate_threshold, curated_review_quality_threshold,
+                       updated_at
                 FROM moderation_settings
                 WHERE id = 1
                 """
@@ -1059,6 +2533,13 @@ def update_moderation_settings(
     admin_log_retention_days: int,
     admin_log_view_window_days: int,
     admin_log_mask_reasons: bool,
+    page_editor_enabled: bool,
+    page_editor_rollout_stage: str,
+    page_editor_pilot_admin_ids: list[str],
+    page_editor_publish_fail_rate_threshold: float,
+    page_editor_rollback_ratio_threshold: float,
+    page_editor_conflict_rate_threshold: float,
+    curated_review_quality_threshold: int,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1072,10 +2553,21 @@ def update_moderation_settings(
                     admin_log_retention_days = %s,
                     admin_log_view_window_days = %s,
                     admin_log_mask_reasons = %s,
+                    page_editor_enabled = %s,
+                    page_editor_rollout_stage = %s,
+                    page_editor_pilot_admin_ids = %s,
+                    page_editor_publish_fail_rate_threshold = %s,
+                    page_editor_rollback_ratio_threshold = %s,
+                    page_editor_conflict_rate_threshold = %s,
+                    curated_review_quality_threshold = %s,
                     updated_at = NOW()
                 WHERE id = 1
                 RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
-                          admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons, updated_at
+                          admin_log_retention_days, admin_log_view_window_days, admin_log_mask_reasons,
+                          page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
+                          page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
+                          page_editor_conflict_rate_threshold, curated_review_quality_threshold,
+                          updated_at
                 """,
                 (
                     blocked_keywords,
@@ -1085,6 +2577,13 @@ def update_moderation_settings(
                     admin_log_retention_days,
                     admin_log_view_window_days,
                     admin_log_mask_reasons,
+                    page_editor_enabled,
+                    page_editor_rollout_stage,
+                    page_editor_pilot_admin_ids,
+                    page_editor_publish_fail_rate_threshold,
+                    page_editor_rollback_ratio_threshold,
+                    page_editor_conflict_rate_threshold,
+                    curated_review_quality_threshold,
                 ),
             )
             conn.commit()
@@ -1216,6 +2715,530 @@ def upsert_site_content(content_key: str, content_json: Mapping[str, object]):
             )
             conn.commit()
             return cur.fetchone()
+
+
+def list_site_contents_by_prefix(content_key_prefix: str, limit: int = 20):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_site_contents_table(cur)
+            cur.execute(
+                """
+                SELECT content_key, content_json, updated_at
+                FROM site_contents
+                WHERE content_key LIKE %s
+                ORDER BY updated_at DESC
+                LIMIT %s
+                """,
+                (f"{content_key_prefix}%", max(1, min(limit, 100))),
+            )
+            return cur.fetchall()
+
+
+def get_page_document_draft(page_id: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT c.page_id,
+                       c.draft_version,
+                       c.published_version,
+                       c.updated_by,
+                       c.updated_at,
+                       v.document_json
+                FROM page_documents_current c
+                LEFT JOIN page_document_versions v
+                  ON v.page_id = c.page_id AND v.version = c.draft_version
+                WHERE c.page_id = %s
+                """,
+                (page_id,),
+            )
+            return cur.fetchone()
+
+
+def save_page_document_draft(
+    page_id: str,
+    base_version: int,
+    document_json: Mapping[str, object],
+    actor_id: str,
+    reason: Optional[str] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, draft_version, published_version
+                       , updated_by, updated_at
+                FROM page_documents_current
+                WHERE page_id = %s
+                FOR UPDATE
+                """,
+                (page_id,),
+            )
+            current = cur.fetchone()
+
+            if not current:
+                if base_version != 0:
+                    conn.rollback()
+                    return {
+                        "conflict": True,
+                        "current_version": 0,
+                    }
+
+                saved_version = 1
+                cur.execute(
+                    """
+                    INSERT INTO page_document_versions
+                        (page_id, version, status, document_json, reason, created_by, created_at)
+                    VALUES (%s, %s, 'draft', %s, %s, %s, NOW())
+                    """,
+                    (page_id, saved_version, Json(document_json), reason, actor_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO page_documents_current
+                        (page_id, draft_version, published_version, updated_by, updated_at)
+                    VALUES (%s, %s, %s, %s, NOW())
+                    """,
+                    (page_id, saved_version, 0, actor_id),
+                )
+            else:
+                current_version = int(current["draft_version"])
+                if base_version != current_version:
+                    conn.rollback()
+                    return {
+                        "conflict": True,
+                        "current_version": current_version,
+                        "current_updated_by": current.get("updated_by"),
+                        "current_updated_at": current.get("updated_at"),
+                    }
+
+                saved_version = current_version + 1
+                cur.execute(
+                    """
+                    INSERT INTO page_document_versions
+                        (page_id, version, status, document_json, reason, created_by, created_at)
+                    VALUES (%s, %s, 'draft', %s, %s, %s, NOW())
+                    """,
+                    (page_id, saved_version, Json(document_json), reason, actor_id),
+                )
+                cur.execute(
+                    """
+                    UPDATE page_documents_current
+                    SET draft_version = %s,
+                        updated_by = %s,
+                        updated_at = NOW()
+                    WHERE page_id = %s
+                    """,
+                    (saved_version, actor_id, page_id),
+                )
+
+            conn.commit()
+            return {
+                "conflict": False,
+                "saved_version": saved_version,
+            }
+
+
+def publish_page_document(
+    page_id: str,
+    actor_id: str,
+    reason: str,
+    draft_version: Optional[int] = None,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, draft_version, published_version
+                FROM page_documents_current
+                WHERE page_id = %s
+                FOR UPDATE
+                """,
+                (page_id,),
+            )
+            current = cur.fetchone()
+            if not current:
+                conn.rollback()
+                return None
+
+            selected_draft_version = (
+                int(draft_version)
+                if draft_version is not None
+                else int(current["draft_version"])
+            )
+            if selected_draft_version <= 0:
+                conn.rollback()
+                return None
+
+            cur.execute(
+                """
+                SELECT document_json
+                FROM page_document_versions
+                WHERE page_id = %s AND version = %s
+                """,
+                (page_id, selected_draft_version),
+            )
+            source = cur.fetchone()
+            if not source:
+                conn.rollback()
+                return None
+
+            published_version = int(current["draft_version"]) + 1
+            cur.execute(
+                """
+                INSERT INTO page_document_versions
+                    (page_id, version, status, document_json, reason, created_by, created_at)
+                VALUES (%s, %s, 'published', %s, %s, %s, NOW())
+                """,
+                (
+                    page_id,
+                    published_version,
+                    Json(cast(Mapping[str, object], source["document_json"])),
+                    reason,
+                    actor_id,
+                ),
+            )
+            cur.execute(
+                """
+                UPDATE page_documents_current
+                SET draft_version = %s,
+                    published_version = %s,
+                    updated_by = %s,
+                    updated_at = NOW()
+                WHERE page_id = %s
+                """,
+                (published_version, published_version, actor_id, page_id),
+            )
+            conn.commit()
+            return {
+                "source_version": selected_draft_version,
+                "published_version": published_version,
+            }
+
+
+def list_page_document_versions(page_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, version, status, reason, created_by, created_at
+                FROM page_document_versions
+                WHERE page_id = %s
+                ORDER BY version DESC
+                LIMIT %s
+                """,
+                (page_id, limit),
+            )
+            return cur.fetchall()
+
+
+def get_page_document_version(page_id: str, version: int):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, version, status, reason, created_by, created_at, document_json
+                FROM page_document_versions
+                WHERE page_id = %s AND version = %s
+                """,
+                (page_id, version),
+            )
+            return cur.fetchone()
+
+
+def create_page_publish_schedule(
+    schedule_id: str,
+    page_id: str,
+    draft_version: int,
+    publish_at: str,
+    timezone: str,
+    actor_id: str,
+    reason: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                INSERT INTO page_publish_schedules (
+                    schedule_id,
+                    page_id,
+                    draft_version,
+                    publish_at,
+                    timezone,
+                    status,
+                    reason,
+                    created_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, 'scheduled', %s, %s, NOW(), NOW())
+                RETURNING *
+                """,
+                (
+                    schedule_id,
+                    page_id,
+                    draft_version,
+                    publish_at,
+                    timezone,
+                    reason,
+                    actor_id,
+                ),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def list_page_publish_schedules(page_id: str, limit: int = 50):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT *
+                FROM page_publish_schedules
+                WHERE page_id = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (page_id, limit),
+            )
+            return cur.fetchall()
+
+
+def cancel_page_publish_schedule(
+    page_id: str,
+    schedule_id: str,
+    actor_id: str,
+    reason: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET status = 'cancelled',
+                    cancelled_at = NOW(),
+                    updated_at = NOW(),
+                    last_error = %s
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                  AND status IN ('scheduled', 'failed')
+                RETURNING *
+                """,
+                (f"cancelled_by={actor_id}; reason={reason}", page_id, schedule_id),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def retry_page_publish_schedule(
+    page_id: str,
+    schedule_id: str,
+    actor_id: str,
+    reason: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET status = 'scheduled',
+                    next_retry_at = NOW(),
+                    updated_at = NOW(),
+                    last_error = %s
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                  AND status = 'failed'
+                RETURNING *
+                """,
+                (
+                    f"retry_requested_by={actor_id}; reason={reason}",
+                    page_id,
+                    schedule_id,
+                ),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def list_due_page_publish_schedules(page_id: str, limit: int = 20):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT *
+                FROM page_publish_schedules
+                WHERE page_id = %s
+                  AND status IN ('scheduled', 'failed')
+                  AND attempt_count < max_attempts
+                  AND COALESCE(next_retry_at, publish_at) <= NOW()
+                ORDER BY COALESCE(next_retry_at, publish_at) ASC, created_at ASC
+                LIMIT %s
+                """,
+                (page_id, limit),
+            )
+            return cur.fetchall()
+
+
+def mark_page_publish_schedule_published(
+    page_id: str,
+    schedule_id: str,
+    published_version: int,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET status = 'published',
+                    published_version = %s,
+                    published_at = NOW(),
+                    updated_at = NOW(),
+                    next_retry_at = NULL,
+                    last_error = NULL
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                RETURNING *
+                """,
+                (published_version, page_id, schedule_id),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def mark_page_publish_schedule_failed(
+    page_id: str,
+    schedule_id: str,
+    error_message: str,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                UPDATE page_publish_schedules
+                SET attempt_count = attempt_count + 1,
+                    status = 'failed',
+                    updated_at = NOW(),
+                    last_error = %s,
+                    next_retry_at = CASE
+                        WHEN (attempt_count + 1) >= max_attempts THEN NULL
+                        ELSE NOW() + INTERVAL '5 minutes'
+                    END
+                WHERE page_id = %s
+                  AND schedule_id = %s
+                RETURNING *
+                """,
+                (error_message, page_id, schedule_id),
+            )
+            record = cur.fetchone()
+            conn.commit()
+            return record
+
+
+def rollback_page_document(
+    page_id: str,
+    target_version: int,
+    actor_id: str,
+    reason: str,
+    publish_now: bool = False,
+):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            ensure_page_documents_tables(cur)
+            cur.execute(
+                """
+                SELECT page_id, draft_version, published_version
+                FROM page_documents_current
+                WHERE page_id = %s
+                FOR UPDATE
+                """,
+                (page_id,),
+            )
+            current = cur.fetchone()
+            if not current:
+                conn.rollback()
+                return None
+
+            cur.execute(
+                """
+                SELECT document_json
+                FROM page_document_versions
+                WHERE page_id = %s AND version = %s
+                """,
+                (page_id, target_version),
+            )
+            source = cur.fetchone()
+            if not source:
+                conn.rollback()
+                return None
+
+            next_version = int(current["draft_version"]) + 1
+            cur.execute(
+                """
+                INSERT INTO page_document_versions
+                    (page_id, version, status, document_json, reason, created_by, created_at)
+                VALUES (%s, %s, 'draft', %s, %s, %s, NOW())
+                """,
+                (
+                    page_id,
+                    next_version,
+                    Json(cast(Mapping[str, object], source["document_json"])),
+                    reason,
+                    actor_id,
+                ),
+            )
+            final_published_version = int(current["published_version"])
+
+            if publish_now:
+                publish_version = next_version + 1
+                cur.execute(
+                    """
+                    INSERT INTO page_document_versions
+                        (page_id, version, status, document_json, reason, created_by, created_at)
+                    VALUES (%s, %s, 'published', %s, %s, %s, NOW())
+                    """,
+                    (
+                        page_id,
+                        publish_version,
+                        Json(cast(Mapping[str, object], source["document_json"])),
+                        reason,
+                        actor_id,
+                    ),
+                )
+                next_version = publish_version
+                final_published_version = publish_version
+
+            cur.execute(
+                """
+                UPDATE page_documents_current
+                SET draft_version = %s,
+                    published_version = %s,
+                    updated_by = %s,
+                    updated_at = NOW()
+                WHERE page_id = %s
+                """,
+                (next_version, final_published_version, actor_id, page_id),
+            )
+            conn.commit()
+            return {
+                "restored_draft_version": next_version,
+                "published_version": final_published_version if publish_now else None,
+            }
 
 
 def create_user(email: str, nickname: str, password_hash: str, status: str = "pending"):
@@ -1364,6 +3387,24 @@ def get_user_by_id(user_id: str):
             """,
                 (user_id,),
             )
+            return cur.fetchone()
+
+
+def bootstrap_super_admin_user(email: str):
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET role = 'super_admin',
+                    status = 'active',
+                    updated_at = NOW()
+                WHERE lower(email) = lower(%s)
+                RETURNING id, email, nickname, role, status, provider, provider_user_id, email_verified, avatar_url, bio, token_version, created_at
+                """,
+                (email,),
+            )
+            conn.commit()
             return cur.fetchone()
 
 

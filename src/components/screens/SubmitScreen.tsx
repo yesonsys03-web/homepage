@@ -6,9 +6,10 @@ import { Input } from "@/components/ui/input"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { TopNav } from "@/components/TopNav"
 import { api, type Project } from "@/lib/api"
+import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -64,7 +65,7 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
       try {
         const project = await api.getProject(editingProjectId, { force: true })
         if (cancelled) return
-        if (!user || (user.role !== "admin" && user.id !== project.author_id)) {
+        if (!user || (!isAdminRole(user.role) && user.id !== project.author_id)) {
           alert("수정 권한이 없습니다.")
           onNavigate?.("detail")
           return
@@ -235,6 +236,8 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
                     <img 
                       src={thumbnailPreview} 
                       alt="Thumbnail preview" 
+                      loading="lazy"
+                      decoding="async"
                       className="w-full aspect-video object-cover rounded-lg"
                       onError={() => setThumbnailPreview("")}
                     />
@@ -307,7 +310,7 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
               <span className="absolute -top-2 -right-2 px-2 py-0.5 text-xs font-bold rounded bg-[#23D5AB] text-[#0B1020] rotate-3 z-10">NEW</span>
               <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center rounded-t-xl overflow-hidden">
                 {thumbnailPreview ? (
-                  <img src={thumbnailPreview} alt="Preview" className="w-full h-full object-cover" />
+                  <img src={thumbnailPreview} alt="Preview" loading="lazy" decoding="async" className="w-full h-full object-cover" />
                 ) : (
                   <ProjectCoverPlaceholder
                     title={formData.title || "작품 제목"}
