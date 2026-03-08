@@ -20,6 +20,8 @@ from typing import (
 )
 from datetime import datetime, timedelta, timezone
 import asyncio
+import logging
+import math
 import re
 import unicodedata
 import time
@@ -121,6 +123,7 @@ from db import (
     increment_error_solution_feedback,
     create_glossary_term_request,
     create_curated_related_click,
+    get_curated_related_click_counts_for_source,
     get_curated_related_click_summary,
 )
 from auth import (
@@ -150,6 +153,8 @@ from gemini_curator import (
     summarize_repository_without_llm,
     should_auto_reject,
 )
+
+logger = logging.getLogger(__name__)
 
 CURATED_REASON_UNKNOWN = "unknown"
 CURATED_REASON_TAG_OVERLAP = "tag_overlap"
@@ -185,6 +190,15 @@ CURATED_REASON_LABELS: dict[str, str] = {
     CURATED_REASON_CONTEXTUAL_MATCH: "추천 맥락 일치",
 }
 CURATED_REASON_TAG_PATTERN = re.compile(r"^태그\s+\d+개\s+일치$")
+CURATED_RELATED_CLICK_BOOST_WINDOW_DAYS = 30
+CURATED_RELATED_CLICK_BOOST_CAP = 180
+CURATED_RELATED_CLICK_BOOST_MULTIPLIER = 48
+CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE = 6
+CURATED_RELATED_CLICK_BOOST_MIN_TAG_OVERLAP = 1
+CURATED_RELATED_CLICK_IP_LIMIT_PER_MINUTE = 24
+CURATED_RELATED_CLICK_DEDUPE_WINDOW_SECONDS = 30.0
+CURATED_RELATED_CLICK_FALLBACK_LOG_WINDOW_SECONDS = 60.0
+_last_curated_related_click_fallback_warning_at = 0.0
 
 
 def normalize_curated_reason_code(value: object | None) -> str:
@@ -812,6 +826,9 @@ DEFAULT_PAGE_EDITOR_PUBLISH_FAIL_RATE_THRESHOLD = 0.2
 DEFAULT_PAGE_EDITOR_ROLLBACK_RATIO_THRESHOLD = 0.3
 DEFAULT_PAGE_EDITOR_CONFLICT_RATE_THRESHOLD = 0.25
 DEFAULT_CURATED_REVIEW_QUALITY_THRESHOLD = 45
+DEFAULT_CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE = 6
+DEFAULT_CURATED_RELATED_CLICK_BOOST_MULTIPLIER = 48
+DEFAULT_CURATED_RELATED_CLICK_BOOST_CAP = 180
 ADMIN_LOG_CLEANUP_INTERVAL_SECONDS = 6 * 60 * 60
 AUTO_CURATED_COLLECTION_MIN_INTERVAL_SECONDS = 60
 SYSTEM_ADMIN_USER_ID = "11111111-1111-1111-1111-111111111111"
@@ -952,6 +969,9 @@ class AdminPolicyUpdateRequest(BaseModel):
     page_editor_rollback_ratio_threshold: Optional[float] = None
     page_editor_conflict_rate_threshold: Optional[float] = None
     curated_review_quality_threshold: Optional[int] = None
+    curated_related_click_boost_min_relevance: Optional[int] = None
+    curated_related_click_boost_multiplier: Optional[int] = None
+    curated_related_click_boost_cap: Optional[int] = None
 
 
 class AdminOAuthSettingsUpdateRequest(BaseModel):
@@ -2569,6 +2589,9 @@ def build_policy_update_log_metadata(
         "page_editor_rollback_ratio_threshold",
         "page_editor_conflict_rate_threshold",
         "curated_review_quality_threshold",
+        "curated_related_click_boost_min_relevance",
+        "curated_related_click_boost_multiplier",
+        "curated_related_click_boost_cap",
     ]
     changed_fields: dict[str, dict[str, object]] = {}
 
@@ -2669,6 +2692,24 @@ def get_effective_moderation_settings() -> dict[str, object]:
         minimum=1,
         maximum=100,
     )
+    curated_related_click_boost_min_relevance = normalize_positive_int(
+        settings.get("curated_related_click_boost_min_relevance"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE,
+        minimum=1,
+        maximum=100,
+    )
+    curated_related_click_boost_multiplier = normalize_positive_int(
+        settings.get("curated_related_click_boost_multiplier"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_MULTIPLIER,
+        minimum=1,
+        maximum=200,
+    )
+    curated_related_click_boost_cap = normalize_positive_int(
+        settings.get("curated_related_click_boost_cap"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_CAP,
+        minimum=1,
+        maximum=500,
+    )
     baseline_categories = {
         category: normalize_keyword_list(keywords)
         for category, keywords in BASELINE_BLOCKED_KEYWORD_CATEGORIES.items()
@@ -2702,6 +2743,9 @@ def get_effective_moderation_settings() -> dict[str, object]:
         "page_editor_rollback_ratio_threshold": page_editor_rollback_ratio_threshold,
         "page_editor_conflict_rate_threshold": page_editor_conflict_rate_threshold,
         "curated_review_quality_threshold": curated_review_quality_threshold,
+        "curated_related_click_boost_min_relevance": curated_related_click_boost_min_relevance,
+        "curated_related_click_boost_multiplier": curated_related_click_boost_multiplier,
+        "curated_related_click_boost_cap": curated_related_click_boost_cap,
         "updated_at": settings["updated_at"],
         "last_updated_by": last_updated_by,
         "last_updated_by_id": last_updated_by_id,
@@ -2769,6 +2813,24 @@ def ensure_baseline_moderation_settings() -> None:
         minimum=1,
         maximum=100,
     )
+    curated_related_click_boost_min_relevance = normalize_positive_int(
+        settings.get("curated_related_click_boost_min_relevance"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE,
+        minimum=1,
+        maximum=100,
+    )
+    curated_related_click_boost_multiplier = normalize_positive_int(
+        settings.get("curated_related_click_boost_multiplier"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_MULTIPLIER,
+        minimum=1,
+        maximum=200,
+    )
+    curated_related_click_boost_cap = normalize_positive_int(
+        settings.get("curated_related_click_boost_cap"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_CAP,
+        minimum=1,
+        maximum=500,
+    )
     if (
         effective_keywords != (settings.get("blocked_keywords") or [])
         or home_filter_tabs != (settings.get("home_filter_tabs") or [])
@@ -2802,6 +2864,27 @@ def ensure_baseline_moderation_settings() -> None:
             minimum=1,
             maximum=100,
         )
+        or curated_related_click_boost_min_relevance
+        != normalize_positive_int(
+            settings.get("curated_related_click_boost_min_relevance"),
+            DEFAULT_CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE,
+            minimum=1,
+            maximum=100,
+        )
+        or curated_related_click_boost_multiplier
+        != normalize_positive_int(
+            settings.get("curated_related_click_boost_multiplier"),
+            DEFAULT_CURATED_RELATED_CLICK_BOOST_MULTIPLIER,
+            minimum=1,
+            maximum=200,
+        )
+        or curated_related_click_boost_cap
+        != normalize_positive_int(
+            settings.get("curated_related_click_boost_cap"),
+            DEFAULT_CURATED_RELATED_CLICK_BOOST_CAP,
+            minimum=1,
+            maximum=500,
+        )
     ):
         update_moderation_settings(
             blocked_keywords=effective_keywords,
@@ -2818,6 +2901,9 @@ def ensure_baseline_moderation_settings() -> None:
             page_editor_rollback_ratio_threshold=page_editor_rollback_ratio_threshold,
             page_editor_conflict_rate_threshold=page_editor_conflict_rate_threshold,
             curated_review_quality_threshold=curated_review_quality_threshold,
+            curated_related_click_boost_min_relevance=curated_related_click_boost_min_relevance,
+            curated_related_click_boost_multiplier=curated_related_click_boost_multiplier,
+            curated_related_click_boost_cap=curated_related_click_boost_cap,
         )
 
 
@@ -3129,7 +3215,9 @@ def generate_license_explanation(
 
     license_text = fetch_github_license_file(owner, repo_name, github_token)
     if not license_text:
-        return "라이선스 파일을 찾을 수 없어요. 사용 전 GitHub 레포를 직접 확인해 주세요."
+        return (
+            "라이선스 파일을 찾을 수 없어요. 사용 전 GitHub 레포를 직접 확인해 주세요."
+        )
 
     explanation = _explain_license_with_gemini(
         license_text,
@@ -3233,6 +3321,10 @@ def _build_curated_related_entry(
     base_item: Mapping[str, object],
     candidate: Mapping[str, object],
     now_ms: int,
+    recent_click_count: int = 0,
+    click_boost_min_relevance: int = CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE,
+    click_boost_multiplier: int = CURATED_RELATED_CLICK_BOOST_MULTIPLIER,
+    click_boost_cap: int = CURATED_RELATED_CLICK_BOOST_CAP,
 ) -> tuple[int, CuratedRelatedListItem]:
     current_tag_set = set(_normalized_curated_tags(base_item))
     candidate_tag_set = set(_normalized_curated_tags(candidate))
@@ -3250,6 +3342,10 @@ def _build_curated_related_entry(
         1
         if bool(base_item.get("is_korean_dev")) and bool(candidate.get("is_korean_dev"))
         else 0
+    )
+    click_boost_eligible = (
+        relevance >= click_boost_min_relevance
+        or overlap_count >= CURATED_RELATED_CLICK_BOOST_MIN_TAG_OVERLAP
     )
 
     reason_codes: list[str] = []
@@ -3278,6 +3374,11 @@ def _build_curated_related_entry(
         + language_match * 12
         + korean_match * 8
     )
+    if recent_click_count > 0 and click_boost_eligible:
+        score += min(
+            click_boost_cap,
+            int(math.log1p(recent_click_count) * click_boost_multiplier),
+        )
     return score, {
         "item": serialize_curated_content(candidate),
         "reasons": [
@@ -3298,6 +3399,7 @@ def _collect_curated_related_candidates(
     base_item: Mapping[str, object],
     limit: int,
 ) -> list[CuratedRelatedListItem]:
+    global _last_curated_related_click_fallback_warning_at
     safe_limit = max(1, min(limit, 8))
     sample_limit = max(24, safe_limit * 8)
     category = str(base_item.get("category") or "").strip() or None
@@ -3331,16 +3433,64 @@ def _collect_curated_related_candidates(
         )
 
     base_id = safe_int(base_item.get("id"), 0)
+    moderation_settings = get_moderation_settings() or {}
+    click_boost_min_relevance = normalize_positive_int(
+        moderation_settings.get("curated_related_click_boost_min_relevance"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE,
+        minimum=1,
+        maximum=100,
+    )
+    click_boost_multiplier = normalize_positive_int(
+        moderation_settings.get("curated_related_click_boost_multiplier"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_MULTIPLIER,
+        minimum=1,
+        maximum=200,
+    )
+    click_boost_cap = normalize_positive_int(
+        moderation_settings.get("curated_related_click_boost_cap"),
+        DEFAULT_CURATED_RELATED_CLICK_BOOST_CAP,
+        minimum=1,
+        maximum=500,
+    )
     seen_ids: set[int] = set()
     scored: list[tuple[int, CuratedRelatedListItem]] = []
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    try:
+        click_counts = get_curated_related_click_counts_for_source(
+            base_id,
+            CURATED_RELATED_CLICK_BOOST_WINDOW_DAYS,
+        )
+    except Exception as exc:
+        now_monotonic = time.monotonic()
+        if (
+            now_monotonic - _last_curated_related_click_fallback_warning_at
+            >= CURATED_RELATED_CLICK_FALLBACK_LOG_WINDOW_SECONDS
+        ):
+            logger.warning(
+                "curated related click-count fallback used: source_id=%s window_days=%s error=%s",
+                base_id,
+                CURATED_RELATED_CLICK_BOOST_WINDOW_DAYS,
+                exc,
+            )
+            _last_curated_related_click_fallback_warning_at = now_monotonic
+        click_counts = {}
 
     for candidate in candidate_rows:
         candidate_id = safe_int(candidate.get("id"), 0)
         if candidate_id <= 0 or candidate_id == base_id or candidate_id in seen_ids:
             continue
         seen_ids.add(candidate_id)
-        scored.append(_build_curated_related_entry(base_item, candidate, now_ms))
+        scored.append(
+            _build_curated_related_entry(
+                base_item,
+                candidate,
+                now_ms,
+                recent_click_count=click_counts.get(candidate_id, 0),
+                click_boost_min_relevance=click_boost_min_relevance,
+                click_boost_multiplier=click_boost_multiplier,
+                click_boost_cap=click_boost_cap,
+            )
+        )
 
     scored.sort(
         key=lambda entry: (
@@ -3420,6 +3570,28 @@ def create_curated_related_click_endpoint(
             status_code=400, detail="동일 콘텐츠 클릭은 기록할 수 없습니다"
         )
 
+    client_ip = _extract_client_ip(request)
+    enforce_rate_limit(
+        "curated_related_click_ip",
+        client_ip,
+        limit=CURATED_RELATED_CLICK_IP_LIMIT_PER_MINUTE,
+        window_seconds=60.0,
+        detail="요청이 너무 많습니다. 잠시 후 다시 시도해 주세요",
+    )
+    dedupe_key = f"{client_ip}:{source_id}:{target_id}"
+    try:
+        enforce_rate_limit(
+            "curated_related_click_pair",
+            dedupe_key,
+            limit=1,
+            window_seconds=CURATED_RELATED_CLICK_DEDUPE_WINDOW_SECONDS,
+            detail="duplicate curated related click",
+        )
+    except HTTPException as exc:
+        if exc.status_code == 429:
+            return {"ok": True, "id": 0}
+        raise
+
     source_item = get_curated_content_by_id(source_id)
     target_item = get_curated_content_by_id(target_id)
     if not source_item or str(source_item.get("status") or "") != "approved":
@@ -3440,7 +3612,7 @@ def create_curated_related_click_endpoint(
         target_content_id=target_id,
         reason_code=normalized_reason_code,
         reason=get_curated_reason_label(normalized_reason_code),
-        client_ip=_extract_client_ip(request),
+        client_ip=client_ip,
     )
     saved_id = safe_int(saved.get("id") if saved else None, 0)
     if saved_id <= 0:
@@ -5174,6 +5346,42 @@ def update_admin_policies(
         minimum=1,
         maximum=100,
     )
+    curated_related_click_boost_min_relevance = normalize_positive_int(
+        payload.curated_related_click_boost_min_relevance,
+        cast(
+            int,
+            current_settings.get(
+                "curated_related_click_boost_min_relevance",
+                DEFAULT_CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE,
+            ),
+        ),
+        minimum=1,
+        maximum=100,
+    )
+    curated_related_click_boost_multiplier = normalize_positive_int(
+        payload.curated_related_click_boost_multiplier,
+        cast(
+            int,
+            current_settings.get(
+                "curated_related_click_boost_multiplier",
+                DEFAULT_CURATED_RELATED_CLICK_BOOST_MULTIPLIER,
+            ),
+        ),
+        minimum=1,
+        maximum=200,
+    )
+    curated_related_click_boost_cap = normalize_positive_int(
+        payload.curated_related_click_boost_cap,
+        cast(
+            int,
+            current_settings.get(
+                "curated_related_click_boost_cap",
+                DEFAULT_CURATED_RELATED_CLICK_BOOST_CAP,
+            ),
+        ),
+        minimum=1,
+        maximum=500,
+    )
 
     updated = update_moderation_settings(
         blocked_keywords=effective_keywords,
@@ -5190,6 +5398,9 @@ def update_admin_policies(
         page_editor_rollback_ratio_threshold=page_editor_rollback_ratio_threshold,
         page_editor_conflict_rate_threshold=page_editor_conflict_rate_threshold,
         curated_review_quality_threshold=curated_review_quality_threshold,
+        curated_related_click_boost_min_relevance=curated_related_click_boost_min_relevance,
+        curated_related_click_boost_multiplier=curated_related_click_boost_multiplier,
+        curated_related_click_boost_cap=curated_related_click_boost_cap,
     )
     if not updated:
         raise HTTPException(status_code=500, detail="정책 저장에 실패했습니다")
@@ -5220,7 +5431,10 @@ def update_admin_policies(
             f"page_editor_enabled={page_editor_enabled}, "
             f"rollout_stage={page_editor_rollout_stage}, "
             f"pilot_admin_count={len(page_editor_pilot_admin_ids)}, "
-            f"curated_quality_threshold_next={curated_review_quality_threshold}"
+            f"curated_quality_threshold_next={curated_review_quality_threshold}, "
+            f"click_boost_min_relevance={curated_related_click_boost_min_relevance}, "
+            f"click_boost_multiplier={curated_related_click_boost_multiplier}, "
+            f"click_boost_cap={curated_related_click_boost_cap}"
         ),
         metadata=policy_log_metadata,
     )

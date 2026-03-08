@@ -245,6 +245,9 @@ def init_db():
                     page_editor_rollback_ratio_threshold DOUBLE PRECISION DEFAULT 0.3,
                     page_editor_conflict_rate_threshold DOUBLE PRECISION DEFAULT 0.25,
                     curated_review_quality_threshold INTEGER DEFAULT 45,
+                    curated_related_click_boost_min_relevance INTEGER DEFAULT 6,
+                    curated_related_click_boost_multiplier INTEGER DEFAULT 48,
+                    curated_related_click_boost_cap INTEGER DEFAULT 180,
                     updated_at TIMESTAMP DEFAULT NOW()
                 )
             """)
@@ -517,6 +520,24 @@ def init_db():
                 """
                 ALTER TABLE moderation_settings
                 ADD COLUMN IF NOT EXISTS curated_review_quality_threshold INTEGER DEFAULT 45
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS curated_related_click_boost_min_relevance INTEGER DEFAULT 6
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS curated_related_click_boost_multiplier INTEGER DEFAULT 48
+                """
+            )
+            cur.execute(
+                """
+                ALTER TABLE moderation_settings
+                ADD COLUMN IF NOT EXISTS curated_related_click_boost_cap INTEGER DEFAULT 180
                 """
             )
             cur.execute(
@@ -1563,6 +1584,41 @@ def create_curated_related_click(
             return cur.fetchone()
 
 
+def get_curated_related_click_counts_for_source(
+    source_content_id: int,
+    days: int = 30,
+) -> dict[int, int]:
+    safe_source_content_id = source_content_id if source_content_id > 0 else 0
+    if safe_source_content_id <= 0:
+        return {}
+
+    safe_days = max(1, min(days, 365))
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT
+                        target_content_id,
+                        COUNT(*)::int AS click_count
+                    FROM curated_related_clicks
+                    WHERE source_content_id = %s
+                      AND clicked_at >= NOW() - (%s * INTERVAL '1 day')
+                    GROUP BY target_content_id
+                    """,
+                    (safe_source_content_id, safe_days),
+                )
+                rows = cur.fetchall() or []
+    except Exception:
+        return {}
+
+    return {
+        _safe_int(row.get("target_content_id"), 0): _safe_int(row.get("click_count"), 0)
+        for row in rows
+        if _safe_int(row.get("target_content_id"), 0) > 0
+    }
+
+
 def get_curated_related_click_summary(
     days: int = 30,
     limit: int = 5,
@@ -2517,6 +2573,9 @@ def get_moderation_settings():
                        page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
                        page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
                        page_editor_conflict_rate_threshold, curated_review_quality_threshold,
+                       curated_related_click_boost_min_relevance,
+                       curated_related_click_boost_multiplier,
+                       curated_related_click_boost_cap,
                        updated_at
                 FROM moderation_settings
                 WHERE id = 1
@@ -2540,6 +2599,9 @@ def update_moderation_settings(
     page_editor_rollback_ratio_threshold: float,
     page_editor_conflict_rate_threshold: float,
     curated_review_quality_threshold: int,
+    curated_related_click_boost_min_relevance: int,
+    curated_related_click_boost_multiplier: int,
+    curated_related_click_boost_cap: int,
 ):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -2560,6 +2622,9 @@ def update_moderation_settings(
                     page_editor_rollback_ratio_threshold = %s,
                     page_editor_conflict_rate_threshold = %s,
                     curated_review_quality_threshold = %s,
+                    curated_related_click_boost_min_relevance = %s,
+                    curated_related_click_boost_multiplier = %s,
+                    curated_related_click_boost_cap = %s,
                     updated_at = NOW()
                 WHERE id = 1
                 RETURNING id, blocked_keywords, auto_hide_report_threshold, home_filter_tabs, explore_filter_tabs,
@@ -2567,6 +2632,9 @@ def update_moderation_settings(
                           page_editor_enabled, page_editor_rollout_stage, page_editor_pilot_admin_ids,
                           page_editor_publish_fail_rate_threshold, page_editor_rollback_ratio_threshold,
                           page_editor_conflict_rate_threshold, curated_review_quality_threshold,
+                          curated_related_click_boost_min_relevance,
+                          curated_related_click_boost_multiplier,
+                          curated_related_click_boost_cap,
                           updated_at
                 """,
                 (
@@ -2584,6 +2652,9 @@ def update_moderation_settings(
                     page_editor_rollback_ratio_threshold,
                     page_editor_conflict_rate_threshold,
                     curated_review_quality_threshold,
+                    curated_related_click_boost_min_relevance,
+                    curated_related_click_boost_multiplier,
+                    curated_related_click_boost_cap,
                 ),
             )
             conn.commit()
