@@ -9,7 +9,7 @@ import { ProjectMeta } from "@/components/ProjectMeta"
 import { api, type ProfileComment as ApiProfileComment } from "@/lib/api"
 import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
