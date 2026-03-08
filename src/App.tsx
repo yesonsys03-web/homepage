@@ -24,6 +24,7 @@ type Screen =
   | 'login'
   | 'register'
   | 'explore'
+  | 'showcase'
   | 'curated'
   | 'playground'
   | 'glossary'
@@ -116,6 +117,11 @@ const ExploreScreen = lazy(async () => {
   return { default: module.ExploreScreen }
 })
 
+const ShowcaseScreen = lazy(async () => {
+  const module = await import('./components/screens/ShowcaseScreen')
+  return { default: module.ShowcaseScreen }
+})
+
 const CuratedScreen = lazy(async () => {
   const module = await import('./components/screens/CuratedScreen')
   return { default: module.CuratedScreen }
@@ -190,6 +196,10 @@ function getScreenMeta(screen: Screen, projectId: string | null): { title: strin
       title: '탐색 | VibeCoder Playground',
       description: '다양한 바이브코딩 프로젝트를 탐색하고 영감을 얻어보세요.',
     },
+    showcase: {
+      title: '자랑 게시판 | VibeCoder Playground',
+      description: '작은 성공도 올릴 수 있는 바이브코더 자랑 게시판입니다.',
+    },
     curated: {
       title: '큐레이션 | VibeCoder Playground',
       description: '초보자에게 실질적으로 도움이 되는 엄선된 레포를 탐색합니다.',
@@ -247,6 +257,7 @@ function parseRoute(pathname: string): RouteState {
   if (pathname === '/login') return { screen: 'login', projectId: null, editingProjectId: null }
   if (pathname === '/register') return { screen: 'register', projectId: null, editingProjectId: null }
   if (pathname === '/explore') return { screen: 'explore', projectId: null, editingProjectId: null }
+  if (pathname === '/showcase') return { screen: 'showcase', projectId: null, editingProjectId: null }
   if (pathname === '/curated') return { screen: 'curated', projectId: null, editingProjectId: null }
   if (/^\/curated\/\d+$/.test(pathname)) return { screen: 'curated', projectId: null, editingProjectId: null }
   if (pathname === '/playground') return { screen: 'playground', projectId: null, editingProjectId: null }
@@ -259,6 +270,7 @@ function parseRoute(pathname: string): RouteState {
 function getPathForScreen(screen: Screen, projectId: string | null): string {
   if (screen === 'home') return '/'
   if (screen === 'explore') return '/explore'
+  if (screen === 'showcase') return '/showcase'
   if (screen === 'curated') return '/curated'
   if (screen === 'playground') return '/playground'
   if (screen === 'glossary') return '/glossary'
@@ -286,6 +298,7 @@ function isScreen(value: string | null): value is Screen {
     'login',
     'register',
     'explore',
+    'showcase',
     'curated',
     'playground',
     'glossary',
@@ -598,6 +611,7 @@ function AppContent() {
           <Routes>
             <Route path="/" element={<HomeScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
             <Route path="/explore" element={<ExploreScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
+            <Route path="/showcase" element={<ShowcaseScreen onNavigate={handleNavigate} onOpenProject={openProjectDetail} />} />
             <Route path="/curated" element={<CuratedScreen onNavigate={handleNavigate} onOpenCurated={openCuratedDetail} />} />
             <Route path="/curated/:contentId" element={<CuratedDetailScreen onNavigate={handleNavigate} />} />
             <Route path="/playground" element={<PlaygroundScreen onNavigate={handleNavigate} />} />

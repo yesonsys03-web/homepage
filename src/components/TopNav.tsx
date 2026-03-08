@@ -10,6 +10,7 @@ export type NavScreen =
   | "login"
   | "register"
   | "explore"
+  | "showcase"
   | "challenges"
   | "about"
   | "playground"
@@ -17,7 +18,7 @@ export type NavScreen =
   | "curated"
 
 type TopNavProps = {
-  active: "home" | "explore" | "challenges" | "about" | "playground" | "glossary" | "curated"
+  active: "home" | "explore" | "showcase" | "challenges" | "about" | "playground" | "glossary" | "curated"
   onNavigate?: (screen: NavScreen) => void
   titleSuffix?: ReactNode
   rightSlot?: ReactNode
@@ -38,6 +39,7 @@ export function TopNav({ active, onNavigate, titleSuffix, rightSlot }: TopNavPro
         <nav className="flex gap-6">
           <button onClick={() => onNavigate?.("home")} className={linkClass("home")}>Home</button>
           <button onClick={() => onNavigate?.("explore")} className={linkClass("explore")}>Explore</button>
+          <button onClick={() => onNavigate?.("showcase")} className={linkClass("showcase")}>Showcase</button>
           <button onClick={() => onNavigate?.("curated")} className={linkClass("curated")}>Curated</button>
           <button onClick={() => onNavigate?.("playground")} className={linkClass("playground")}>Playground</button>
           <button onClick={() => onNavigate?.("glossary")} className={linkClass("glossary")}>Glossary</button>
