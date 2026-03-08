@@ -7,9 +7,10 @@ import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { TopNav } from "@/components/TopNav"
 import { api, type Project } from "@/lib/api"
 import { isAdminRole } from "@/lib/roles"
+import { buildShowcasePrefillTags, consumeShowcaseSubmitContext, hasShowcaseTag } from "@/lib/showcase"
 import { useAuth } from "@/lib/use-auth"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -34,6 +35,8 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
   const [submitting, setSubmitting] = useState(false)
   const [loadingProject, setLoadingProject] = useState(false)
   const [thumbnailPreview, setThumbnailPreview] = useState("")
+  const [showcasePrefillActive, setShowcasePrefillActive] = useState(false)
+  const isShowcaseDraft = hasShowcaseTag(formData.tags)
 
   const applyProjectToForm = (project: Project) => {
     const normalizedPlatform = project.platform ? `${project.platform}` : "web"
@@ -53,6 +56,27 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
     })
     setThumbnailPreview(project.thumbnail_url || "")
   }
+
+  useEffect(() => {
+    if (editingProjectId) {
+      setShowcasePrefillActive(false)
+      return
+    }
+
+    if (!consumeShowcaseSubmitContext()) {
+      setShowcasePrefillActive(false)
+      return
+    }
+
+    const result = buildShowcasePrefillTags(formData.tags)
+    if (result.applied && result.tags !== formData.tags) {
+      setFormData((current) => ({
+        ...current,
+        tags: result.tags,
+      }))
+    }
+    setShowcasePrefillActive(result.applied)
+  }, [editingProjectId])
 
   useEffect(() => {
     if (!editingProjectId) {
@@ -160,6 +184,12 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
       <main className="max-w-4xl mx-auto px-4 py-8">
         <h1 className="font-display text-3xl font-bold text-[#F4F7FF] mb-2">{editingProjectId ? "작품 수정" : "작품 등록"}</h1>
         <p className="text-[#B8C3E6] mb-8">{editingProjectId ? "기존 작품 정보를 수정합니다." : "당신의 작품을 바이브코더 커뮤니티와 공유하세요!"}</p>
+
+        {showcasePrefillActive ? (
+          <div className="mb-6 rounded-xl border border-[#23D5AB]/30 bg-[#161F42] px-4 py-3 text-sm text-[#B8C3E6]">
+            자랑 게시판에서 바로 들어왔어요. <span className="font-semibold text-[#F4F7FF]">#showcase</span> 태그를 미리 넣어뒀고, 미리보기 반응도 박수 톤으로 보여드립니다.
+          </div>
+        ) : null}
 
         {loadingProject ? (
           <div className="text-[#B8C3E6] mb-6">수정할 작품 정보를 불러오는 중...</div>
@@ -344,7 +374,7 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
                 <div className="flex items-center justify-between text-sm">
                   <span className="text-[#B8C3E6]">by 작성자</span>
                   <div className="flex gap-3 text-[#B8C3E6]">
-                    <span>❤️ 0</span>
+                    <span>{isShowcaseDraft ? "👏 0" : "❤️ 0"}</span>
                     <span>💬 0</span>
                   </div>
                 </div>
