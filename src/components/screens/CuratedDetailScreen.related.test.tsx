@@ -48,7 +48,7 @@ describe("CuratedDetailScreen related recommendations", () => {
       relevance_score: 9,
       beginner_value: 8,
       quality_score: 8,
-      summary_beginner: "beginner",
+      summary_beginner: "API를 먼저 이해하면 beginner 진입이 빨라집니다.",
       summary_mid: "mid",
       summary_expert: "expert",
       tags: ["starter", "vite"],
@@ -112,6 +112,7 @@ describe("CuratedDetailScreen related recommendations", () => {
 
     expect(await screen.findByText("Deploy Kit")).toBeInTheDocument()
     expect(screen.getByText("태그 1개 일치")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "API" })).toBeInTheDocument()
     expect(mocks.getCuratedRelatedContent).toHaveBeenCalledWith(7, 4)
 
     fireEvent.click(screen.getByRole("button", { name: /Deploy Kit/i }))
@@ -120,5 +121,14 @@ describe("CuratedDetailScreen related recommendations", () => {
       expect(mocks.trackCuratedRelatedClick).toHaveBeenCalledWith(7, 8, "tag_overlap")
     })
     expect(navigateMock).toHaveBeenCalledWith("/curated/8")
+  })
+
+  it("routes glossary-highlighted summary terms into the glossary screen", async () => {
+    render(<CuratedDetailScreen />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "API" }))
+
+    expect(window.localStorage.getItem("vibecoder_glossary_focus_term")).toBe("API")
+    expect(navigateMock).toHaveBeenCalledWith("/glossary")
   })
 })

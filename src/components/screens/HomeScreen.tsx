@@ -5,14 +5,16 @@ import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { LogoSplitHeading } from "@/components/LogoSplitHeading"
 import { TopNav } from "@/components/TopNav"
 import { HeroBanner } from "@/components/HeroBanner"
+import { TodayGlossaryCards } from "@/components/TodayGlossaryCards"
 import { FilterChips } from "@/components/FilterChips"
 import { ProjectMeta } from "@/components/ProjectMeta"
+import { pickDailyGlossaryTerms } from "@/data/glossary"
 import { api, type FilterTab, type Project } from "@/lib/api"
 import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
 import heroMobileImage from "../../../img/master_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface HomeScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -111,6 +113,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   const [filterChipItems, setFilterChipItems] = useState<FilterTab[]>(
     HOME_FILTER_TABS_FALLBACK,
   )
+  const dailyGlossaryTerms = pickDailyGlossaryTerms()
 
   useEffect(() => {
     const applyTabs = (tabs: FilterTab[]) => {
@@ -231,6 +234,18 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
               </div>
             ))}
           </div>
+        </div>
+      </section>
+
+      <section className="py-8 px-4">
+        <div className="max-w-7xl mx-auto">
+          <TodayGlossaryCards
+            terms={dailyGlossaryTerms}
+            title="📅 오늘 읽어두면 좋은 용어"
+            description="막힐 때 자주 보이는 용어 3개를 먼저 익혀두면 Playground와 Curated를 더 쉽게 따라갈 수 있어요."
+            ctaLabel="Glossary 열기"
+            onSelectTerm={() => onNavigate?.("glossary")}
+          />
         </div>
       </section>
 

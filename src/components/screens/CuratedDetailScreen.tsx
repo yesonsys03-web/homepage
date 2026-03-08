@@ -22,6 +22,7 @@ type Screen =
   | "login"
   | "register"
   | "explore"
+  | "showcase"
   | "playground"
   | "glossary"
   | "curated"
@@ -44,7 +45,7 @@ export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
   const [shareMenuOpen, setShareMenuOpen] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
-  const [toastTone, setToastTone] = useState<"info" | "success" | "error">("info")
+  const toastTone: "info" | "success" | "error" = "info"
 
   useEffect(() => {
     if (!Number.isFinite(contentId) || contentId <= 0) {

@@ -1,6 +1,16 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+const navigateMock = vi.fn()
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom")
+  return {
+    ...actual,
+    useNavigate: () => navigateMock,
+  }
+})
+
 import type { CuratedContent } from "@/lib/api"
 
 const mocks = vi.hoisted(() => ({
@@ -32,7 +42,7 @@ function makeCuratedItem(id: number, title: string): CuratedContent {
     relevance_score: 8,
     beginner_value: 8,
     quality_score: 9,
-    summary_beginner: "초보자 요약",
+    summary_beginner: "MCP 초보자 요약",
     summary_mid: "중급자 요약",
     summary_expert: "전문가 요약",
     tags: ["MCP"],
@@ -49,6 +59,7 @@ function makeCuratedItem(id: number, title: string): CuratedContent {
 describe("CuratedScreen smoke", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    navigateMock.mockReset()
   })
 
   it("loads curated list and opens detail callback", async () => {
@@ -65,7 +76,22 @@ describe("CuratedScreen smoke", () => {
     })
 
     expect(screen.getByText("Claude Starter Kit")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "상세보기" }))
     expect(onOpenCurated).toHaveBeenCalledWith(101)
+  })
+
+  it("sends glossary highlights to the glossary screen", async () => {
+    mocks.getCuratedContent.mockResolvedValueOnce({
+      items: [makeCuratedItem(202, "Glossary Starter")],
+      total: 1,
+    })
+
+    render(<CuratedScreen />)
+
+    fireEvent.click(await screen.findByRole("button", { name: "MCP" }))
+
+    expect(window.localStorage.getItem("vibecoder_glossary_focus_term")).toBe("MCP")
+    expect(navigateMock).toHaveBeenCalledWith("/glossary")
   })
 })
