@@ -29,7 +29,7 @@ def test_update_admin_policies_writes_structured_threshold_log(
     client = TestClient(main.app)
     main.app.dependency_overrides[main.require_admin] = lambda: _admin_context()
 
-    current_settings = {
+    current_settings: dict[str, object] = {
         "blocked_keywords": ["spam"],
         "auto_hide_report_threshold": 3,
         "home_filter_tabs": [],
@@ -44,11 +44,17 @@ def test_update_admin_policies_writes_structured_threshold_log(
         "page_editor_rollback_ratio_threshold": 0.3,
         "page_editor_conflict_rate_threshold": 0.25,
         "curated_review_quality_threshold": 45,
+        "curated_related_click_boost_min_relevance": 6,
+        "curated_related_click_boost_multiplier": 48,
+        "curated_related_click_boost_cap": 180,
     }
-    updated_settings = {
+    updated_settings: dict[str, object] = {
         **current_settings,
         "blocked_keywords": ["spam", "nsfw"],
         "curated_review_quality_threshold": 52,
+        "curated_related_click_boost_min_relevance": 8,
+        "curated_related_click_boost_multiplier": 36,
+        "curated_related_click_boost_cap": 140,
         "updated_at": "2026-03-07T00:00:00Z",
     }
     captured: dict[str, object] = {}
@@ -75,11 +81,17 @@ def test_update_admin_policies_writes_structured_threshold_log(
             "blocked_keywords": ["spam", "nsfw"],
             "auto_hide_report_threshold": 3,
             "curated_review_quality_threshold": 52,
+            "curated_related_click_boost_min_relevance": 8,
+            "curated_related_click_boost_multiplier": 36,
+            "curated_related_click_boost_cap": 140,
         },
     )
 
     assert response.status_code == 200
     assert response.json()["curated_review_quality_threshold"] == 52
+    assert response.json()["curated_related_click_boost_min_relevance"] == 8
+    assert response.json()["curated_related_click_boost_multiplier"] == 36
+    assert response.json()["curated_related_click_boost_cap"] == 140
     assert captured["action_type"] == "policy_updated"
     assert captured["target_type"] == "moderation_settings"
     assert captured["target_id"] == "00000000-0000-0000-0000-000000000001"
@@ -98,6 +110,18 @@ def test_update_admin_policies_writes_structured_threshold_log(
     assert changed_fields["curated_review_quality_threshold"] == {
         "previous": 45,
         "next": 52,
+    }
+    assert changed_fields["curated_related_click_boost_min_relevance"] == {
+        "previous": 6,
+        "next": 8,
+    }
+    assert changed_fields["curated_related_click_boost_multiplier"] == {
+        "previous": 48,
+        "next": 36,
+    }
+    assert changed_fields["curated_related_click_boost_cap"] == {
+        "previous": 180,
+        "next": 140,
     }
 
     main.app.dependency_overrides.clear()
