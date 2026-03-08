@@ -12,8 +12,14 @@ import { ReportModal } from "@/components/ReportModal"
 import { Toast } from "@/components/Toast"
 import { api, type Project, type Comment } from "@/lib/api"
 import { isAdminRole } from "@/lib/roles"
+import {
+  hasShowcaseTag,
+  readShowcaseBookmarks,
+  toggleShowcaseBookmark,
+  writeShowcaseBookmarks,
+} from "@/lib/showcase"
 import { useAuth } from "@/lib/use-auth"
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
+type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
 
 interface ScreenProps {
   onNavigate?: (screen: Screen) => void
@@ -27,6 +33,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   const [loading, setLoading] = useState(true)
   const [liked, setLiked] = useState(false)
   const [likeCount, setLikeCount] = useState(0)
+  const [bookmarkIds, setBookmarkIds] = useState<string[]>([])
   const [commentText, setCommentText] = useState("")
   const [isSubmittingComment, setIsSubmittingComment] = useState(false)
   const [reportCommentId, setReportCommentId] = useState<string | null>(null)
@@ -37,6 +44,10 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   const [loadError, setLoadError] = useState<string | null>(null)
   const targetProjectId = projectId ?? null
   const { user } = useAuth()
+
+  useEffect(() => {
+    setBookmarkIds(readShowcaseBookmarks())
+  }, [])
 
   useEffect(() => {
     if (!targetProjectId) {
@@ -229,6 +240,22 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   }
 
   const canEditProject = !!user && (isAdminRole(user.role) || user.id === project.author_id)
+  const isShowcaseProject = hasShowcaseTag(project.tags)
+  const isBookmarkedShowcase = bookmarkIds.includes(project.id)
+  const reactionIcon = isShowcaseProject ? "👏" : "❤️"
+  const reactionLabel = isShowcaseProject ? "박수" : "좋아요"
+
+  const handleToggleShowcaseBookmark = () => {
+    const next = toggleShowcaseBookmark(bookmarkIds, project.id)
+    setBookmarkIds(next)
+    writeShowcaseBookmarks(next)
+    setToastTone("success")
+    setToastMessage(
+      next.includes(project.id)
+        ? "저도 만들어볼게요 목록에 담았어요."
+        : "저도 만들어볼게요 목록에서 뺐어요.",
+    )
+  }
 
   const shareUrl = `${window.location.origin}/project/${encodeURIComponent(project.id)}`
   const projectJsonLd = JSON.stringify({
@@ -358,12 +385,22 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
                 variant="outline" 
                 onClick={handleLike}
                 className={`border-[#111936] ${liked ? "bg-[#FF5D8F] text-white" : "text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]"}`}
+                aria-label={`${reactionLabel} ${likeCount}`}
               >
-                ❤️ {likeCount}
+                {reactionIcon} {likeCount}
               </Button>
               <Button variant="outline" className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]">
                 💬 {comments.length}
               </Button>
+              {isShowcaseProject ? (
+                <Button
+                  variant="outline"
+                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]"
+                  onClick={handleToggleShowcaseBookmark}
+                >
+                  🔖 {isBookmarkedShowcase ? "담아뒀어요" : "저도 만들어볼게요"}
+                </Button>
+              ) : null}
               <div className="relative">
                 <Button
                   variant="outline"
@@ -434,6 +471,9 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
               </Badge>
             ))}
           </div>
+          {isShowcaseProject ? (
+            <p className="mt-3 text-sm text-[#8A96BE]">이 자랑 글의 반응은 좋아요 대신 박수로 읽혀요.</p>
+          ) : null}
         </div>
 
         {/* Media Area */}
