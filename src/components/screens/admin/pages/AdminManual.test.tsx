@@ -22,7 +22,7 @@ describe("AdminManual", () => {
       target: { value: "OAuth" },
     })
 
-    expect(screen.getAllByRole("heading", { name: "22. OAuth 장애 FAQ" }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole("heading", { name: "23. OAuth 장애 FAQ" }).length).toBeGreaterThan(0)
     expect(screen.queryAllByRole("heading", { name: "1. 문서 목적" })).toHaveLength(0)
   })
 })

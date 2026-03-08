@@ -68,7 +68,7 @@ export function AdminLogs() {
         actionType: actionType || undefined,
         actorId: actorId || undefined,
         pageId: pageId || undefined,
-      }),
+      }, { force: targetLogId !== "" }),
   })
 
   const observabilityQuery = useQuery({
