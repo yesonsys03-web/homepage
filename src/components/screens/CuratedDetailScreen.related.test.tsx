@@ -32,6 +32,15 @@ describe("CuratedDetailScreen related recommendations", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     navigateMock.mockReset()
+    Object.defineProperty(window, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: class {
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    })
     mocks.getCuratedContentDetail.mockResolvedValue({
       id: 7,
       source_type: "github",
@@ -45,6 +54,8 @@ describe("CuratedDetailScreen related recommendations", () => {
       is_korean_dev: true,
       stars: 42,
       license: "MIT",
+      license_explanation: "MIT license",
+      thumbnail_url: "",
       relevance_score: 9,
       beginner_value: 8,
       quality_score: 8,
@@ -77,6 +88,8 @@ describe("CuratedDetailScreen related recommendations", () => {
             is_korean_dev: true,
             stars: 55,
             license: "MIT",
+            license_explanation: "MIT license",
+            thumbnail_url: "",
             relevance_score: 8,
             beginner_value: 7,
             quality_score: 9,

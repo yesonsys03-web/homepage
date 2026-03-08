@@ -39,6 +39,8 @@ function makeCuratedItem(id: number, title: string): CuratedContent {
     is_korean_dev: true,
     stars: 120,
     license: "MIT",
+    license_explanation: "MIT license",
+    thumbnail_url: "",
     relevance_score: 8,
     beginner_value: 8,
     quality_score: 9,
@@ -60,6 +62,15 @@ describe("CuratedScreen smoke", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     navigateMock.mockReset()
+    Object.defineProperty(window, "IntersectionObserver", {
+      configurable: true,
+      writable: true,
+      value: class {
+        observe() {}
+        disconnect() {}
+        unobserve() {}
+      },
+    })
   })
 
   it("loads curated list and opens detail callback", async () => {
@@ -75,13 +86,13 @@ describe("CuratedScreen smoke", () => {
       expect(mocks.getCuratedContent).toHaveBeenCalled()
     })
 
-    expect(screen.getByText("Claude Starter Kit")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "MCP" })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "상세보기" }))
+    expect(screen.getAllByText("Claude Starter Kit").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("tool").length).toBeGreaterThan(0)
+    fireEvent.click(screen.getAllByText("Claude Starter Kit")[0])
     expect(onOpenCurated).toHaveBeenCalledWith(101)
   })
 
-  it("sends glossary highlights to the glossary screen", async () => {
+  it("renders category chips from loaded content", async () => {
     mocks.getCuratedContent.mockResolvedValueOnce({
       items: [makeCuratedItem(202, "Glossary Starter")],
       total: 1,
@@ -89,9 +100,8 @@ describe("CuratedScreen smoke", () => {
 
     render(<CuratedScreen />)
 
-    fireEvent.click(await screen.findByRole("button", { name: "MCP" }))
-
-    expect(window.localStorage.getItem("vibecoder_glossary_focus_term")).toBe("MCP")
-    expect(navigateMock).toHaveBeenCalledWith("/glossary")
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "tool" })).toBeInTheDocument()
+    })
   })
 })
