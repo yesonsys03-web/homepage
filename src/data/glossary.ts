@@ -1,3 +1,5 @@
+import { getLocalDaySeed } from "@/lib/daily"
+
 export type GlossaryCategory =
   | "기본개념"
   | "터미널"
@@ -18,6 +20,38 @@ export type GlossaryTerm = {
   when_appears: string
   related: string[]
   level: GlossaryLevel
+}
+
+export function glossaryCategoryTone(category: GlossaryCategory): string {
+  switch (category) {
+    case "기본개념":
+      return "from-[#23D5AB]/25 to-[#0B1020] border-[#23D5AB]/50"
+    case "터미널":
+      return "from-[#58A6FF]/25 to-[#0B1020] border-[#58A6FF]/50"
+    case "파일구조":
+      return "from-[#FFB547]/25 to-[#0B1020] border-[#FFB547]/50"
+    case "배포":
+      return "from-[#8B7BFF]/25 to-[#0B1020] border-[#8B7BFF]/50"
+    case "AI도구":
+      return "from-[#FF5D8F]/25 to-[#0B1020] border-[#FF5D8F]/50"
+    case "에러":
+      return "from-[#FF6B6B]/25 to-[#0B1020] border-[#FF6B6B]/50"
+  }
+}
+
+export function pickDailyGlossaryTerms(date: Date = new Date(), count = 3): GlossaryTerm[] {
+  const seed = getLocalDaySeed(date)
+  return [...glossaryTerms]
+    .sort((left, right) => seededTermScore(left.id, seed) - seededTermScore(right.id, seed))
+    .slice(0, Math.min(count, glossaryTerms.length))
+}
+
+function seededTermScore(termId: string, seed: number): number {
+  let hash = seed
+  for (const char of termId) {
+    hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0
+  }
+  return Math.abs(hash)
 }
 
 export const glossaryTerms: GlossaryTerm[] = [

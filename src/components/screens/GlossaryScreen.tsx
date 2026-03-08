@@ -1,13 +1,19 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 
 import { TopNav } from "@/components/TopNav"
 import { Toast } from "@/components/Toast"
-import { glossaryTerms, type GlossaryCategory } from "@/data/glossary"
+import { GlossaryCardGallery } from "@/components/GlossaryCardGallery"
+import { TodayGlossaryCards } from "@/components/TodayGlossaryCards"
+import { glossaryTerms, pickDailyGlossaryTerms, type GlossaryCategory, type GlossaryTerm } from "@/data/glossary"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
+import { parseLocalDateKey } from "@/lib/daily"
+import { GLOSSARY_FOCUS_TERM_KEY } from "@/lib/glossary-navigation"
+import { safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "@/lib/safe-storage"
+import { useLocalDateKey } from "@/lib/use-local-date-key"
 
 type Screen =
   | "home"
@@ -18,6 +24,7 @@ type Screen =
   | "login"
   | "register"
   | "explore"
+  | "showcase"
   | "challenges"
   | "about"
   | "playground"
@@ -39,6 +46,7 @@ const categories: Array<"전체" | GlossaryCategory> = [
 ]
 
 export function GlossaryScreen({ onNavigate }: ScreenProps) {
+  const localDateKey = useLocalDateKey()
   const [query, setQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<"전체" | GlossaryCategory>("전체")
   const [activeTermId, setActiveTermId] = useState<string | null>(null)
@@ -72,6 +80,32 @@ export function GlossaryScreen({ onNavigate }: ScreenProps) {
       )
     })
   }, [query, selectedCategory])
+
+  const dailyTerms = useMemo(() => pickDailyGlossaryTerms(parseLocalDateKey(localDateKey)), [localDateKey])
+  const galleryTerms = useMemo(() => glossaryTerms.slice(0, 9), [])
+
+  useEffect(() => {
+    const requested = safeLocalStorageGetItem(GLOSSARY_FOCUS_TERM_KEY)?.trim()
+    if (!requested) return
+
+    const matched = glossaryTerms.find((term) => term.term.toLowerCase() === requested.toLowerCase())
+    safeLocalStorageRemoveItem(GLOSSARY_FOCUS_TERM_KEY)
+    if (!matched) return
+
+    setSelectedCategory("전체")
+    setQuery(matched.term)
+    setActiveTermId(matched.id)
+    setToastTone("info")
+    setToastMessage(`${matched.term} 용어로 바로 이동했어요.`)
+  }, [])
+
+  const focusTerm = (term: GlossaryTerm) => {
+    setSelectedCategory("전체")
+    setQuery(term.term)
+    setActiveTermId(term.id)
+    setToastTone("info")
+    setToastMessage(`${term.term} 용어를 중심으로 보여드릴게요.`)
+  }
 
   const handleRelatedTermClick = (relatedTerm: string) => {
     const matched = glossaryTerms.find((term) => term.term.toLowerCase() === relatedTerm.toLowerCase())
@@ -121,6 +155,8 @@ export function GlossaryScreen({ onNavigate }: ScreenProps) {
       <TopNav active="glossary" onNavigate={onNavigate} />
 
       <main className="mx-auto w-full max-w-7xl px-4 py-8">
+        <TodayGlossaryCards terms={dailyTerms} onSelectTerm={focusTerm} ctaLabel="사전에서 보기" />
+
         <header className="mb-6 rounded-2xl border border-[#111936] bg-[#161F42] p-6">
           <h2 className="font-display text-3xl font-bold text-[#F4F7FF]">📚 바이브 용어사전</h2>
           <p className="mt-2 text-[#B8C3E6]">정의보다 비유로, 코알못도 바로 이해할 수 있게 정리했어요.</p>
@@ -148,6 +184,18 @@ export function GlossaryScreen({ onNavigate }: ScreenProps) {
             ))}
           </div>
         </header>
+
+        <section className="mb-6 rounded-2xl border border-[#111936] bg-[#161F42] p-6">
+          <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h3 className="font-display text-2xl font-bold text-[#F4F7FF]">🎴 실생활 비유 카드 갤러리</h3>
+              <p className="mt-1 text-[#B8C3E6]">검색하지 않고 구경하다가, 이해가 꽂히는 비유를 먼저 발견해보세요.</p>
+            </div>
+            <p className="text-xs uppercase tracking-[0.2em] text-[#8A96BE]">browse mode</p>
+          </div>
+
+          <GlossaryCardGallery terms={galleryTerms} onSelectTerm={focusTerm} />
+        </section>
 
         <section className="grid gap-4 md:grid-cols-2">
           {filteredTerms.map((term) => (
