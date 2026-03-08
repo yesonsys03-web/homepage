@@ -4418,3 +4418,351 @@ curl -X POST http://localhost:8000/api/auth/login \
 #### 다음 액션
 1. `curated_related_clicks` 집계 API + 관리자 대시보드 카드 추가
 2. 추천 이유 생성 규칙을 서버 측으로 이동해 일관성 강화
+
+## Session 2026-03-08-01
+
+### 1) Goal
+- `VIBE_01~03` 문서와 실제 코드 상태를 다시 맞춰 본 뒤, 최신 큐레이션 후속 작업으로 남아 있던 추천 랭킹 보강을 진행한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`, `docs/VIBE_02_playground.md`, `docs/VIBE_03_glossary.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 현재 상태 확인 결과:
+  - `VIBE_01`의 GitHub/Gemini 수집과 큐레이션 공개/관리자 화면은 이미 실제 코드에 연결돼 있음
+  - `curated_related_clicks` 로깅과 관리자 집계 화면도 코드에 이미 존재함
+  - 남아 있던 자연스러운 다음 단계는 수집한 추천 클릭 데이터를 실제 `/api/curated/{id}/related` 랭킹에 반영하는 것이었음
+
+### 3) Design Decisions
+- 추천 이유 배지 구조는 그대로 유지해 프론트 분석 화면과 클릭 로그 이유 코드 흐름을 깨지 않는다.
+- 클릭 반영은 최근 30일 집계만 사용하고, `log1p` 기반 capped boost를 적용해 특정 카드가 영구적으로 과대노출되지 않게 한다.
+- 검증은 backend endpoint 테스트를 먼저 추가하는 TDD 방식으로 진행한다.
+
+### 4) Implementation Notes
+- 백엔드
+  - `server/db.py`
+    - `get_curated_related_click_counts_for_source()` helper 추가
+    - source 기준 최근 N일 target별 클릭 수를 집계하도록 구현
+  - `server/main.py`
+    - 관련 추천 점수 계산에 `recent_click_count` 입력 추가
+    - 최근 클릭 수에 대해 `log1p` 기반 boost(상한 포함) 적용
+    - `/api/curated/{id}/related` 후보 수집 시 recent click count를 함께 주입
+- 테스트
+  - `server/tests/test_curated_related_api.py`
+    - 기존 사유 검증 테스트에서 click-count helper를 명시적으로 0으로 고정
+    - recent click boost가 랭킹 순서를 바꾸는 regression test 추가
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/db.py` 오류 없음
+  - `lsp_diagnostics`: `server/main.py` 신규 오류 없음(기존 warning 일부 유지)
+  - `lsp_diagnostics`: `server/tests/test_curated_related_api.py` 신규 오류 없음(기존 pytest monkeypatch warning 일부 유지)
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_curated_related_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- 이제 추천 클릭 데이터가 단순 운영 지표에 머무르지 않고 실제 추천 순위에 반영되어, 큐레이션 상세 탐색 흐름이 사용자의 선택 신호를 학습하기 시작했다.
+
+#### 아쉬운 점
+- 현재 boost 가중치는 휴리스틱 기반이라, 실제 운영 데이터가 쌓이면 기간/상한값을 다시 튜닝해야 한다.
+
+#### 다음 액션
+1. 추천 클릭 boost 가중치와 기간을 운영 설정에서 조절할 수 있게 확장한다.
+2. 추천 카드에 `인기 추천` 같은 설명 레이어를 추가할지 검토한다.
+
+## Session 2026-03-08-02
+
+### 1) Goal
+- 직전 세션에서 추천 클릭을 실제 랭킹 신호로 반영한 뒤 드러난 abuse risk를 낮춘다.
+
+### 2) Inputs
+- Oracle review 결과
+  - 공개 `/api/curated/related-clicks` 이벤트가 그대로 랭킹에 반영되어 스팸 클릭과 자기강화 루프 위험이 있음
+  - 최소한 dedupe 또는 rate limit이 우선 필요함
+- 기존 구현 패턴
+  - `server/main.py`에는 `_extract_client_ip()`와 `enforce_rate_limit()` 기반 공개 POST 보호 패턴이 이미 존재함
+
+### 3) Design Decisions
+- 새 저장소나 스케줄러를 추가하지 않고, 기존 in-memory `enforce_rate_limit()` 버킷을 그대로 재사용한다.
+- 보호는 2단으로 적용한다.
+  - 같은 IP의 burst 요청은 분당 제한
+  - 같은 IP가 같은 `source-target` 조합을 짧은 시간 안에 반복 클릭하면 저장하지 않고 dedupe
+- dedupe는 클라이언트 UX를 깨지 않도록 429 대신 `{"ok": true, "id": 0}`으로 응답한다.
+
+### 4) Implementation Notes
+- `server/main.py`
+  - `CURATED_RELATED_CLICK_IP_LIMIT_PER_MINUTE = 24`
+  - `CURATED_RELATED_CLICK_DEDUPE_WINDOW_SECONDS = 30.0`
+  - `/api/curated/related-clicks`에서 `client_ip` 추출 후 두 개의 rate-limit bucket 적용
+    - `curated_related_click_ip`
+    - `curated_related_click_pair`
+  - pair dedupe hit 시 저장 없이 성공 응답 반환
+- `server/tests/test_curated_related_api.py`
+  - 전역 rate-limit 버킷 오염을 막기 위해 관련 테스트 시작 시 `_RATE_LIMIT_BUCKETS.clear()` 호출
+  - 동일 IP/동일 pair 반복 클릭 dedupe test 추가
+  - 동일 IP burst 429 test 추가
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/main.py` 신규 오류 없음
+  - `lsp_diagnostics`: `server/tests/test_curated_related_api.py` 신규 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_curated_related_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- 이제 추천 클릭은 랭킹에 반영되더라도, 같은 IP의 짧은 반복 클릭으로 바로 수치가 부풀려지는 가장 쉬운 남용 경로는 차단된다.
+
+#### 아쉬운 점
+- 현재 dedupe/rate limit은 프로세스 메모리 기반이라 멀티 인스턴스 환경에서는 완전한 방어가 아니다.
+
+#### 다음 액션
+1. 인증 사용자 또는 더 긴 TTL 기준의 durable dedupe로 확장한다.
+2. click boost 적용 전에 heuristic eligibility gate를 넣어 관련성 하한을 보장한다.
+
+## Session 2026-03-08-03
+
+### 1) Goal
+- 추천 클릭 boost가 기본 관련성이 낮은 후보를 과도하게 밀어올리지 못하도록 eligibility gate를 추가한다.
+
+### 2) Inputs
+- 직전 상태
+  - recent click boost는 abuse resistance는 생겼지만, baseline relevance가 낮은 후보도 클릭만 많으면 상위로 올라올 수 있었음
+- Oracle recommendation
+  - boost는 최소한의 heuristic relevance gate 뒤에서만 적용하는 것이 강하게 권장됨
+
+### 3) Design Decisions
+- 응답 구조나 reason label은 바꾸지 않고, 오직 boost 적용 여부만 제어한다.
+- gate는 가장 작은 규칙으로 둔다.
+  - `relevance_score >= 6` 이면 boost 허용
+  - 또는 `tag overlap >= 1` 이면 boost 허용
+- 즉, 클릭은 기존 heuristic 관련성이 어느 정도 있는 후보만 가속시키고, 무관한 후보를 새로 발굴하는 신호로는 쓰지 않는다.
+
+### 4) Implementation Notes
+- `server/main.py`
+  - `CURATED_RELATED_CLICK_BOOST_MIN_RELEVANCE = 6`
+  - `CURATED_RELATED_CLICK_BOOST_MIN_TAG_OVERLAP = 1`
+  - `_build_curated_related_entry()` 내부에서 `click_boost_eligible` 계산 후, eligible일 때만 click boost 적용
+- `server/tests/test_curated_related_api.py`
+  - 기존 boost regression test는 유지
+  - low relevance + no tag overlap 후보가 클릭 수가 많아도 상위로 역전하지 못하는 test 추가
+  - freshness 영향으로 테스트가 흔들리지 않게 해당 케이스는 `github_pushed_at`, `collected_at`를 비워 zero freshness로 고정
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/main.py` 오류 없음
+  - `lsp_diagnostics`: `server/tests/test_curated_related_api.py` 오류 없음
+- 백엔드 테스트
+  - `cd server && uv run --group dev pytest tests/test_curated_related_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- 이제 추천 클릭은 기존 관련성이 있는 후보를 강화하는 역할에 머물고, 관계가 약한 후보를 클릭 수만으로 상단에 올리는 부작용은 줄었다.
+
+#### 아쉬운 점
+- relevance threshold는 아직 하드코딩 상수이므로 운영 데이터에 따라 다시 조정할 여지는 남아 있다.
+
+#### 다음 액션
+1. click boost threshold와 multiplier/cap을 운영 설정에서 조정 가능하게 확장한다.
+2. click-count query 실패 시 `{}`로 안전하게 폴백하도록 추가 방어를 넣는다.
+
+## Session 2026-03-08-04
+
+### 1) Goal
+- curated related click boost를 운영 정책에서 조정 가능하게 만들고, click-count 조회 실패가 추천 API 전체 실패로 번지지 않게 막는다.
+
+### 2) Inputs
+- 직전 상태
+  - click boost의 relevance gate와 abuse resistance는 반영됨
+  - 하지만 threshold/multiplier/cap은 하드코딩 상수였고, click-count lookup 실패 시 추천 API가 같이 실패할 수 있었음
+- 기존 패턴
+  - 운영 정책은 `moderation_settings` + `/api/admin/policies` + `get_effective_moderation_settings()` 흐름으로 관리되고 있었음
+
+### 3) Design Decisions
+- 새 설정 키는 기존 moderation policy 흐름에 포함한다.
+  - `curated_related_click_boost_min_relevance`
+  - `curated_related_click_boost_multiplier`
+  - `curated_related_click_boost_cap`
+- runtime 추천 로직은 이 정책 값을 읽되, 값이 없거나 비정상이면 기존 기본값으로 normalize한다.
+- click-count fallback은 가장 덜 침습적인 지점인 `server/db.py` helper에 넣어 모든 호출 지점이 자동으로 보호되게 한다.
+
+### 4) Implementation Notes
+- `server/db.py`
+  - `moderation_settings` 테이블과 migration path에 click-boost 3개 컬럼 추가
+  - `get_moderation_settings()`/`update_moderation_settings()` select/update/return 필드 확장
+  - `get_curated_related_click_counts_for_source()`에서 DB 예외 발생 시 `{}` 반환하도록 fallback 추가
+- `server/main.py`
+  - click-boost 기본값 상수 추가
+  - `AdminPolicyUpdateRequest`에 새 설정 3개 필드 추가
+  - `get_effective_moderation_settings()`와 baseline normalization 흐름에 새 설정 포함
+  - `/api/admin/policies` PATCH에서 새 설정을 normalize 후 저장
+  - related candidate scoring 시 `get_moderation_settings()`에서 runtime 정책을 읽어 threshold/multiplier/cap 적용
+- 테스트
+  - `server/tests/test_admin_policy_logs_api.py`: 정책 PATCH 응답/변경 로그에 새 필드 반영 검증 추가
+  - `server/tests/test_curated_related_api.py`
+    - runtime boost settings 반영 regression test 추가
+    - click-count lookup failure fallback test 추가
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `server/main.py`, `server/db.py`, `server/tests/test_curated_related_api.py`, `server/tests/test_admin_policy_logs_api.py` 확인
+- 테스트
+  - `cd server && uv run --group dev pytest tests/test_curated_related_api.py tests/test_admin_policy_logs_api.py`
+
+### 6) Outcome
+#### 잘된 점
+- 운영에서 click boost 민감도를 코드 수정 없이 조절할 수 있게 되었고, click-count 조회 장애가 생겨도 추천 API는 기본 heuristic 추천으로 계속 응답한다.
+
+#### 아쉬운 점
+- 현재 관리자 UI는 별도 후속 반영이 필요하며, 설정은 API 레벨에서는 준비되었지만 화면 입력까지 이어져야 완결된다.
+
+#### 다음 액션
+1. 관리자 정책 화면에 click boost 3개 필드를 추가한다.
+2. 관련 정책 변경 이력 요약 라벨도 UI에 함께 노출되도록 정리한다.
+
+## Session 2026-03-08-05
+
+### 1) Goal
+- Oracle이 지적한 마지막 UX/관측성 리스크를 줄인다.
+
+### 2) Inputs
+- Oracle review 결과
+  - 정책 저장 성공 후 history refetch가 저장 UX를 불필요하게 지연시킬 수 있음
+  - curated click-count fallback warning이 장애 시 요청마다 찍혀 로그 소음이 커질 수 있음
+
+### 3) Design Decisions
+- 정책 저장의 성공 기준은 PATCH 응답 수신과 서버 상태 재동기화로 본다.
+- 히스토리 refetch는 best-effort 보조 동작으로 낮추고, 실패해도 저장 성공 상태를 되돌리지 않는다.
+- fallback warning은 완전히 제거하지 않고 60초 단위 rate-limit를 걸어 관측성과 로그 소음 사이 균형을 맞춘다.
+
+### 4) Implementation Notes
+- `src/components/screens/admin/pages/AdminPolicies.tsx`
+  - `policyHistoryQuery.refetch()`를 `await`하지 않고 fire-and-forget + swallow 처리
+  - 따라서 저장 성공 후 폼 상태 반영은 즉시 끝나고, 히스토리 새로고침은 부수 효과로 동작
+- `server/main.py`
+  - `CURATED_RELATED_CLICK_FALLBACK_LOG_WINDOW_SECONDS = 60.0` 추가
+  - `_last_curated_related_click_fallback_warning_at` 전역 타임스탬프 추가
+  - click-count fallback warning은 60초에 한 번만 출력하도록 제한
+
+### 5) Validation
+- 프론트
+  - `pnpm exec vitest run "src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx"`
+- 백엔드
+  - `cd server && uv run --group dev pytest tests/test_curated_related_api.py tests/test_admin_policy_logs_api.py`
+- 정적 진단
+  - LSP diagnostics: `AdminPolicies.tsx`, `server/main.py` 오류 없음
+
+### 6) Outcome
+#### 잘된 점
+- 정책 저장 UX가 정책 히스토리 새로고침과 분리되어 더 안정적으로 보이게 되었고, fallback warning도 장애 시 로그 폭주를 덜 일으킨다.
+
+#### 아쉬운 점
+- fallback warning rate-limit는 프로세스 메모리 기반이라 멀티 인스턴스 환경에서는 인스턴스별로 따로 찍힌다.
+
+#### 다음 액션
+1. AdminPolicies 정수 입력값에 클라이언트 clamp/parse 정리를 추가한다.
+2. fallback warning을 structured logging/metrics로 연결할지 결정한다.
+
+## Session 2026-03-08-06
+
+### 1) Goal
+- Oracle이 지적한 policy history empty/error 혼동을 줄이고, VIBE 기획의 다음 큰 미완 항목인 `VIBE_02` 자랑 게시판 MVP를 현재 프로젝트 구조 위에 연다.
+
+### 2) Inputs
+- 현재 상태 확인 결과
+  - `VIBE_02`의 에러 응급실/레시피북은 이미 `PlaygroundScreen`에 구현되어 있음
+  - `VIBE_03`의 즉석 번역기/오늘의 용어/호버/카드 갤러리도 이미 실제 코드에 존재함
+  - 반면 `VIBE_02`의 전용 자랑 게시판 경험은 아직 없었고, `showcase_posts`나 clap 전용 모델도 없었음
+- 제약 조건
+  - 기존 `projects`/`submit`/`detail`/`like` 인프라를 재사용해 가장 얇은 MVP부터 열어야 함
+
+### 3) Design Decisions
+- 자랑 게시판 첫 MVP는 새 테이블을 바로 도입하지 않고, 기존 `projects` 인프라를 재사용한다.
+- 좋아요 수는 자랑 게시판 화면에서 `박수`라는 언어로 재해석해 `VIBE_02`의 감정 톤을 맞춘다.
+- 정책 화면은 history query의 `loading/error/empty`를 분리해 운영자가 상태를 오해하지 않게 만든다.
+
+### 4) Implementation Notes
+- 프론트 안정화
+  - `src/components/screens/admin/pages/AdminPolicies.tsx`
+    - policy history 패널에 `isError`/`isLoading`/`empty` 상태 분기 추가
+    - 저장 후 history refetch 실패는 `console.warn`으로만 남기고 화면 저장 성공과 분리
+  - `src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx`
+    - history query 실패 시 empty state 대신 error 문구가 보이는지 검증 추가
+- `VIBE_02` 자랑 게시판 MVP
+  - 신규: `src/components/screens/ShowcaseScreen.tsx`
+    - 전용 hero/copy, sort toggle, empty state, CTA(`자랑하기`), 카드 내 `박수` 표현 추가
+    - 데이터는 기존 `api.getProjects()`를 재사용
+    - 상세 이동은 기존 `onOpenProject` 흐름 재사용
+  - `src/components/TopNav.tsx`
+    - `Showcase` 항목 추가
+  - `src/App.tsx`
+    - `showcase` screen/route/meta 추가 (`/showcase`)
+  - 신규 테스트: `src/components/screens/ShowcaseScreen.test.tsx`
+    - 카드 렌더/CTA/상세 이동 검증
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `src/App.tsx`, `src/components/TopNav.tsx`, `src/components/screens/ShowcaseScreen.tsx`, `src/components/screens/ShowcaseScreen.test.tsx`, `src/components/screens/admin/pages/AdminPolicies.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run "src/components/screens/ShowcaseScreen.test.tsx" "src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx"`
+
+### 6) Outcome
+#### 잘된 점
+- `VIBE_02`에서 오래 비어 있던 자랑 게시판 경험을 새 백엔드 없이도 실제 화면/라우트로 열었다.
+- 운영자 입장에서는 policy history 실패가 더 이상 "기록 없음"처럼 보이지 않게 됐다.
+
+#### 아쉬운 점
+- 현재 자랑 게시판은 기존 `projects`를 재해석한 MVP라, 전용 clap/bookmark/badge/xp 모델은 아직 없다.
+
+#### 다음 액션
+1. 자랑 게시판 전용 CTA에서 `submit` 폼 카피를 showcase 맥락에 맞게 더 맞춘다.
+2. `VIBE_02`의 clap 전용 언어/상세 화면 경험을 기존 project detail에 일부 이어 붙일지 검토한다.
+
+## Session 2026-03-08-07
+
+### 1) Goal
+- Oracle 피드백을 반영해 `/showcase`를 실제로 `Explore`와 구분되는 board로 만들고, admin policy history가 stale data를 가진 상태에서는 refetch 실패로 전체 에러 화면처럼 보이지 않게 다듬는다.
+
+### 2) Inputs
+- Oracle review 결과
+  - `/showcase`가 현재는 `Explore` 재스킨에 가까워 보이므로, 기존 인프라 안에서라도 `showcase` 태그로 의미를 분리해야 함
+  - `AdminPolicies`는 cached history가 있어도 refetch failure 시 전체 error state처럼 보일 수 있음
+
+### 3) Design Decisions
+- 새 백엔드 없이 `projects.tags`의 기존 `tag` 필터를 사용해 showcase board를 분리한다.
+- `/showcase`에서 `자랑하기`를 누르면 localStorage context를 심고 `SubmitScreen`에서 `#showcase` 태그를 자동 prefill한다.
+- policy history는 쿼리 에러가 나더라도 기존 history 데이터가 있으면 계속 렌더하고, 상단에 stale warning만 노출한다.
+
+### 4) Implementation Notes
+- `src/components/screens/ShowcaseScreen.tsx`
+  - `api.getProjects({ sort, tag: "showcase" })`로 board 데이터 분리
+  - CTA 클릭 시 `SHOWCASE_SUBMIT_CONTEXT_KEY` 저장 후 `submit` 이동
+- 신규: `src/lib/showcase.ts`
+  - showcase submit handoff key 상수 추가
+- `src/components/screens/SubmitScreen.tsx`
+  - showcase context가 있으면 `#showcase` 태그 자동 추가
+  - 상단에 prefill 안내 배너 표시
+- `src/components/screens/admin/pages/AdminPolicies.tsx`
+  - history query error라도 cached `thresholdHistory`가 있으면 stale warning + 기존 목록 유지
+- 테스트
+  - `src/components/screens/ShowcaseScreen.test.tsx`
+    - showcase tag filtering 호출 및 submit context 저장 검증 추가
+  - 신규: `src/components/screens/SubmitScreen.test.tsx`
+    - showcase context로 들어오면 `#showcase` 태그가 자동 추가되는지 검증
+
+### 5) Validation
+- 정적 진단
+  - `lsp_diagnostics`: `ShowcaseScreen.tsx`, `ShowcaseScreen.test.tsx`, `SubmitScreen.tsx`, `SubmitScreen.test.tsx`, `AdminPolicies.tsx` 오류 없음
+- 프론트 테스트
+  - `pnpm exec vitest run "src/components/screens/ShowcaseScreen.test.tsx" "src/components/screens/SubmitScreen.test.tsx" "src/components/screens/admin/pages/AdminPolicies.log-policy.test.tsx"`
+
+### 6) Outcome
+#### 잘된 점
+- `/showcase`가 이제 실제로 `showcase` 태그 글만 모아 보여주는 board가 되었고, 자랑하기에서 그 컨텍스트가 submit까지 자연스럽게 이어진다.
+- 정책 히스토리는 stale data가 있을 때 transient refetch failure로 사라지지 않는다.
+
+#### 아쉬운 점
+- `Showcase`와 상세 화면의 반응 언어(`박수` vs 기존 like/heart)는 아직 완전히 통일되지 않았다.
+
+#### 다음 액션
+1. project detail/list 전반의 반응 언어를 `좋아요` 또는 `박수` 중 하나로 통일할지 결정한다.
+2. 자랑 게시판 전용 empty state를 채우기 위한 seed showcase 콘텐츠를 준비한다.
