@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { useQuery } from "@tanstack/react-query"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import { Link } from "react-router-dom"
 
 import { Button } from "@/components/ui/button"
@@ -7,6 +7,7 @@ import { api } from "@/lib/api"
 import { extractCuratedThresholdHistoryEntry } from "./policyHistory"
 
 export function AdminPolicies() {
+  const queryClient = useQueryClient()
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savingOauth, setSavingOauth] = useState(false)
@@ -23,14 +24,35 @@ export function AdminPolicies() {
   const [pageEditorRollbackRatioThreshold, setPageEditorRollbackRatioThreshold] = useState(0.3)
   const [pageEditorConflictRateThreshold, setPageEditorConflictRateThreshold] = useState(0.25)
   const [curatedReviewQualityThreshold, setCuratedReviewQualityThreshold] = useState(45)
+  const [curatedRelatedClickBoostMinRelevance, setCuratedRelatedClickBoostMinRelevance] = useState(6)
+  const [curatedRelatedClickBoostMultiplier, setCuratedRelatedClickBoostMultiplier] = useState(48)
+  const [curatedRelatedClickBoostCap, setCuratedRelatedClickBoostCap] = useState(180)
   const [oauthEnabled, setOauthEnabled] = useState(false)
   const [oauthGoogleRedirectUri, setOauthGoogleRedirectUri] = useState("")
   const [oauthFrontendRedirectUri, setOauthFrontendRedirectUri] = useState("")
   const [oauthHealthText, setOauthHealthText] = useState("확인 중")
   const policyHistoryQuery = useQuery({
     queryKey: ["admin-actions", "policy-threshold-history", "policies"],
-    queryFn: async () => api.getAdminActionLogs(8, { actionType: "policy_updated" }),
+    queryFn: async () => api.getAdminActionLogs(8, { actionType: "policy_updated" }, { force: true }),
   })
+
+  const applyPolicy = (policy: Awaited<ReturnType<typeof api.getAdminPolicies>>) => {
+    setBlockedKeywordsInput((policy.custom_blocked_keywords || []).join(", "))
+    setAutoHideThreshold(policy.auto_hide_report_threshold || 3)
+    setAdminLogRetentionDays(policy.admin_log_retention_days || 365)
+    setAdminLogViewWindowDays(policy.admin_log_view_window_days || 30)
+    setAdminLogMaskReasons(policy.admin_log_mask_reasons ?? true)
+    setPageEditorEnabled(policy.page_editor_enabled ?? true)
+    setPageEditorRolloutStage(policy.page_editor_rollout_stage ?? "qa")
+    setPageEditorPilotAdminIdsInput((policy.page_editor_pilot_admin_ids ?? []).join(", "))
+    setPageEditorPublishFailRateThreshold(policy.page_editor_publish_fail_rate_threshold ?? 0.2)
+    setPageEditorRollbackRatioThreshold(policy.page_editor_rollback_ratio_threshold ?? 0.3)
+    setPageEditorConflictRateThreshold(policy.page_editor_conflict_rate_threshold ?? 0.25)
+    setCuratedReviewQualityThreshold(policy.curated_review_quality_threshold ?? 45)
+    setCuratedRelatedClickBoostMinRelevance(policy.curated_related_click_boost_min_relevance ?? 6)
+    setCuratedRelatedClickBoostMultiplier(policy.curated_related_click_boost_multiplier ?? 48)
+    setCuratedRelatedClickBoostCap(policy.curated_related_click_boost_cap ?? 180)
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -42,20 +64,7 @@ export function AdminPolicies() {
           api.getAdminOAuthHealth(),
         ])
 
-        setBlockedKeywordsInput((policy.custom_blocked_keywords || []).join(", "))
-        setAutoHideThreshold(policy.auto_hide_report_threshold || 3)
-        setAdminLogRetentionDays(policy.admin_log_retention_days || 365)
-        setAdminLogViewWindowDays(policy.admin_log_view_window_days || 30)
-        setAdminLogMaskReasons(
-          policy.admin_log_mask_reasons ?? true,
-        )
-        setPageEditorEnabled(policy.page_editor_enabled ?? true)
-        setPageEditorRolloutStage(policy.page_editor_rollout_stage ?? "qa")
-        setPageEditorPilotAdminIdsInput((policy.page_editor_pilot_admin_ids ?? []).join(", "))
-        setPageEditorPublishFailRateThreshold(policy.page_editor_publish_fail_rate_threshold ?? 0.2)
-        setPageEditorRollbackRatioThreshold(policy.page_editor_rollback_ratio_threshold ?? 0.3)
-        setPageEditorConflictRateThreshold(policy.page_editor_conflict_rate_threshold ?? 0.25)
-        setCuratedReviewQualityThreshold(policy.curated_review_quality_threshold ?? 45)
+        applyPolicy(policy)
 
         setOauthEnabled(oauthSettings.google_oauth_enabled)
         setOauthGoogleRedirectUri(oauthSettings.google_redirect_uri || "")
@@ -81,7 +90,7 @@ export function AdminPolicies() {
 
     setSaving(true)
     try {
-      await api.updateAdminPolicies(
+      const savedPolicy = await api.updateAdminPolicies(
         keywords,
         autoHideThreshold,
         undefined,
@@ -96,7 +105,18 @@ export function AdminPolicies() {
         pageEditorRollbackRatioThreshold,
         pageEditorConflictRateThreshold,
         curatedReviewQualityThreshold,
+        curatedRelatedClickBoostMinRelevance,
+        curatedRelatedClickBoostMultiplier,
+        curatedRelatedClickBoostCap,
       )
+      applyPolicy(savedPolicy)
+      void api.getAdminActionLogs(8, { actionType: "policy_updated" }, { force: true })
+        .then((data) => {
+          queryClient.setQueryData(["admin-actions", "policy-threshold-history", "policies"], data)
+        })
+        .catch((error: unknown) => {
+          console.warn("admin policy history refresh failed", error)
+        })
     } finally {
       setSaving(false)
     }
@@ -267,29 +287,99 @@ export function AdminPolicies() {
               className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
             />
           </label>
+          <label className="block text-sm text-slate-300">
+            추천 클릭 최소 관련성(1~100)
+            <input
+              type="number"
+              min={1}
+              max={100}
+              step={1}
+              value={curatedRelatedClickBoostMinRelevance}
+              onChange={(event) => setCuratedRelatedClickBoostMinRelevance(Number(event.target.value) || 1)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+          <label className="block text-sm text-slate-300">
+            추천 클릭 multiplier(1~200)
+            <input
+              type="number"
+              min={1}
+              max={200}
+              step={1}
+              value={curatedRelatedClickBoostMultiplier}
+              onChange={(event) => setCuratedRelatedClickBoostMultiplier(Number(event.target.value) || 1)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
+          <label className="block text-sm text-slate-300">
+            추천 클릭 cap(1~500)
+            <input
+              type="number"
+              min={1}
+              max={500}
+              step={1}
+              value={curatedRelatedClickBoostCap}
+              onChange={(event) => setCuratedRelatedClickBoostCap(Number(event.target.value) || 1)}
+              className="mt-1 w-32 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-slate-100"
+            />
+          </label>
         </div>
         <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
           현재 설정 기준에서는 quality score가 <span className="font-semibold text-slate-50">{curatedReviewQualityThreshold}</span> 미만이면 `review_quality`로 분류됩니다.
         </div>
+        <div className="rounded-lg border border-slate-700 bg-slate-900/60 px-4 py-3 text-sm text-slate-300">
+          관련 추천 클릭 boost는 최소 관련성 <span className="font-semibold text-slate-50">{curatedRelatedClickBoostMinRelevance}</span>, multiplier <span className="font-semibold text-slate-50">{curatedRelatedClickBoostMultiplier}</span>, cap <span className="font-semibold text-slate-50">{curatedRelatedClickBoostCap}</span> 기준으로 적용됩니다.
+        </div>
         <div className="rounded-lg border border-slate-700 bg-slate-900/60 p-4">
           <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-400">최근 품질 기준 변경</p>
           <div className="mt-2 space-y-2 text-sm text-slate-300">
-            {thresholdHistory.length === 0 ? (
+            {policyHistoryQuery.isError ? (
+              thresholdHistory.length === 0 ? (
+                <p className="text-rose-300">정책 변경 이력을 불러오지 못했습니다.</p>
+              ) : (
+                <>
+                  <p className="text-xs text-rose-300">최신 이력 새로고침에 실패해서 이전 기록을 보여주고 있습니다.</p>
+                  {thresholdHistory.slice(0, 5).map((entry) => (
+                    <Link
+                      key={entry.id}
+                      to={`/admin/logs?actionType=policy_updated&query=${encodeURIComponent("curated_quality_threshold")}&targetLogId=${encodeURIComponent(entry.id)}`}
+                      className="flex items-center justify-between gap-3 rounded border border-slate-700 px-3 py-2 transition hover:border-slate-500 hover:bg-slate-950/60"
+                    >
+                      <span className="font-medium text-slate-100">
+                        Q {entry.threshold}
+                        {entry.previousThreshold !== null ? ` (${entry.previousThreshold} -> ${entry.threshold})` : ""}
+                      </span>
+                      <span className="text-xs text-slate-400">{entry.admin} · {entry.at}</span>
+                    </Link>
+                  ))}
+                </>
+              )
+            ) : policyHistoryQuery.isLoading ? (
+              <div className="space-y-2" aria-label="정책 이력 불러오는 중">
+                <div className="h-10 animate-pulse rounded border border-slate-700 bg-slate-950/60" />
+                <div className="h-10 animate-pulse rounded border border-slate-700 bg-slate-950/60" />
+              </div>
+            ) : thresholdHistory.length === 0 ? (
               <p className="text-slate-500">기록된 변경 이력이 없습니다.</p>
             ) : (
-              thresholdHistory.slice(0, 5).map((entry) => (
-                <Link
-                  key={entry.id}
-                  to={`/admin/logs?actionType=policy_updated&query=${encodeURIComponent("curated_quality_threshold")}&targetLogId=${encodeURIComponent(entry.id)}`}
-                  className="flex items-center justify-between gap-3 rounded border border-slate-700 px-3 py-2 transition hover:border-slate-500 hover:bg-slate-950/60"
-                >
-                  <span className="font-medium text-slate-100">
-                    Q {entry.threshold}
-                    {entry.previousThreshold !== null ? ` (${entry.previousThreshold} -> ${entry.threshold})` : ""}
-                  </span>
-                  <span className="text-xs text-slate-400">{entry.admin} · {entry.at}</span>
-                </Link>
-              ))
+              <>
+                {policyHistoryQuery.isFetching ? (
+                  <p className="text-xs text-slate-500">업데이트 중...</p>
+                ) : null}
+                {thresholdHistory.slice(0, 5).map((entry) => (
+                  <Link
+                    key={entry.id}
+                    to={`/admin/logs?actionType=policy_updated&query=${encodeURIComponent("curated_quality_threshold")}&targetLogId=${encodeURIComponent(entry.id)}`}
+                    className="flex items-center justify-between gap-3 rounded border border-slate-700 px-3 py-2 transition hover:border-slate-500 hover:bg-slate-950/60"
+                  >
+                    <span className="font-medium text-slate-100">
+                      Q {entry.threshold}
+                      {entry.previousThreshold !== null ? ` (${entry.previousThreshold} -> ${entry.threshold})` : ""}
+                    </span>
+                    <span className="text-xs text-slate-400">{entry.admin} · {entry.at}</span>
+                  </Link>
+                ))}
+              </>
             )}
           </div>
         </div>

@@ -446,6 +446,9 @@ export interface ModerationPolicy {
   page_editor_rollback_ratio_threshold: number
   page_editor_conflict_rate_threshold: number
   curated_review_quality_threshold: number
+  curated_related_click_boost_min_relevance: number
+  curated_related_click_boost_multiplier: number
+  curated_related_click_boost_cap: number
   updated_at: string
   last_updated_by?: string | null
   last_updated_by_id?: string | null
@@ -1379,6 +1382,11 @@ export const api = {
     )
   },
 
+  invalidateAdminTabCache: (tab: keyof typeof ADMIN_TAB_TTL_MS, params?: Record<string, string | number | undefined>) => {
+    const key = createAdminCacheKey(tab, params)
+    adminTabCache.delete(key)
+  },
+
   getAdminActionObservability: async (windowDays: number = 30) => {
     const params = new URLSearchParams({ window_days: String(windowDays) })
     const res = await authFetch(`${API_BASE}/api/admin/action-logs/observability?${params.toString()}`)
@@ -1623,6 +1631,9 @@ export const api = {
     page_editor_rollback_ratio_threshold?: number,
     page_editor_conflict_rate_threshold?: number,
     curated_review_quality_threshold?: number,
+    curated_related_click_boost_min_relevance?: number,
+    curated_related_click_boost_multiplier?: number,
+    curated_related_click_boost_cap?: number,
   ) => {
     const payload: {
       blocked_keywords: string[]
@@ -1639,6 +1650,9 @@ export const api = {
       page_editor_rollback_ratio_threshold?: number
       page_editor_conflict_rate_threshold?: number
       curated_review_quality_threshold?: number
+      curated_related_click_boost_min_relevance?: number
+      curated_related_click_boost_multiplier?: number
+      curated_related_click_boost_cap?: number
     } = {
       blocked_keywords,
       auto_hide_report_threshold,
@@ -1678,6 +1692,15 @@ export const api = {
     }
     if (typeof curated_review_quality_threshold === "number") {
       payload.curated_review_quality_threshold = curated_review_quality_threshold
+    }
+    if (typeof curated_related_click_boost_min_relevance === "number") {
+      payload.curated_related_click_boost_min_relevance = curated_related_click_boost_min_relevance
+    }
+    if (typeof curated_related_click_boost_multiplier === "number") {
+      payload.curated_related_click_boost_multiplier = curated_related_click_boost_multiplier
+    }
+    if (typeof curated_related_click_boost_cap === "number") {
+      payload.curated_related_click_boost_cap = curated_related_click_boost_cap
     }
 
     const res = await authFetch(`${API_BASE}/api/admin/policies`, {

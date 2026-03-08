@@ -13,6 +13,9 @@ const POLICY_FIELD_LABELS: Record<string, string> = {
   page_editor_rollback_ratio_threshold: "Rollback 비율",
   page_editor_conflict_rate_threshold: "충돌률",
   curated_review_quality_threshold: "품질 기준",
+  curated_related_click_boost_min_relevance: "추천 클릭 최소 관련성",
+  curated_related_click_boost_multiplier: "추천 클릭 multiplier",
+  curated_related_click_boost_cap: "추천 클릭 cap",
 }
 
 function getNumericChangeValue(change?: AdminPolicyFieldChange, key: "previous" | "next" = "next") {
