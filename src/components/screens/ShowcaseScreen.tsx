@@ -48,6 +48,9 @@ export function ShowcaseScreen({ onNavigate, onOpenProject }: ShowcaseScreenProp
   const [bookmarksLoading, setBookmarksLoading] = useState(false)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
   const [bookmarksReloadToken, setBookmarksReloadToken] = useState(0)
+  const [clapCounts, setClapCounts] = useState<Record<string, number>>({})
+  const [clappedIds, setClappedIds] = useState<Set<string>>(new Set())
+  const [clapLoadingIds, setClapLoadingIds] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     if (!toastMessage) return
@@ -152,6 +155,31 @@ export function ShowcaseScreen({ onNavigate, onOpenProject }: ShowcaseScreenProp
 
   const handleRetryBookmarks = () => {
     setBookmarksReloadToken((current) => current + 1)
+  }
+
+  const handleClap = async (projectId: string) => {
+    if (clappedIds.has(projectId) || clapLoadingIds.has(projectId)) return
+    setClapLoadingIds((prev) => new Set(prev).add(projectId))
+    try {
+      const result = await api.clapShowcaseProject(projectId)
+      setClapCounts((prev) => ({ ...prev, [projectId]: result.like_count }))
+      setClappedIds((prev) => new Set(prev).add(projectId))
+      setToastMessage("👏 박수를 보냈어요!")
+    } catch (error) {
+      const status = error instanceof ApiRequestError ? error.status : 0
+      if (status === 429) {
+        setClappedIds((prev) => new Set(prev).add(projectId))
+        setToastMessage("이미 박수를 쳤어요. 내일 다시 응원해 주세요.")
+      } else {
+        setToastMessage("박수를 보내지 못했어요. 다시 시도해 주세요.")
+      }
+    } finally {
+      setClapLoadingIds((prev) => {
+        const next = new Set(prev)
+        next.delete(projectId)
+        return next
+      })
+    }
   }
 
   return (
@@ -391,7 +419,22 @@ export function ShowcaseScreen({ onNavigate, onOpenProject }: ShowcaseScreenProp
                   </div>
 
                   <div className="flex items-center justify-between text-sm text-[#B8C3E6]">
-                    <span>👏 {project.like_count}명이 박수쳤어요</span>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        void handleClap(project.id)
+                      }}
+                      disabled={clappedIds.has(project.id) || clapLoadingIds.has(project.id)}
+                      className={`flex items-center gap-1 rounded-full border px-3 py-1 text-xs transition ${
+                        clappedIds.has(project.id)
+                          ? "border-[#23D5AB]/50 text-[#23D5AB] cursor-default"
+                          : "border-[#24335F] text-[#B8C3E6] hover:border-[#23D5AB] hover:text-[#23D5AB]"
+                      }`}
+                      aria-label={`${project.title} 박수치기`}
+                    >
+                      👏 {clapCounts[project.id] ?? project.like_count}명이 박수쳤어요
+                    </button>
                     <div className="flex items-center gap-3">
                       <span>💬 {project.comment_count}개의 반응</span>
                       <button

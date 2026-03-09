@@ -560,6 +560,8 @@ def init_db():
                 CREATE INDEX IF NOT EXISTS idx_page_document_versions_page_created_at
                 ON page_document_versions (page_id, created_at DESC)
             """)
+            cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_curated_content_status
                 ON curated_content (status)
@@ -575,6 +577,18 @@ def init_db():
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_curated_content_approved
                 ON curated_content (approved_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_title_trgm
+                ON curated_content USING gin (title gin_trgm_ops)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_curated_content_summary_trgm
+                ON curated_content USING gin (summary_beginner gin_trgm_ops)
+            """)
+            cur.execute("""
+                ALTER TABLE curated_content
+                ADD COLUMN IF NOT EXISTS is_maintenance_stopped BOOLEAN DEFAULT FALSE
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS idx_error_solutions_hash
@@ -976,6 +990,23 @@ def unlike_project(project_id: str, user_id: str):
             return result["like_count"] if result else 0
 
 
+def anon_clap_project(project_id: str) -> int:
+    """익명 박수: like_count만 증가 (중복 방지는 호출자가 책임)"""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                UPDATE projects SET like_count = like_count + 1
+                WHERE id = %s AND status = 'published'
+                RETURNING like_count
+                """,
+                (project_id,),
+            )
+            conn.commit()
+            result = cur.fetchone()
+            return result["like_count"] if result else 0
+
+
 def get_user_comments(user_id: str, limit: int = 50):
     with get_db_connection() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1111,6 +1142,42 @@ def get_reports_count(status: Optional[str] = None):
 
             result = cur.fetchone()
             return int(result["count"]) if result else 0
+
+
+def list_approved_curated_for_stars_refresh() -> list[dict[str, object]]:
+    """스타 수 갱신 대상: approved 상태의 id, repo_owner, repo_name."""
+    with get_db_connection() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                "SELECT id, repo_owner, repo_name FROM curated_content WHERE status = 'approved'"
+            )
+            return [dict(row) for row in (cur.fetchall() or [])]
+
+
+def bulk_update_curated_stars(updates: list[dict[str, object]]) -> None:
+    """스타 수, github_pushed_at, is_maintenance_stopped 일괄 업데이트."""
+    if not updates:
+        return
+    with get_db_connection() as conn:
+        with conn.cursor() as cur:
+            for item in updates:
+                cur.execute(
+                    """
+                    UPDATE curated_content
+                    SET stars = %s,
+                        github_pushed_at = %s,
+                        is_maintenance_stopped = %s,
+                        updated_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (
+                        item["stars"],
+                        item.get("github_pushed_at"),
+                        item.get("is_maintenance_stopped", False),
+                        item["id"],
+                    ),
+                )
+        conn.commit()
 
 
 def list_curated_content(

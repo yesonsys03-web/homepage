@@ -123,6 +123,13 @@ export const publicApi = {
     return result
   },
 
+  clapShowcaseProject: async (id: string) => {
+    const res = await authFetch(`${API_BASE}/api/showcase/${id}/clap`, { method: "POST" })
+    const result = (await res.json()) as { like_count: number; clapped: boolean }
+    invalidateProjectRelatedCaches(id)
+    return result
+  },
+
   getComments: async (
     projectId: string,
     sort: string = "latest",

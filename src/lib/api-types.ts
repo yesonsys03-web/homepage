@@ -67,6 +67,7 @@ export interface CuratedContent {
   github_pushed_at: string
   collected_at: string
   updated_at: string
+  is_maintenance_stopped?: boolean
 }
 
 export interface ErrorTranslateStep {

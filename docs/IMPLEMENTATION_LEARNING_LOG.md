@@ -42,6 +42,35 @@
 
 ## Sessions
 
+## Session 2026-03-09-01
+
+### 1) Goal
+- `docs/VIBE_01_github_content.md`, `docs/VIBE_02_playground.md`, `docs/VIBE_03_glossary.md`를 다시 대조해 남아 있는 MVP 어긋남을 줄이고, 새 작업은 `main.py`가 아닌 별도 파일 중심으로 정리한다.
+
+### 2) Inputs
+- 참고 문서: `docs/VIBE_01_github_content.md`, `docs/VIBE_02_playground.md`, `docs/VIBE_03_glossary.md`, `docs/IMPLEMENTATION_LEARNING_LOG.md`
+- 사용자 피드백/이슈: VIBE 문서를 검토해 미완료 작업을 이어서 진행해달라는 요청과 함께, 새 기능은 별도 파일로 분리해 달라는 구조 가이드가 추가됨.
+- 제약 조건: `server/main.py`에 기능을 계속 누적하지 않고 별도 데이터/컴포넌트 파일로 확장해야 함.
+
+### 3) Design Decisions
+- VIBE_03의 데이터 구조 요구사항에 맞춰 glossary를 하드코딩 TS 배열에서 `src/data/glossary.json` 기반으로 옮기고, 타입/헬퍼만 `src/data/glossary.ts`에 남긴다.
+- VIBE_02의 에러 응급실 체크리스트 중 누락돼 있던 에러 유형 시각 신호는 별도 UI 조각 파일로 추가해 Playground 화면을 가볍게 확장한다.
+
+### 4) Implementation Notes
+- 프론트(v0): `src/data/glossary.json`을 추가하고 `src/data/glossary.ts`를 JSON 로더 + 타입/헬퍼 래퍼 구조로 재작성했다.
+- 프론트(v0): `src/components/playground/ErrorTypeBadge.tsx`를 추가하고 `PlaygroundScreen`의 에러 번역 결과/샘플 응답에 에러 유형 배지를 연결했다.
+- 프론트(v0): `PlaygroundScreen.test.tsx`에 `pnpm` 에러 유형 배지 렌더링 테스트를 추가했다.
+- 설정 영향: JSON 데이터 import를 위해 `tsconfig.app.json`에 `resolveJsonModule`을 추가했다.
+
+### 5) Validation
+- 확인 항목: glossary JSON import 호환성, Playground 에러 배지 렌더링, 타입 진단, 프론트 테스트/빌드 회귀
+- 테스트/검증 결과: 진행 중 — LSP diagnostics, Vitest, TypeScript build 순으로 재검증 예정
+
+### 6) Outcome
+- 잘된 점: 문서가 요구한 데이터 파일 구조와 UI 미완료 포인트를 모두 별도 파일 확장 방식으로 맞출 수 있게 됐다.
+- 아쉬운 점: VIBE 문서 전체 로드맵은 범위가 넓어서 이번 세션에서는 명확한 MVP 어긋남부터 우선 정리했다.
+- 다음 액션: 남은 검증을 통과시키고, 이어서 VIBE_01/02의 부분 구현 항목 중 운영상 가치가 큰 다음 슬라이스를 선택한다.
+
 ## Session 2026-03-07-03
 
 ### 1) Goal

@@ -46,6 +46,7 @@ from db import (
     create_project,
     like_project,
     unlike_project,
+    anon_clap_project,
     get_comments,
     create_comment,
     report_comment,
@@ -230,7 +231,9 @@ try:
         SYSTEM_ADMIN_USER_ID,
         TEXT_TRANSLATE_IP_LIMIT_PER_MINUTE,
         BASELINE_BLOCKED_KEYWORD_CATEGORIES,
+        STARS_REFRESH_INTERVAL_SECONDS,
     )
+    from stars_refresher import refresh_stars_for_approved_content as _refresh_stars
     from api_models import (
         AboutContentUpdateRequest,
         AboutFaqItem,
@@ -311,8 +314,10 @@ try:
     from curated_runtime import (
         get_curated_collection_task,
         get_last_curated_related_click_fallback_warning_at,
+        get_stars_refresh_task,
         set_curated_collection_task,
         set_last_curated_related_click_fallback_warning_at,
+        set_stars_refresh_task,
     )
     from curated_settings import (
         curated_moderation_settings_changed,
@@ -348,6 +353,7 @@ try:
     from curated_routes import register_curated_routes
     from curated_service import bind_curated_service
     from public_api_routes import register_public_api_routes
+    from showcase_clap_routes import register_showcase_clap_routes
     from translation_routes import register_translation_routes
 except ImportError:
     from .about_content_service import (
@@ -403,7 +409,9 @@ except ImportError:
         SYSTEM_ADMIN_USER_ID,
         TEXT_TRANSLATE_IP_LIMIT_PER_MINUTE,
         BASELINE_BLOCKED_KEYWORD_CATEGORIES,
+        STARS_REFRESH_INTERVAL_SECONDS,
     )
+    from .stars_refresher import refresh_stars_for_approved_content as _refresh_stars
     from .api_models import (
         AboutContentUpdateRequest,
         AboutFaqItem,
@@ -484,8 +492,10 @@ except ImportError:
     from .curated_runtime import (
         get_curated_collection_task,
         get_last_curated_related_click_fallback_warning_at,
+        get_stars_refresh_task,
         set_curated_collection_task,
         set_last_curated_related_click_fallback_warning_at,
+        set_stars_refresh_task,
     )
     from .curated_settings import (
         curated_moderation_settings_changed,
@@ -521,6 +531,7 @@ except ImportError:
     from .curated_routes import register_curated_routes
     from .curated_service import bind_curated_service
     from .public_api_routes import register_public_api_routes
+    from .showcase_clap_routes import register_showcase_clap_routes
     from .translation_routes import register_translation_routes
 
 logger = logging.getLogger(__name__)
@@ -1458,6 +1469,20 @@ async def run_admin_log_cleanup_loop() -> None:
         await asyncio.sleep(ADMIN_LOG_CLEANUP_INTERVAL_SECONDS)
 
 
+async def run_stars_refresh_iteration() -> None:
+    try:
+        result = await asyncio.get_event_loop().run_in_executor(
+            None, _refresh_stars, GITHUB_TOKEN
+        )
+        print(
+            f"[stars-refresh] updated={result.get('updated')} "
+            f"skipped={result.get('skipped')} "
+            f"maintenance_stopped={result.get('maintenance_stopped')}"
+        )
+    except Exception as error:
+        print(f"[stars-refresh] error: {error}")
+
+
 async def run_curated_collection_scheduler_iteration() -> None:
     try:
         result = perform_curated_collection_run(allow_sample_fallback=False)
@@ -1521,6 +1546,16 @@ async def _startup_event_impl() -> None:
                     )
                 )
             )
+        stars_refresh_task = get_stars_refresh_task()
+        if GITHUB_TOKEN and (stars_refresh_task is None or stars_refresh_task.done()):
+            set_stars_refresh_task(
+                asyncio.create_task(
+                    run_periodic_async_loop(
+                        interval_seconds=STARS_REFRESH_INTERVAL_SECONDS,
+                        callback=run_stars_refresh_iteration,
+                    )
+                )
+            )
     except Exception as e:
         print(f"⚠️  DB initialization warning: {e}")
 
@@ -1529,6 +1564,8 @@ async def _shutdown_event_impl() -> None:
     global _admin_log_cleanup_task
     await cancel_background_task(get_curated_collection_task())
     set_curated_collection_task(None)
+    await cancel_background_task(get_stars_refresh_task())
+    set_stars_refresh_task(None)
     await cancel_background_task(_admin_log_cleanup_task)
     _admin_log_cleanup_task = None
 
@@ -1740,6 +1777,7 @@ register_curated_routes(
     CuratedAdminUpdateRequest,
     CuratedRelatedClickCreate,
 )
+register_showcase_clap_routes(app, sys.modules[__name__])
 register_translation_routes(
     app,
     sys.modules[__name__],

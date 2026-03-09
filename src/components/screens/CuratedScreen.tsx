@@ -45,6 +45,11 @@ function CuratedCard({
       onClick={() => onOpenCurated?.(item.id)}
     >
       {item.is_korean_dev && <StickerBadge type="new" />}
+      {item.is_maintenance_stopped && (
+        <span className="absolute top-2 left-2 z-10 rounded px-2 py-0.5 text-[10px] font-semibold bg-[#2A1320] text-[#FF6B6B] border border-[#FF6B6B]/40">
+          유지보수 중단
+        </span>
+      )}
       <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center overflow-hidden">
         {item.thumbnail_url ? (
           <img
@@ -84,9 +89,15 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [query, setQuery] = useState("")
+  const [debouncedQuery, setDebouncedQuery] = useState("")
   const [category, setCategory] = useState("all")
   const [koreanOnly, setKoreanOnly] = useState(false)
   const [sort, setSort] = useState<"latest" | "quality">("latest")
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 300)
+    return () => clearTimeout(timer)
+  }, [query])
 
   useEffect(() => {
     const fetchCurated = async () => {
@@ -95,7 +106,7 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
       try {
         const response = await api.getCuratedContent({
           category: category === "all" ? undefined : category,
-          search: query.trim() || undefined,
+          search: debouncedQuery.trim() || undefined,
           is_korean_dev: koreanOnly ? true : undefined,
           sort,
           limit: 60,
@@ -112,7 +123,7 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
     }
 
     void fetchCurated()
-  }, [category, koreanOnly, query, sort])
+  }, [category, koreanOnly, debouncedQuery, sort])
 
   const categories = useMemo(() => {
     const values = new Set<string>()

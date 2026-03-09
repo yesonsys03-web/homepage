@@ -1,6 +1,26 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+
+def iter_env_candidates() -> tuple[Path, ...]:
+    server_dir = Path(__file__).resolve().parent
+    return (
+        server_dir / ".env",
+        server_dir.parent / ".env",
+    )
+
+
+def _load_env_files() -> None:
+    for env_path in iter_env_candidates():
+        if env_path.exists():
+            _ = load_dotenv(env_path, override=False)
+
+
+_load_env_files()
 
 PROFILE_NICKNAME_MIN_LEN = 2
 PROFILE_NICKNAME_MAX_LEN = 24
@@ -61,6 +81,9 @@ GEMINI_MODEL = (
 )
 GITHUB_README_EXCERPT_MAX_CHARS = int(
     os.getenv("GITHUB_README_EXCERPT_MAX_CHARS", "4000")
+)
+STARS_REFRESH_INTERVAL_SECONDS = int(
+    os.getenv("STARS_REFRESH_INTERVAL_SECONDS", str(7 * 24 * 3600))
 )
 
 BASELINE_BLOCKED_KEYWORD_CATEGORIES: dict[str, list[str]] = {
