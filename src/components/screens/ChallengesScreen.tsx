@@ -4,17 +4,15 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { TodayGlossaryChallengeCard } from "@/components/TodayGlossaryChallengeCard"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { type GlossaryTerm } from "@/data/glossary"
 import { parseLocalDateKey } from "@/lib/daily"
 import { setGlossaryFocusTerm } from "@/lib/glossary-navigation"
 import { safeLocalStorageGetItem, safeLocalStorageSetItem } from "@/lib/safe-storage"
 import { useLocalDateKey } from "@/lib/use-local-date-key"
 
-type Screen = "home" | "detail" | "submit" | "profile" | "admin" | "login" | "register" | "explore" | "showcase" | "playground" | "glossary" | "curated" | "challenges" | "about"
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
 }
 
 export function getDailyChallengeProgressBaseline(

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Toast } from "@/components/Toast"
 import { GlossaryHighlightedText } from "@/components/GlossaryHighlightedText"
 import { GlossaryHoverTerm } from "@/components/GlossaryHoverTerm"
@@ -13,24 +13,8 @@ import { api, type ErrorTranslateResponse, type TextTranslateResponse } from "@/
 import { setGlossaryFocusTerm } from "@/lib/glossary-navigation"
 import { findGlossaryTerm } from "@/lib/glossary-text"
 
-type Screen =
-  | "home"
-  | "detail"
-  | "submit"
-  | "profile"
-  | "admin"
-  | "login"
-  | "register"
-  | "explore"
-  | "showcase"
-  | "challenges"
-  | "about"
-  | "playground"
-  | "glossary"
-  | "curated"
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
 }
 
 const RECIPE_FAVORITES_KEY = "vibecoder_recipe_favorites"

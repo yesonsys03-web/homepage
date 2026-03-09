@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react"
 
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Toast } from "@/components/Toast"
 import { GlossaryCardGallery } from "@/components/GlossaryCardGallery"
 import { TodayGlossaryCards } from "@/components/TodayGlossaryCards"
@@ -15,24 +15,8 @@ import { GLOSSARY_FOCUS_TERM_KEY } from "@/lib/glossary-navigation"
 import { safeLocalStorageGetItem, safeLocalStorageRemoveItem } from "@/lib/safe-storage"
 import { useLocalDateKey } from "@/lib/use-local-date-key"
 
-type Screen =
-  | "home"
-  | "detail"
-  | "submit"
-  | "profile"
-  | "admin"
-  | "login"
-  | "register"
-  | "explore"
-  | "showcase"
-  | "challenges"
-  | "about"
-  | "playground"
-  | "glossary"
-  | "curated"
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
 }
 
 const categories: Array<"전체" | GlossaryCategory> = [

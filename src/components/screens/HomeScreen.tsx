@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { LogoSplitHeading } from "@/components/LogoSplitHeading"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { HeroBanner } from "@/components/HeroBanner"
 import { TodayGlossaryCards } from "@/components/TodayGlossaryCards"
 import { FilterChips } from "@/components/FilterChips"
@@ -14,10 +14,8 @@ import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
 import heroMobileImage from "../../../img/master_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
-
 interface HomeScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   onOpenProject?: (projectId: string) => void
 }
 

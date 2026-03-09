@@ -4,16 +4,14 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { api, type Project } from "@/lib/api"
 import { isAdminRole } from "@/lib/roles"
 import { buildShowcasePrefillTags, consumeShowcaseSubmitContext, hasShowcaseTag } from "@/lib/showcase"
 import { useAuth } from "@/lib/use-auth"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   editingProjectId?: string
 }
 

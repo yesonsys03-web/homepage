@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Toast } from "@/components/Toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -13,10 +13,8 @@ import {
   writeShowcaseBookmarks,
 } from "@/lib/showcase"
 
-type Screen = "home" | "detail" | "submit" | "profile" | "admin" | "login" | "register" | "explore" | "showcase" | "playground" | "glossary" | "curated" | "challenges" | "about"
-
 interface ShowcaseScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   onOpenProject?: (projectId: string) => void
 }
 

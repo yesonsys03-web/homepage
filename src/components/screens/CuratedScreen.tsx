@@ -2,28 +2,13 @@ import { useEffect, useMemo, useState, type CSSProperties } from "react"
 
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { ProjectMeta } from "@/components/ProjectMeta"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { api, type CuratedContent } from "@/lib/api"
 
-type Screen =
-  | "home"
-  | "detail"
-  | "submit"
-  | "profile"
-  | "admin"
-  | "login"
-  | "register"
-  | "explore"
-  | "playground"
-  | "glossary"
-  | "curated"
-  | "challenges"
-  | "about"
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   onOpenCurated?: (contentId: number) => void
 }
 

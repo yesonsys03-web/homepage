@@ -2,17 +2,15 @@ import { useEffect, useMemo, useState } from "react"
 import { Helmet } from "react-helmet-async"
 
 import { Button } from "@/components/ui/button"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { HeroBanner } from "@/components/HeroBanner"
 import { api, type AboutContent } from "@/lib/api"
 import aboutMasterImage from "../../../img/About_master.webp"
 import aboutTabletImage from "../../../img/About_tablet.webp"
 import aboutMobileImage from "../../../img/About_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
 }
 
 const ABOUT_FALLBACK_CONTENT: AboutContent = {

@@ -1,18 +1,16 @@
 import { useEffect, useState } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { FilterChips } from "@/components/FilterChips"
 import { ProjectMeta } from "@/components/ProjectMeta"
 import { Button } from "@/components/ui/button"
 import { api, type FilterTab, type Project } from "@/lib/api"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'showcase' | 'playground' | 'glossary' | 'curated' | 'challenges' | 'about'
-
 const HOT_PROJECT_THRESHOLD = 30
 
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   onOpenProject?: (projectId: string) => void
 }
 

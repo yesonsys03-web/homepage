@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom"
 import { GlossaryHighlightedText } from "@/components/GlossaryHighlightedText"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { Toast } from "@/components/Toast"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -13,24 +13,8 @@ import { type GlossaryTerm } from "@/data/glossary"
 import { api, type CuratedContent, type CuratedRelatedRecommendation } from "@/lib/api"
 import { setGlossaryFocusTerm } from "@/lib/glossary-navigation"
 
-type Screen =
-  | "home"
-  | "detail"
-  | "submit"
-  | "profile"
-  | "admin"
-  | "login"
-  | "register"
-  | "explore"
-  | "showcase"
-  | "playground"
-  | "glossary"
-  | "curated"
-  | "challenges"
-  | "about"
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
 }
 
 export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
