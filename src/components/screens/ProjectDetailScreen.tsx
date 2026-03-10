@@ -11,6 +11,7 @@ import { CommentList } from "@/components/CommentList"
 import { ReportModal } from "@/components/ReportModal"
 import { Toast } from "@/components/Toast"
 import { api, type Project, type Comment } from "@/lib/api"
+import { awardXpWithNotify } from "@/lib/use-xp-award"
 import { isAdminRole } from "@/lib/roles"
 import {
   hasShowcaseTag,
@@ -148,6 +149,10 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
     try {
       const createdComment = await api.createComment(project.id, content)
+      void awardXpWithNotify("comment_create", createdComment.id, (msg, tone) => {
+        setToastTone(tone ?? "info")
+        setToastMessage(msg)
+      })
       setComments((prev) =>
         prev.map((existing) =>
           existing.id === optimisticComment.id ? createdComment : existing

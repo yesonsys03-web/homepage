@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { glossaryCategoryTone, pickDailyGlossaryTerms, type GlossaryTerm } from "@/data/glossary"
 import { parseLocalDateKey } from "@/lib/daily"
+import { api } from "@/lib/api"
 import { safeLocalStorageGetItem, safeLocalStorageSetItem } from "@/lib/safe-storage"
 import { useLocalDateKey } from "@/lib/use-local-date-key"
 
@@ -117,6 +118,7 @@ export function TodayGlossaryChallengeCard({ onSelectTerm }: TodayGlossaryChalle
       const nextXp = currentXp + 5
       setEarnedXp(nextXp)
       writeDailyGlossaryXp(nextXp)
+      api.awardXp("glossary_read", `${todayTerm.id}_${dateKey}`).catch(() => undefined)
     }
   }
 
@@ -137,6 +139,7 @@ export function TodayGlossaryChallengeCard({ onSelectTerm }: TodayGlossaryChalle
       const nextXp = currentXp + 10
       setEarnedXp(nextXp)
       writeDailyGlossaryXp(nextXp)
+      api.awardXp("glossary_quiz_correct", `${todayTerm.id}_${dateKey}`).catch(() => undefined)
     }
   }
 

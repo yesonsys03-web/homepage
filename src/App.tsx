@@ -112,6 +112,11 @@ const AdminManual = lazy(async () => {
   return { default: module.AdminManual }
 })
 
+const AdminLaunchpadTips = lazy(async () => {
+  const module = await import('./components/screens/admin/pages/AdminLaunchpadTips')
+  return { default: module.AdminLaunchpadTips }
+})
+
 const ExploreScreen = lazy(async () => {
   const module = await import('./components/screens/ExploreScreen')
   return { default: module.ExploreScreen }
@@ -627,6 +632,7 @@ function AppContent() {
               <Route path="content" element={<AdminContent />} />
               <Route path="curated" element={<AdminCurated />} />
               <Route path="curated/analytics" element={<AdminCuratedAnalytics />} />
+              <Route path="launchpad" element={<AdminLaunchpadTips />} />
               <Route path="reports" element={<AdminReports />} />
               <Route path="pages" element={<AdminPages />} />
               <Route path="policies" element={<AdminPolicies />} />

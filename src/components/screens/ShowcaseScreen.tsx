@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { ApiRequestError, api, type Project } from "@/lib/api"
+import { awardXpWithNotify } from "@/lib/use-xp-award"
 import {
   readShowcaseBookmarks,
   setShowcaseSubmitContext,
@@ -165,6 +166,12 @@ export function ShowcaseScreen({ onNavigate, onOpenProject }: ShowcaseScreenProp
       setClapCounts((prev) => ({ ...prev, [projectId]: result.like_count }))
       setClappedIds((prev) => new Set(prev).add(projectId))
       setToastMessage("👏 박수를 보냈어요!")
+      void awardXpWithNotify("clap_given", projectId, (msg, _tone) => {
+        // only notify on level-up or badge (skip minor XP toast)
+        if (msg.startsWith("🎉") || msg.startsWith("🏅")) {
+          setToastMessage(msg)
+        }
+      })
     } catch (error) {
       const status = error instanceof ApiRequestError ? error.status : 0
       if (status === 429) {

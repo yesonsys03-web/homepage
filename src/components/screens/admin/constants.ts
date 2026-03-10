@@ -3,6 +3,7 @@ export type AdminRouteKey =
   | "users"
   | "content"
   | "curated"
+  | "launchpad"
   | "reports"
   | "pages"
   | "policies"
@@ -14,6 +15,7 @@ export const ADMIN_ROUTE_META: Record<AdminRouteKey, { label: string; path: stri
   users: { label: "사용자", path: "/admin/users" },
   content: { label: "콘텐츠", path: "/admin/content" },
   curated: { label: "큐레이션", path: "/admin/curated" },
+  launchpad: { label: "런치패드 팁", path: "/admin/launchpad" },
   reports: { label: "신고", path: "/admin/reports" },
   pages: { label: "페이지", path: "/admin/pages" },
   policies: { label: "정책", path: "/admin/policies" },

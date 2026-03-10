@@ -136,7 +136,8 @@ export function SubmitScreen({ onNavigate, editingProjectId }: ScreenProps) {
         alert("작품이 수정되었습니다!")
         onNavigate?.("detail")
       } else {
-        await api.createProject(payload)
+        const created = await api.createProject(payload)
+        api.awardXp("showcase_first_post", created.id).catch(() => undefined)
         alert("작품이 등록되었습니다!")
         setFormData({
           title: "",

@@ -4,6 +4,7 @@ import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Toast } from "@/components/Toast"
 import { GlossaryCardGallery } from "@/components/GlossaryCardGallery"
 import { TodayGlossaryCards } from "@/components/TodayGlossaryCards"
+import { LaunchpadTab } from "@/components/screens/launchpad/LaunchpadTab"
 import { glossaryTerms, pickDailyGlossaryTerms, type GlossaryCategory, type GlossaryTerm } from "@/data/glossary"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -29,8 +30,11 @@ const categories: Array<"전체" | GlossaryCategory> = [
   "에러",
 ]
 
+type MainTab = "glossary" | "launchpad"
+
 export function GlossaryScreen({ onNavigate }: ScreenProps) {
   const localDateKey = useLocalDateKey()
+  const [activeMainTab, setActiveMainTab] = useState<MainTab>("glossary")
   const [query, setQuery] = useState("")
   const [selectedCategory, setSelectedCategory] = useState<"전체" | GlossaryCategory>("전체")
   const [activeTermId, setActiveTermId] = useState<string | null>(null)
@@ -139,6 +143,32 @@ export function GlossaryScreen({ onNavigate }: ScreenProps) {
       <TopNav active="glossary" onNavigate={onNavigate} />
 
       <main className="mx-auto w-full max-w-7xl px-4 py-8">
+        {/* Main tab switcher */}
+        <div className="mb-6 flex gap-3">
+          <button
+            type="button"
+            onClick={() => setActiveMainTab("glossary")}
+            className={`rounded-xl border px-5 py-2.5 text-sm font-semibold transition-colors
+              ${activeMainTab === "glossary"
+                ? "border-[#23D5AB] bg-[#23D5AB]/15 text-[#23D5AB]"
+                : "border-[#1B2854] bg-[#111936] text-[#B8C3E6] hover:border-[#23D5AB]/40"}`}
+          >
+            📚 용어사전
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveMainTab("launchpad")}
+            className={`rounded-xl border px-5 py-2.5 text-sm font-semibold transition-colors
+              ${activeMainTab === "launchpad"
+                ? "border-[#23D5AB] bg-[#23D5AB]/15 text-[#23D5AB]"
+                : "border-[#1B2854] bg-[#111936] text-[#B8C3E6] hover:border-[#23D5AB]/40"}`}
+          >
+            🚀 런치패드
+          </button>
+        </div>
+
+        {activeMainTab === "launchpad" && <LaunchpadTab />}
+        {activeMainTab === "glossary" && <>
         <TodayGlossaryCards terms={dailyTerms} onSelectTerm={focusTerm} ctaLabel="사전에서 보기" />
 
         <header className="mb-6 rounded-2xl border border-[#111936] bg-[#161F42] p-6">
@@ -253,6 +283,7 @@ export function GlossaryScreen({ onNavigate }: ScreenProps) {
             </Button>
           </div>
         </section>
+        </>}
       </main>
       {toastMessage ? <Toast message={toastMessage} tone={toastTone} /> : null}
     </div>

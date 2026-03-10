@@ -98,6 +98,28 @@ export interface TextTranslateResponse {
   source: "cache" | "fallback" | string
 }
 
+export interface XpBadge {
+  badge_code: string
+  description: string
+  awarded_at: string
+}
+
+export interface XpSummary {
+  total_xp: number
+  level: number
+  xp_to_next: number | null
+  badges: XpBadge[]
+}
+
+export interface XpAwardResult {
+  awarded: boolean
+  xp_delta: number
+  total_xp: number
+  level: number
+  level_up: boolean
+  new_badges: string[]
+}
+
 export interface GlossaryTermRequestResponse {
   id: number
   requested_term: string
@@ -573,10 +595,41 @@ export interface AdminStats {
   weekly_trend: AdminWeeklyTrendPoint[]
 }
 
+export interface LaunchpadTip {
+  id: number
+  source_url: string
+  platform: string
+  author_handle: string | null
+  og_title: string
+  og_image_url: string | null
+  description_kr: string
+  tool_tags: string[]
+  topic_tags: string[]
+  is_link_valid: boolean
+  created_at: string
+}
+
+export interface LaunchpadTipPreview {
+  platform: string
+  author_handle: string
+  og_title: string
+  og_image_url: string | null
+  description_kr: string
+  tool_tags: string[]
+  topic_tags: string[]
+}
+
+export interface ErrorClinicResult {
+  diagnosis: string
+  solution: string
+  commands: string[]
+}
+
 export type AdminReportsResponse = { items: Report[]; total: number }
 export type AdminListResponse<T> = { items: T[] }
 export type ProjectsResponse = { items: Project[] }
 export type CuratedContentResponse = { items: CuratedContent[]; total?: number }
+export type LaunchpadTipsResponse = { items: LaunchpadTip[]; total: number }
 export type CommentsResponse = { items: Comment[] }
 export type ProfileCommentsResponse = { items: ProfileComment[] }
 export type { User }

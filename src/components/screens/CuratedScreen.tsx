@@ -6,6 +6,13 @@ import { TopNav, type NavScreen } from "@/components/TopNav"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { api, type CuratedContent } from "@/lib/api"
+import {
+  type ContentLevel,
+  getLevelLabel,
+  getSummaryForLevel,
+  readContentLevel,
+  writeContentLevel,
+} from "@/lib/content-level"
 
 interface ScreenProps {
   onNavigate?: (screen: NavScreen) => void
@@ -27,15 +34,23 @@ function StickerBadge({ type }: { type: "new" | "hot" | "weird" | "wip" }) {
   )
 }
 
+const LEVEL_OPTIONS: ContentLevel[] = ["beginner", "mid", "expert"]
+
 function CuratedCard({
   item,
   index,
+  level,
   onOpenCurated,
+  onLevelChange,
 }: {
   item: CuratedContent
   index: number
+  level: ContentLevel
   onOpenCurated?: (contentId: number) => void
+  onLevelChange: (level: ContentLevel) => void
 }) {
+  const summary = getSummaryForLevel(level, item)
+
   return (
     <Card
       className="group relative bg-[#161F42] border-0 rounded-xl overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:rotate-1 hover:shadow-xl hover:shadow-[#23D5AB]/10 cursor-pointer"
@@ -70,10 +85,29 @@ function CuratedCard({
           />
         )}
       </div>
-      <CardContent className="p-4">
+      <CardContent className="p-4 space-y-3">
+        <div
+          className="flex gap-1"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {LEVEL_OPTIONS.map((lv) => (
+            <button
+              key={lv}
+              type="button"
+              onClick={() => onLevelChange(lv)}
+              className={`rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors ${
+                level === lv
+                  ? "bg-[#23D5AB] text-[#0B1020]"
+                  : "bg-[#111936] text-[#8A96BE] hover:bg-[#1B2854]"
+              }`}
+            >
+              {getLevelLabel(lv)}
+            </button>
+          ))}
+        </div>
         <ProjectMeta
           title={item.title}
-          summary={item.summary_beginner || "요약 준비 중"}
+          summary={summary || "요약 준비 중"}
           tags={item.tags}
           author={item.repo_owner}
           likes={item.stars}
@@ -93,6 +127,7 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
   const [category, setCategory] = useState("all")
   const [koreanOnly, setKoreanOnly] = useState(false)
   const [sort, setSort] = useState<"latest" | "quality">("latest")
+  const [selectedLevel, setSelectedLevel] = useState<ContentLevel>(() => readContentLevel())
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query), 300)
@@ -136,6 +171,11 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
     return ["all", ...Array.from(values).sort((a, b) => a.localeCompare(b))]
   }, [items])
 
+  const handleLevelChange = (level: ContentLevel) => {
+    setSelectedLevel(level)
+    writeContentLevel(level)
+  }
+
   const openDetail = (contentId: number) => {
     if (onOpenCurated) {
       onOpenCurated(contentId)
@@ -152,6 +192,24 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
         <header className="mb-6 rounded-2xl border border-[#111936] bg-[#161F42] p-6">
           <h2 className="font-display text-3xl font-bold text-[#F4F7FF]">✨ Curated</h2>
           <p className="mt-2 text-[#B8C3E6]">초보자에게 실질적으로 도움이 되는 레포만 골라 빠르게 탐색하세요.</p>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <span className="self-center text-xs text-[#8A96BE]">나는 어떤 수준이에요?</span>
+            {LEVEL_OPTIONS.map((lv) => (
+              <button
+                key={lv}
+                type="button"
+                onClick={() => handleLevelChange(lv)}
+                className={`rounded-full px-4 py-1.5 text-sm font-semibold transition-colors ${
+                  selectedLevel === lv
+                    ? "bg-[#23D5AB] text-[#0B1020]"
+                    : "bg-[#111936] text-[#B8C3E6] hover:bg-[#1B2854]"
+                }`}
+              >
+                {getLevelLabel(lv)}
+              </button>
+            ))}
+          </div>
 
           <div className="mt-4 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
             <Input
@@ -212,7 +270,7 @@ export function CuratedScreen({ onNavigate, onOpenCurated }: ScreenProps) {
               ))
             : items.map((item, index) => (
                 <div key={item.id} className="reveal-up" style={{ "--reveal-delay": `${Math.min(index, 8) * 45}ms` } as CSSProperties}>
-                  <CuratedCard item={item} index={index} onOpenCurated={openDetail} />
+                  <CuratedCard item={item} index={index} level={selectedLevel} onOpenCurated={openDetail} onLevelChange={handleLevelChange} />
                 </div>
               ))}
         </section>

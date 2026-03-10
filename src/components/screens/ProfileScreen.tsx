@@ -6,7 +6,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { TopNav, type NavScreen } from "@/components/TopNav"
 import { ProjectMeta } from "@/components/ProjectMeta"
-import { api, type ProfileComment as ApiProfileComment } from "@/lib/api"
+import { api, type ProfileComment as ApiProfileComment, type XpSummary } from "@/lib/api"
 import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
 interface ScreenProps {
@@ -45,11 +45,15 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
+const XP_LEVEL_NAMES = ["", "🌱 씨앗", "🌿 새싹", "🌳 나무", "🗺️ 탐험가", "🔨 건축가", "🚀 런처", "⚡ 바이브 마스터"]
+const XP_LEVEL_THRESHOLDS = [0, 100, 300, 600, 1000, 2000, 4000]
+
 export function ProfileScreen({ onNavigate }: ScreenProps) {
   const { user, updateUser } = useAuth()
   const [myProjects, setMyProjects] = useState<Project[]>([])
   const [myComments, setMyComments] = useState<ProfileComment[]>([])
   const [likedProjects, setLikedProjects] = useState<Project[]>([])
+  const [xpSummary, setXpSummary] = useState<XpSummary | null>(null)
   const [isEditingProfile, setIsEditingProfile] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
   const [avatarLoadError, setAvatarLoadError] = useState(false)
@@ -97,11 +101,14 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
 
     const fetchProfileData = async () => {
       try {
-        const [projectsData, commentsData, likedProjectsData] = await Promise.all([
+        const [projectsData, commentsData, likedProjectsData, xpData] = await Promise.all([
           api.getMyProjects(),
           api.getMyComments(100),
           api.getMyLikedProjects(100),
+          api.getMyXp().catch(() => null),
         ])
+
+        if (xpData) setXpSummary(xpData)
 
         const projectItems = Array.isArray(projectsData.items) ? projectsData.items : []
         setMyProjects(projectItems.map(mapProject))
@@ -218,6 +225,64 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             프로필 편집
           </Button>
         </div>
+
+        {/* XP / 레벨 섹션 */}
+        {xpSummary ? (
+          <Card className="bg-[#161F42] border-[#111936] mb-8">
+            <CardContent className="p-6">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-[#8A96BE]">바이브 레벨</p>
+                  <p className="mt-1 text-2xl font-bold text-[#F4F7FF]">
+                    Lv.{xpSummary.level} {XP_LEVEL_NAMES[xpSummary.level] || ""}
+                  </p>
+                  <p className="text-sm text-[#B8C3E6]">
+                    {xpSummary.total_xp} XP
+                    {xpSummary.xp_to_next !== null ? ` · 다음 레벨까지 ${xpSummary.xp_to_next} XP` : " · 최고 레벨!"}
+                  </p>
+                </div>
+                {xpSummary.level < 7 ? (
+                  <div className="w-full md:max-w-xs">
+                    <div className="mb-1 flex justify-between text-xs text-[#8A96BE]">
+                      <span>{XP_LEVEL_THRESHOLDS[xpSummary.level - 1] ?? 0} XP</span>
+                      <span>{XP_LEVEL_THRESHOLDS[xpSummary.level] ?? "MAX"} XP</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-[#111936]">
+                      <div
+                        className="h-2 rounded-full bg-[#23D5AB] transition-all"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (((xpSummary.total_xp - (XP_LEVEL_THRESHOLDS[xpSummary.level - 1] ?? 0)) /
+                              ((XP_LEVEL_THRESHOLDS[xpSummary.level] ?? xpSummary.total_xp) -
+                                (XP_LEVEL_THRESHOLDS[xpSummary.level - 1] ?? 0))) *
+                              100),
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              {xpSummary.badges.length > 0 ? (
+                <div className="mt-4 border-t border-[#111936] pt-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-[#8A96BE]">획득한 뱃지</p>
+                  <div className="flex flex-wrap gap-2">
+                    {xpSummary.badges.map((badge) => (
+                      <Badge
+                        key={badge.badge_code}
+                        title={badge.description}
+                        className="bg-[#111936] text-[#23D5AB] border border-[#23D5AB]/30"
+                      >
+                        {badge.description || badge.badge_code}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
 
         {isEditingProfile ? (
           <Card className="bg-[#161F42] border-[#111936] mb-8">

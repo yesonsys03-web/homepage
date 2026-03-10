@@ -11,6 +11,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { type GlossaryTerm } from "@/data/glossary"
 import { api, type CuratedContent, type CuratedRelatedRecommendation } from "@/lib/api"
+import { readContentLevel, writeContentLevel } from "@/lib/content-level"
 import { setGlossaryFocusTerm } from "@/lib/glossary-navigation"
 
 interface ScreenProps {
@@ -312,7 +313,7 @@ export function CuratedDetailScreen({ onNavigate }: ScreenProps) {
         ) : null}
 
         {/* Summary Tabs */}
-        <Tabs defaultValue="beginner" className="mb-8">
+        <Tabs defaultValue={readContentLevel()} className="mb-8" onValueChange={(v) => writeContentLevel(v as "beginner" | "mid" | "expert")}>
           <TabsList className="bg-[#161F42] border-0">
             <TabsTrigger value="beginner" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">🌱 입문자</TabsTrigger>
             <TabsTrigger value="mid" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">💻 개발자</TabsTrigger>

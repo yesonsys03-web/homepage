@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input"
 import { api, type ErrorTranslateResponse, type TextTranslateResponse } from "@/lib/api"
 import { setGlossaryFocusTerm } from "@/lib/glossary-navigation"
 import { findGlossaryTerm } from "@/lib/glossary-text"
+import { awardXpWithNotify } from "@/lib/use-xp-award"
 
 interface ScreenProps {
   onNavigate?: (screen: NavScreen) => void
@@ -180,6 +181,12 @@ export function PlaygroundScreen({ onNavigate }: ScreenProps) {
       await api.sendErrorTranslateFeedback(translateResult.error_hash, solved)
       setToastTone("success")
       setToastMessage(solved ? "해결 피드백이 저장됐어요." : "실패 피드백이 저장됐어요.")
+      if (solved) {
+        void awardXpWithNotify("error_translate_solved", translateResult.error_hash, (msg, tone) => {
+          setToastTone(tone ?? "info")
+          setToastMessage(msg)
+        })
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : "피드백 저장에 실패했습니다."
       setToastTone("error")

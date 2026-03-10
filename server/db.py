@@ -632,6 +632,82 @@ def init_db():
                     (normalize_curated_reason_code(row[1]), row[0]),
                 )
 
+            # ── 바이브 레벨 / XP 시스템 ─────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_xp (
+                    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    total_xp INTEGER NOT NULL DEFAULT 0,
+                    level INTEGER NOT NULL DEFAULT 1,
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS xp_events (
+                    id SERIAL PRIMARY KEY,
+                    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                    event_type VARCHAR(60) NOT NULL,
+                    ref_id VARCHAR(100),
+                    xp_delta INTEGER NOT NULL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (user_id, event_type, ref_id)
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_badges (
+                    id SERIAL PRIMARY KEY,
+                    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+                    badge_code VARCHAR(60) NOT NULL,
+                    awarded_at TIMESTAMP DEFAULT NOW(),
+                    UNIQUE (user_id, badge_code)
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_xp_events_user_id
+                ON xp_events (user_id, event_type, created_at DESC)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_user_badges_user_id
+                ON user_badges (user_id, awarded_at DESC)
+            """)
+
+            # --- Launchpad ---
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS launchpad_tips (
+                    id SERIAL PRIMARY KEY,
+                    source_url TEXT UNIQUE NOT NULL,
+                    platform TEXT NOT NULL,
+                    author_handle TEXT,
+                    og_title TEXT NOT NULL,
+                    og_image_url TEXT,
+                    description_kr TEXT NOT NULL,
+                    tool_tags TEXT[] DEFAULT '{}',
+                    topic_tags TEXT[] DEFAULT '{}',
+                    is_link_valid BOOLEAN DEFAULT TRUE,
+                    last_link_checked_at TIMESTAMP,
+                    status TEXT DEFAULT 'active',
+                    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+                    created_at TIMESTAMP DEFAULT NOW(),
+                    updated_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS launchpad_error_logs (
+                    id SERIAL PRIMARY KEY,
+                    error_text TEXT NOT NULL,
+                    tool TEXT,
+                    os TEXT,
+                    tool_version TEXT,
+                    gemini_diagnosis TEXT,
+                    gemini_solution TEXT,
+                    client_ip TEXT,
+                    created_at TIMESTAMP DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS idx_launchpad_tips_status
+                ON launchpad_tips (status, created_at DESC)
+            """)
+
             conn.commit()
             print("✅ Database tables initialized successfully!")
 

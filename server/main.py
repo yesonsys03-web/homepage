@@ -127,6 +127,7 @@ from db import (
     create_curated_related_click,
     get_curated_related_click_counts_for_source,
     get_curated_related_click_summary,
+    get_db_connection,
 )
 from auth import (
     verify_password,
@@ -1497,13 +1498,31 @@ async def run_curated_collection_scheduler_iteration() -> None:
             message=message,
         )
         if created > 0 or message:
+            collected_today = safe_int(result.get('collected_today'), 0)
+            daily_limit = safe_int(result.get('daily_limit'), 0)
             log_line = (
                 f"[curated-scheduler] created={created} "
-                f"collected_today={safe_int(result.get('collected_today'), 0)} "
-                f"daily_limit={safe_int(result.get('daily_limit'), 0)} "
+                f"collected_today={collected_today} "
+                f"daily_limit={daily_limit} "
                 f"message={message or 'none'}"
             )
             print(log_line)
+        if created > 0:
+            try:
+                with get_db_connection() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT COUNT(*) FROM curated_content WHERE status = 'pending'")
+                        row = cur.fetchone()
+                        pending_count = row[0] if row else 0
+                from email_service import send_curated_collection_summary
+                send_curated_collection_summary(
+                    created=created,
+                    collected_today=safe_int(result.get("collected_today"), 0),
+                    daily_limit=safe_int(result.get("daily_limit"), 0),
+                    pending_count=pending_count,
+                )
+            except Exception as email_error:
+                print(f"[curated-scheduler] email send failed: {email_error}")
     except Exception as error:
         log_curated_collection_action(
             action_type="curated_collection_failed",
@@ -1885,6 +1904,10 @@ async def require_super_admin(current_user: UserContext = Depends(get_current_us
     return current_user
 
 
+from xp_routes import register_xp_routes
+register_xp_routes(app, sys.modules[__name__])
+from launchpad_routes import register_launchpad_routes
+register_launchpad_routes(app, sys.modules[__name__])
 register_admin_policy_routes(
     app,
     sys.modules[__name__],

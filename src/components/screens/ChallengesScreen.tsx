@@ -4,12 +4,14 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { TodayGlossaryChallengeCard } from "@/components/TodayGlossaryChallengeCard"
+import { Toast } from "@/components/Toast"
 import { TopNav, type NavScreen } from "@/components/TopNav"
 import { type GlossaryTerm } from "@/data/glossary"
 import { parseLocalDateKey } from "@/lib/daily"
 import { setGlossaryFocusTerm } from "@/lib/glossary-navigation"
 import { safeLocalStorageGetItem, safeLocalStorageSetItem } from "@/lib/safe-storage"
 import { useLocalDateKey } from "@/lib/use-local-date-key"
+import { awardXpWithNotify } from "@/lib/use-xp-award"
 
 interface ScreenProps {
   onNavigate?: (screen: NavScreen) => void
@@ -157,6 +159,8 @@ export function ChallengesScreen({ onNavigate }: ScreenProps) {
     askedForHelp: false,
     streak: 0,
   })
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
+  const [toastTone, setToastTone] = useState<"info" | "success" | "error">("info")
 
   const dailyMission = useMemo(() => pickDailyMission(parseLocalDateKey(dateKey)), [dateKey])
 
@@ -176,14 +180,30 @@ export function ChallengesScreen({ onNavigate }: ScreenProps) {
       readDailyChallengeProgress(dateKey),
       dateKey,
     )
+    const wasAlreadyCompleted = persistedProgress.completed
+    const nextStreak = wasAlreadyCompleted ? persistedProgress.streak : persistedProgress.streak + 1
     const nextProgress: DailyChallengeProgress = {
       dateKey,
       completed: true,
       askedForHelp: persistedProgress.askedForHelp,
-      streak: persistedProgress.completed ? persistedProgress.streak : persistedProgress.streak + 1,
+      streak: nextStreak,
     }
     setProgress(nextProgress)
     writeDailyChallengeProgress(nextProgress)
+
+    if (!wasAlreadyCompleted) {
+      if (nextStreak > 0 && nextStreak % 7 === 0) {
+        void awardXpWithNotify("challenge_streak_7", `streak_${nextStreak}_${dateKey}`, (msg, tone) => {
+          setToastTone(tone ?? "info")
+          setToastMessage(msg)
+        })
+      } else {
+        void awardXpWithNotify("challenge_complete", `${dailyMission.id}_${dateKey}`, (msg, tone) => {
+          setToastTone(tone ?? "info")
+          setToastMessage(msg)
+        })
+      }
+    }
   }
 
   const handleAskHelp = () => {
@@ -206,6 +226,7 @@ export function ChallengesScreen({ onNavigate }: ScreenProps) {
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <TopNav active="challenges" onNavigate={onNavigate} />
+      {toastMessage ? <Toast message={toastMessage} tone={toastTone} /> : null}
 
       <main className="mx-auto max-w-7xl px-4 py-8">
         <section className="rounded-3xl border border-[#111936] bg-[radial-gradient(circle_at_top_left,_rgba(255,93,143,0.18),_transparent_38%),linear-gradient(180deg,#161F42_0%,#0F1734_100%)] p-6 md:p-8">
