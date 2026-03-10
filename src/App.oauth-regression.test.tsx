@@ -2,21 +2,47 @@ import type { ReactNode } from "react"
 import { render, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const { loginSpy, logoutSpy, getMeWithTokenSpy } = vi.hoisted(() => ({
+const { loginSpy, logoutSpy, getMeWithTokenSpy, exchangeGoogleOAuthCodeSpy } = vi.hoisted(() => ({
   loginSpy: vi.fn(),
   logoutSpy: vi.fn(),
   getMeWithTokenSpy: vi.fn(),
+  exchangeGoogleOAuthCodeSpy: vi.fn(),
 }))
 
-vi.mock("./components/screens", () => ({
+vi.mock("./components/screens/HomeScreen", () => ({
   HomeScreen: () => <div>home</div>,
+}))
+
+vi.mock("./components/screens/ProjectDetailScreen", () => ({
   ProjectDetailScreen: () => <div>detail</div>,
+}))
+
+vi.mock("./components/screens/SubmitScreen", () => ({
   SubmitScreen: () => <div>submit</div>,
+}))
+
+vi.mock("./components/screens/ProfileScreen", () => ({
   ProfileScreen: () => <div>profile</div>,
-  AdminScreen: () => <div>admin</div>,
+}))
+
+vi.mock("./components/screens/ExploreScreen", () => ({
   ExploreScreen: () => <div>explore</div>,
+}))
+
+vi.mock("./components/screens/ChallengesScreen", () => ({
   ChallengesScreen: () => <div>challenges</div>,
+}))
+
+vi.mock("./components/screens/AboutScreen", () => ({
   AboutScreen: () => <div>about</div>,
+}))
+
+vi.mock("./components/screens/admin/AdminLayout", () => ({
+  AdminLayout: () => <div>admin</div>,
+}))
+
+vi.mock("./components/screens/admin/pages/AdminDashboard", () => ({
+  AdminDashboard: () => <div>admin-dashboard</div>,
 }))
 
 vi.mock("./components/screens/LoginScreen", () => ({
@@ -43,6 +69,7 @@ vi.mock("./lib/use-auth", () => ({
 vi.mock("./lib/api", () => ({
   api: {
     getMeWithToken: getMeWithTokenSpy,
+    exchangeGoogleOAuthCode: exchangeGoogleOAuthCodeSpy,
   },
 }))
 
@@ -70,7 +97,7 @@ describe("App OAuth regression", () => {
     expect(currentUrl.searchParams.get("oauth_status")).toBeNull()
   })
 
-  it("restores session from oauth token and clears query", async () => {
+  it("restores session from oauth code and clears query", async () => {
     const user = {
       id: "user-1",
       email: "oauth@example.com",
@@ -78,17 +105,17 @@ describe("App OAuth regression", () => {
       role: "user",
       status: "active",
     }
-    getMeWithTokenSpy.mockResolvedValueOnce(user)
-    window.history.replaceState({}, "", "http://localhost/?oauth_token=test-oauth-token")
+    exchangeGoogleOAuthCodeSpy.mockResolvedValueOnce({ access_token: "issued-access-token", user })
+    window.history.replaceState({}, "", "http://localhost/?oauth_code=test-oauth-code")
 
     render(<App />)
 
     await waitFor(() => {
-      expect(getMeWithTokenSpy).toHaveBeenCalledWith("test-oauth-token")
-      expect(loginSpy).toHaveBeenCalledWith("test-oauth-token", user)
+      expect(exchangeGoogleOAuthCodeSpy).toHaveBeenCalledWith("test-oauth-code")
+      expect(loginSpy).toHaveBeenCalledWith("issued-access-token", user)
     })
 
     const currentUrl = new URL(window.location.href)
-    expect(currentUrl.searchParams.get("oauth_token")).toBeNull()
+    expect(currentUrl.searchParams.get("oauth_code")).toBeNull()
   })
 })

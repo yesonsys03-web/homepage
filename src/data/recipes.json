@@ -1,0 +1,124 @@
+[
+  {
+    "id": "new-project",
+    "category": "프로젝트 시작",
+    "title": "새 프로젝트 설치 준비",
+    "command": "pnpm install",
+    "description": "처음 받은 프로젝트를 실행하기 전에 필요한 파일을 한 번에 설치해요.",
+    "explanation": "장보기 목록을 보고 필요한 재료를 실제로 사오는 단계예요. 다른 사람이 만든 프로젝트를 처음 열었을 때 가장 먼저 자주 써요."
+  },
+  {
+    "id": "dev-server",
+    "category": "서버",
+    "title": "개발 서버 켜기",
+    "command": "pnpm dev",
+    "description": "로컬에서 앱 화면을 바로 확인할 때 쓰는 기본 명령어예요.",
+    "explanation": "가게 문을 열듯이 내 앱을 브라우저에서 볼 수 있게 해줘요. 보통 localhost 주소와 함께 열립니다."
+  },
+  {
+    "id": "build",
+    "category": "배포",
+    "title": "배포 전 빌드 확인",
+    "command": "pnpm build",
+    "description": "배포 가능한 형태로 파일이 잘 만들어지는지 점검해요.",
+    "explanation": "손님에게 내놓기 전에 요리가 잘 완성되는지 확인하는 단계예요. 여기서 실패하면 배포 전에 미리 문제를 찾을 수 있어요."
+  },
+  {
+    "id": "preview",
+    "category": "배포",
+    "title": "빌드 결과 미리 보기",
+    "command": "pnpm preview",
+    "description": "배포 직전 화면이 어떻게 보이는지 로컬에서 다시 확인해요.",
+    "explanation": "가게를 실제 오픈하기 전에 시식회를 하는 것과 비슷해요. 빌드된 결과가 dev 화면과 다른지 체크할 때 좋아요."
+  },
+  {
+    "id": "add-package",
+    "category": "패키지",
+    "title": "새 패키지 추가",
+    "command": "pnpm add react-router-dom",
+    "description": "프로젝트에 새 기능용 패키지를 설치할 때 써요.",
+    "explanation": "마트에서 새 재료를 하나 더 사오는 느낌이에요. 필요한 이름만 바꿔서 같은 패턴으로 쓸 수 있어요."
+  },
+  {
+    "id": "remove-package",
+    "category": "패키지",
+    "title": "설치한 패키지 제거",
+    "command": "pnpm remove react-router-dom",
+    "description": "더 이상 쓰지 않는 패키지를 프로젝트에서 빼요.",
+    "explanation": "장바구니에 잘못 넣은 물건을 다시 빼는 단계예요. 필요 없는 패키지가 많아질수록 프로젝트가 무거워질 수 있어요."
+  },
+  {
+    "id": "lint",
+    "category": "점검",
+    "title": "기본 코드 점검",
+    "command": "pnpm lint",
+    "description": "문법 실수나 스타일 문제를 빠르게 찾아요.",
+    "explanation": "제출 전에 맞춤법 검사를 돌리는 것과 비슷해요. 빨간 줄이 뜨기 전에 미리 정리할 수 있어요."
+  },
+  {
+    "id": "git-status",
+    "category": "Git",
+    "title": "지금 바뀐 파일 확인",
+    "command": "git status",
+    "description": "무슨 파일이 바뀌었는지 가장 먼저 확인해요.",
+    "explanation": "세이브하기 전에 어떤 파일을 만졌는지 보는 체크리스트예요. Git 작업의 출발점으로 거의 항상 써요."
+  },
+  {
+    "id": "git-add-commit",
+    "category": "Git",
+    "title": "변경 저장하기",
+    "command": "git add . && git commit -m \"save progress\"",
+    "description": "작업한 파일을 하나의 저장 지점으로 남겨요.",
+    "explanation": "게임 세이브 포인트를 만드는 것과 비슷해요. 메시지는 나중에 봐도 알 수 있게 짧게 남기는 게 좋아요."
+  },
+  {
+    "id": "git-push",
+    "category": "Git",
+    "title": "원격 저장소에 올리기",
+    "command": "git push",
+    "description": "내 컴퓨터에만 있던 변경을 GitHub로 올려요.",
+    "explanation": "내 세이브 파일을 클라우드에 올리는 것과 같아요. 협업 중이거나 배포 자동화가 연결돼 있으면 특히 중요해요."
+  },
+  {
+    "id": "port-check",
+    "category": "에러 대응",
+    "title": "포트 충돌 확인",
+    "command": "lsof -i :5173",
+    "description": "개발 서버 포트가 이미 사용 중인지 확인해요.",
+    "explanation": "내 앱이 들어가야 할 방 번호에 다른 앱이 먼저 들어가 있는지 보는 과정이에요. 포트 번호는 상황에 따라 바꿔도 돼요."
+  },
+  {
+    "id": "cache-clean",
+    "category": "에러 대응",
+    "title": "pnpm 캐시 정리",
+    "command": "pnpm store prune",
+    "description": "오래된 설치 캐시를 정리해 설치 꼬임을 줄여요.",
+    "explanation": "창고에 쌓인 오래된 재료를 정리하는 느낌이에요. 설치 오류가 반복될 때 가볍게 시도할 수 있어요."
+  },
+  {
+    "id": "typecheck",
+    "category": "점검",
+    "title": "타입 오류 확인",
+    "command": "pnpm exec tsc --noEmit",
+    "description": "TypeScript 타입 오류를 실행 전 미리 찾아요.",
+    "explanation": "실제로 가게 문을 열기 전에 안내문이나 번호표가 서로 맞는지 확인하는 단계예요. 실행 전에 숨어 있는 문제를 잡기 좋아요."
+  },
+  {
+    "id": "hard-reset-install",
+    "category": "복구",
+    "title": "설치가 완전히 꼬였을 때 재설치",
+    "command": "rm -rf node_modules && pnpm install",
+    "description": "기본 설치가 실패할 때 가장 자주 쓰는 복구 플랜B예요.",
+    "explanation": "창고를 통째로 비우고 다시 장을 보는 방식이에요. 시간이 조금 걸리지만 설치 꼬임을 한 번에 정리할 때 자주 써요.",
+    "warning": "기존 node_modules 폴더를 모두 지우고 다시 설치하므로 시간이 걸릴 수 있어요."
+  },
+  {
+    "id": "clean-build-artifacts",
+    "category": "복구",
+    "title": "빌드 산출물 정리 후 다시 빌드",
+    "command": "rm -rf dist && pnpm build",
+    "description": "이전 빌드 결과가 이상할 때 깨끗하게 다시 생성해요.",
+    "explanation": "이미 만들어 둔 완성품을 치우고 새로 조리하는 느낌이에요. 배포 파일이 꼬였다고 느껴질 때 유용해요.",
+    "warning": "dist 폴더를 지우므로 아직 백업되지 않은 산출물은 보관 후 실행하세요."
+  }
+]

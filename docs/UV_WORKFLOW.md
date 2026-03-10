@@ -20,7 +20,10 @@ uv add fastapi
 uv add "uvicorn[standard]"
 
 # 개발 전용 패키지 추가
-uv add --dev pytest ruff
+uv add --dev pytest ruff basedpyright httpx
+
+# 서버 테스트 실행 (`server/`에서 실행)
+cd server && uv run --group dev pytest
 
 # 잠금 파일 기준으로 재현 설치
 uv sync --frozen

@@ -3,19 +3,19 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
 import { LogoSplitHeading } from "@/components/LogoSplitHeading"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { HeroBanner } from "@/components/HeroBanner"
+import { TodayGlossaryCards } from "@/components/TodayGlossaryCards"
 import { FilterChips } from "@/components/FilterChips"
 import { ProjectMeta } from "@/components/ProjectMeta"
+import { pickDailyGlossaryTerms } from "@/data/glossary"
 import { api, type FilterTab, type Project } from "@/lib/api"
 import heroMasterImage from "../../../img/master.webp"
 import heroTabletImage from "../../../img/master_tablet.webp"
 import heroMobileImage from "../../../img/master_mobile.webp"
 
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
-
 interface HomeScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   onOpenProject?: (projectId: string) => void
 }
 
@@ -62,7 +62,7 @@ function ProjectCard({
       <StickerBadge type={project.isNew ? "new" : project.isHot ? "hot" : "new"} />
       <div className="aspect-video bg-gradient-to-br from-[#111936] to-[#0B1020] flex items-center justify-center overflow-hidden">
         {project.thumbnail_url ? (
-          <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover" />
+          <img src={project.thumbnail_url} alt={project.title} loading="lazy" decoding="async" className="w-full h-full object-cover" />
         ) : (
           <ProjectCoverPlaceholder
             seedKey={project.id}
@@ -111,6 +111,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   const [filterChipItems, setFilterChipItems] = useState<FilterTab[]>(
     HOME_FILTER_TABS_FALLBACK,
   )
+  const dailyGlossaryTerms = pickDailyGlossaryTerms()
 
   useEffect(() => {
     const applyTabs = (tabs: FilterTab[]) => {
@@ -174,6 +175,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
   return (
     <div className="min-h-screen bg-[#0B1020]">
       <TopNav active="home" onNavigate={onNavigate} />
+      <main>
 
       <HeroBanner
         title={
@@ -235,6 +237,18 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
 
       <section className="py-8 px-4">
         <div className="max-w-7xl mx-auto">
+          <TodayGlossaryCards
+            terms={dailyGlossaryTerms}
+            title="📅 오늘 읽어두면 좋은 용어"
+            description="막힐 때 자주 보이는 용어 3개를 먼저 익혀두면 Playground와 Curated를 더 쉽게 따라갈 수 있어요."
+            ctaLabel="Glossary 열기"
+            onSelectTerm={() => onNavigate?.("glossary")}
+          />
+        </div>
+      </section>
+
+      <section className="py-8 px-4">
+        <div className="max-w-7xl mx-auto">
           <div className="flex gap-2 mb-6 flex-wrap">
             <FilterChips items={filterChipItems} value={filter} onChange={setFilter} />
             <select 
@@ -277,6 +291,7 @@ export function HomeScreen({ onNavigate, onOpenProject }: HomeScreenProps) {
           <p>© 2026 VibeCoder Playground. Made with ❤️ byバイブコダー</p>
         </div>
       </footer>
+      </main>
     </div>
   )
 }

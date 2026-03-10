@@ -4,14 +4,13 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { ProjectMeta } from "@/components/ProjectMeta"
-import { api } from "@/lib/api"
+import { api, type ProfileComment as ApiProfileComment, type XpSummary } from "@/lib/api"
+import { isAdminRole } from "@/lib/roles"
 import { useAuth } from "@/lib/use-auth"
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
 }
 
 
@@ -25,15 +24,13 @@ interface Project {
   createdAt: string
 }
 
-const myComments = [
-  { id: "1", projectTitle: "AI Music Generator", content: "정말 amazing해요!", likes: 5, createdAt: "1시간 전" },
-  { id: "2", projectTitle: "React Dashboard", content: "디자인이很漂亮", likes: 3, createdAt: "3시간 전" },
-]
-
-const likedProjects = [
-  { id: "4", title: "Three.js Game", summary: "3D 브라우저 게임", thumbnail: "/placeholder.jpg", likes: 156, comments: 42, createdAt: "2026-02-18" },
-  { id: "5", title: "Chat App", summary: "실시간 채팅 앱", thumbnail: "/placeholder.jpg", likes: 92, comments: 28, createdAt: "2026-02-12" },
-]
+interface ProfileComment {
+  id: string
+  projectTitle: string
+  content: string
+  likes: number
+  createdAt: string
+}
 
 const PROFILE_NICKNAME_MIN_LEN = 2
 const PROFILE_NICKNAME_MAX_LEN = 24
@@ -48,9 +45,15 @@ function isValidHttpUrl(value: string): boolean {
   }
 }
 
+const XP_LEVEL_NAMES = ["", "🌱 씨앗", "🌿 새싹", "🌳 나무", "🗺️ 탐험가", "🔨 건축가", "🚀 런처", "⚡ 바이브 마스터"]
+const XP_LEVEL_THRESHOLDS = [0, 100, 300, 600, 1000, 2000, 4000]
+
 export function ProfileScreen({ onNavigate }: ScreenProps) {
   const { user, updateUser } = useAuth()
   const [myProjects, setMyProjects] = useState<Project[]>([])
+  const [myComments, setMyComments] = useState<ProfileComment[]>([])
+  const [likedProjects, setLikedProjects] = useState<Project[]>([])
+  const [xpSummary, setXpSummary] = useState<XpSummary | null>(null)
   const [isEditingProfile, setIsEditingProfile] = useState(false)
   const [profileSaving, setProfileSaving] = useState(false)
   const [avatarLoadError, setAvatarLoadError] = useState(false)
@@ -78,35 +81,60 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
   }, [user])
 
   useEffect(() => {
-    const fetchMyProjects = async () => {
+    const mapProject = (item: {
+      id: string
+      title: string
+      summary: string
+      thumbnail_url?: string
+      like_count: number
+      comment_count: number
+      created_at: string
+    }): Project => ({
+      id: item.id,
+      title: item.title,
+      summary: item.summary,
+      thumbnail: item.thumbnail_url || "/placeholder.jpg",
+      likes: item.like_count,
+      comments: item.comment_count,
+      createdAt: item.created_at,
+    })
+
+    const fetchProfileData = async () => {
       try {
-        const data = await api.getMyProjects()
-        const items = Array.isArray(data.items) ? data.items : []
-        const mapped: Project[] = items.map((item: {
-          id: string
-          title: string
-          summary: string
-          thumbnail_url?: string
-          like_count: number
-          comment_count: number
-          created_at: string
-        }) => ({
-          id: item.id,
-          title: item.title,
-          summary: item.summary,
-          thumbnail: item.thumbnail_url || "/placeholder.jpg",
-          likes: item.like_count,
-          comments: item.comment_count,
-          createdAt: item.created_at,
-        }))
-        setMyProjects(mapped)
+        const [projectsData, commentsData, likedProjectsData, xpData] = await Promise.all([
+          api.getMyProjects(),
+          api.getMyComments(100),
+          api.getMyLikedProjects(100),
+          api.getMyXp().catch(() => null),
+        ])
+
+        if (xpData) setXpSummary(xpData)
+
+        const projectItems = Array.isArray(projectsData.items) ? projectsData.items : []
+        setMyProjects(projectItems.map(mapProject))
+
+        const commentItems = Array.isArray(commentsData.items) ? commentsData.items : []
+        setMyComments(
+          commentItems.map((item: ApiProfileComment) => ({
+            id: item.id,
+            projectTitle: item.project_title,
+            content: item.content,
+            likes: item.like_count,
+            createdAt: new Date(item.created_at).toLocaleString("ko-KR"),
+          })),
+        )
+
+        const likedItems = Array.isArray(likedProjectsData.items) ? likedProjectsData.items : []
+        setLikedProjects(likedItems.map(mapProject))
       } catch (error) {
-        console.error("Failed to fetch my projects:", error)
+        console.error("Failed to fetch profile data:", error)
         setMyProjects([])
+        setMyComments([])
+        setLikedProjects([])
       }
     }
 
-    fetchMyProjects()
+    void fetchProfileData()
   }, [])
 
   const handleSaveProfile = async () => {
@@ -170,6 +198,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
               <img
                 src={user.avatar_url}
                 alt={user.nickname}
+                loading="lazy"
+                decoding="async"
                 className="w-full h-full object-cover"
                 onError={() => setAvatarLoadError(true)}
               />
@@ -183,8 +213,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             {user?.bio ? <p className="text-[#B8C3E6] mb-3">{user.bio}</p> : null}
             <div className="flex gap-4 text-sm text-[#B8C3E6]">
               <span><strong className="text-[#F4F7FF]">{myProjects.length}</strong> 작품</span>
-              <span><strong className="text-[#F4F7FF]">12</strong> 댓글</span>
-              <span><strong className="text-[#F4F7FF]">{myProjects.reduce((acc, cur) => acc + cur.likes, 0)}</strong> 좋아요</span>
+              <span><strong className="text-[#F4F7FF]">{myComments.length}</strong> 댓글</span>
+              <span><strong className="text-[#F4F7FF]">{likedProjects.reduce((acc, cur) => acc + cur.likes, 0)}</strong> 좋아요</span>
             </div>
           </div>
           <Button
@@ -195,6 +225,64 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             프로필 편집
           </Button>
         </div>
+
+        {/* XP / 레벨 섹션 */}
+        {xpSummary ? (
+          <Card className="bg-[#161F42] border-[#111936] mb-8">
+            <CardContent className="p-6">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-widest text-[#8A96BE]">바이브 레벨</p>
+                  <p className="mt-1 text-2xl font-bold text-[#F4F7FF]">
+                    Lv.{xpSummary.level} {XP_LEVEL_NAMES[xpSummary.level] || ""}
+                  </p>
+                  <p className="text-sm text-[#B8C3E6]">
+                    {xpSummary.total_xp} XP
+                    {xpSummary.xp_to_next !== null ? ` · 다음 레벨까지 ${xpSummary.xp_to_next} XP` : " · 최고 레벨!"}
+                  </p>
+                </div>
+                {xpSummary.level < 7 ? (
+                  <div className="w-full md:max-w-xs">
+                    <div className="mb-1 flex justify-between text-xs text-[#8A96BE]">
+                      <span>{XP_LEVEL_THRESHOLDS[xpSummary.level - 1] ?? 0} XP</span>
+                      <span>{XP_LEVEL_THRESHOLDS[xpSummary.level] ?? "MAX"} XP</span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-[#111936]">
+                      <div
+                        className="h-2 rounded-full bg-[#23D5AB] transition-all"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (((xpSummary.total_xp - (XP_LEVEL_THRESHOLDS[xpSummary.level - 1] ?? 0)) /
+                              ((XP_LEVEL_THRESHOLDS[xpSummary.level] ?? xpSummary.total_xp) -
+                                (XP_LEVEL_THRESHOLDS[xpSummary.level - 1] ?? 0))) *
+                              100),
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              {xpSummary.badges.length > 0 ? (
+                <div className="mt-4 border-t border-[#111936] pt-4">
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-widest text-[#8A96BE]">획득한 뱃지</p>
+                  <div className="flex flex-wrap gap-2">
+                    {xpSummary.badges.map((badge) => (
+                      <Badge
+                        key={badge.badge_code}
+                        title={badge.description}
+                        className="bg-[#111936] text-[#23D5AB] border border-[#23D5AB]/30"
+                      >
+                        {badge.description || badge.badge_code}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        ) : null}
 
         {isEditingProfile ? (
           <Card className="bg-[#161F42] border-[#111936] mb-8">
@@ -233,6 +321,8 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                         <img
                           src={trimmedAvatarUrl}
                           alt="avatar preview"
+                          loading="lazy"
+                          decoding="async"
                           className="w-full h-full object-cover"
                           onError={() => setDraftAvatarLoadError(true)}
                         />
@@ -310,7 +400,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
             <TabsTrigger value="projects" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">작품</TabsTrigger>
             <TabsTrigger value="comments" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">댓글</TabsTrigger>
             <TabsTrigger value="liked" className="data-[state=active]:bg-[#23D5AB] data-[state=active]:text-[#0B1020]">좋아요</TabsTrigger>
-            {user?.role === "admin" && (
+            {isAdminRole(user?.role) && (
               <TabsTrigger value="admin" className="data-[state=active]:bg-[#FF5D8F] data-[state=active]:text-[#0B1020]">⚠️ 관리자</TabsTrigger>
             )}
           </TabsList>
@@ -321,6 +411,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                 <ProjectCard key={project.id} project={project} index={index} />
               ))}
             </div>
+            {myProjects.length === 0 ? <p className="text-[#B8C3E6] text-sm">등록한 작품이 없습니다.</p> : null}
           </TabsContent>
 
           <TabsContent value="comments">
@@ -338,6 +429,7 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                 </Card>
               ))}
             </div>
+            {myComments.length === 0 ? <p className="text-[#B8C3E6] text-sm">작성한 댓글이 없습니다.</p> : null}
           </TabsContent>
 
           <TabsContent value="liked">
@@ -346,9 +438,10 @@ export function ProfileScreen({ onNavigate }: ScreenProps) {
                 <ProjectCard key={project.id} project={project} index={index} />
               ))}
             </div>
+            {likedProjects.length === 0 ? <p className="text-[#B8C3E6] text-sm">좋아요한 작품이 없습니다.</p> : null}
           </TabsContent>
 
-          {user?.role === "admin" && (
+          {isAdminRole(user?.role) && (
             <TabsContent value="admin">
               <AdminPanel />
             </TabsContent>

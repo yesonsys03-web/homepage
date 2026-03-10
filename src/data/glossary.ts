@@ -1,0 +1,289 @@
+import { getLocalDaySeed } from "@/lib/daily"
+
+export type GlossaryCategory =
+  | "기본개념"
+  | "터미널"
+  | "파일구조"
+  | "배포"
+  | "AI도구"
+  | "에러"
+
+export type GlossaryLevel = "beginner" | "mid" | "expert"
+
+export type GlossaryTerm = {
+  id: string
+  term: string
+  emoji: string
+  category: GlossaryCategory
+  one_liner: string
+  analogy: string
+  when_appears: string
+  related: string[]
+  level: GlossaryLevel
+}
+
+export function glossaryCategoryTone(category: GlossaryCategory): string {
+  switch (category) {
+    case "기본개념":
+      return "from-[#23D5AB]/25 to-[#0B1020] border-[#23D5AB]/50"
+    case "터미널":
+      return "from-[#58A6FF]/25 to-[#0B1020] border-[#58A6FF]/50"
+    case "파일구조":
+      return "from-[#FFB547]/25 to-[#0B1020] border-[#FFB547]/50"
+    case "배포":
+      return "from-[#8B7BFF]/25 to-[#0B1020] border-[#8B7BFF]/50"
+    case "AI도구":
+      return "from-[#FF5D8F]/25 to-[#0B1020] border-[#FF5D8F]/50"
+    case "에러":
+      return "from-[#FF6B6B]/25 to-[#0B1020] border-[#FF6B6B]/50"
+  }
+}
+
+export function pickDailyGlossaryTerms(date: Date = new Date(), count = 3): GlossaryTerm[] {
+  const seed = getLocalDaySeed(date)
+  return [...glossaryTerms]
+    .sort((left, right) => seededTermScore(left.id, seed) - seededTermScore(right.id, seed))
+    .slice(0, Math.min(count, glossaryTerms.length))
+}
+
+function seededTermScore(termId: string, seed: number): number {
+  let hash = seed
+  for (const char of termId) {
+    hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0
+  }
+  return Math.abs(hash)
+}
+
+export const glossaryTerms: GlossaryTerm[] = [
+  {
+    id: "api",
+    term: "API",
+    emoji: "🍽️",
+    category: "기본개념",
+    one_liner: "두 앱이 서로 대화하는 방법",
+    analogy: "식당 주문서처럼 요청을 보내고 결과를 받는 연결 방식이에요.",
+    when_appears: '"API 키를 넣으세요" 같은 안내에서 자주 나와요.',
+    related: ["서버", "요청", "JSON"],
+    level: "beginner",
+  },
+  {
+    id: "server",
+    term: "서버",
+    emoji: "🏢",
+    category: "기본개념",
+    one_liner: "요청을 받아 일하는 컴퓨터",
+    analogy: "24시간 일하는 주방처럼 주문을 받아 결과를 만들어줘요.",
+    when_appears: '"서버 에러"가 떴을 때 원인 쪽을 가리켜요.',
+    related: ["클라이언트", "500", "배포"],
+    level: "beginner",
+  },
+  {
+    id: "client",
+    term: "클라이언트",
+    emoji: "📱",
+    category: "기본개념",
+    one_liner: "서비스를 쓰는 쪽",
+    analogy: "주문하는 손님처럼 결과를 요청하고 확인하는 쪽이에요.",
+    when_appears: '브라우저에서 보이는 화면 관련 설명에 나와요.',
+    related: ["서버", "로컬", "API"],
+    level: "beginner",
+  },
+  {
+    id: "database",
+    term: "데이터베이스",
+    emoji: "🗄️",
+    category: "기본개념",
+    one_liner: "정보를 보관하는 창고",
+    analogy: "엑셀 파일 창고처럼 데이터를 모아두고 꺼내 써요.",
+    when_appears: '"저장" 또는 "조회" 기능 만들 때 나와요.',
+    related: ["서버", "테이블", "쿼리"],
+    level: "beginner",
+  },
+  {
+    id: "repository",
+    term: "레포지토리",
+    emoji: "📁",
+    category: "기본개념",
+    one_liner: "프로젝트 파일 서랍장",
+    analogy: "한 프로젝트의 코드와 기록을 보관하는 서랍장이에요.",
+    when_appears: 'GitHub 링크를 공유할 때 꼭 나와요.',
+    related: ["git", "commit", "README"],
+    level: "beginner",
+  },
+  {
+    id: "pnpm",
+    term: "pnpm",
+    emoji: "🛒",
+    category: "터미널",
+    one_liner: "코드용 패키지 마트",
+    analogy: "필요한 부품을 한 번에 사오는 장보기 도구예요.",
+    when_appears: '"pnpm install" 같은 명령에서 보여요.',
+    related: ["pnpm install", "node_modules", "package.json"],
+    level: "beginner",
+  },
+  {
+    id: "pnpm-install",
+    term: "pnpm install",
+    emoji: "🛍️",
+    category: "터미널",
+    one_liner: "필요한 파일 설치 명령",
+    analogy: "장보기 목록을 보고 물건을 실제로 사오는 행동이에요.",
+    when_appears: '처음 프로젝트를 켤 때 자주 실행해요.',
+    related: ["pnpm", "node_modules", "에러 응급실"],
+    level: "beginner",
+  },
+  {
+    id: "pnpm-dev",
+    term: "pnpm dev",
+    emoji: "🔥",
+    category: "터미널",
+    one_liner: "개발 서버 실행 명령",
+    analogy: "가게 문을 열고 손님을 맞이하는 시작 버튼이에요.",
+    when_appears: '로컬 화면 확인할 때 가장 많이 써요.',
+    related: ["localhost", "포트", "Vite"],
+    level: "beginner",
+  },
+  {
+    id: "git",
+    term: "git",
+    emoji: "🎮",
+    category: "터미널",
+    one_liner: "변경 이력 저장 도구",
+    analogy: "게임 세이브 포인트처럼 작업 기록을 남겨요.",
+    when_appears: '"commit", "push" 같은 작업에서 나와요.',
+    related: ["commit", "push", "레포지토리"],
+    level: "beginner",
+  },
+  {
+    id: "port",
+    term: "포트",
+    emoji: "🚪",
+    category: "터미널",
+    one_liner: "앱이 열리는 번호",
+    analogy: "아파트 호수처럼 앱마다 문 번호가 달라요.",
+    when_appears: '"localhost:5173"처럼 주소 끝 숫자로 보여요.',
+    related: ["localhost", "pnpm dev", "서버"],
+    level: "beginner",
+  },
+  {
+    id: "node-modules",
+    term: "node_modules",
+    emoji: "🏭",
+    category: "파일구조",
+    one_liner: "설치된 패키지 창고",
+    analogy: "장봐 온 재료를 쌓아두는 창고라 직접 고치지 않는 게 좋아요.",
+    when_appears: '설치 에러나 용량 문제를 다룰 때 자주 나와요.',
+    related: ["pnpm", "pnpm install", "package.json"],
+    level: "beginner",
+  },
+  {
+    id: "package-json",
+    term: "package.json",
+    emoji: "🧾",
+    category: "파일구조",
+    one_liner: "프로젝트 장보기 목록",
+    analogy: "무엇을 설치하고 어떤 명령을 쓸지 적힌 체크리스트예요.",
+    when_appears: '스크립트나 의존성 추가할 때 확인해요.',
+    related: ["pnpm", "node_modules", "scripts"],
+    level: "beginner",
+  },
+  {
+    id: "env",
+    term: ".env",
+    emoji: "🔒",
+    category: "파일구조",
+    one_liner: "비밀값 보관 파일",
+    analogy: "금고 비밀번호를 따로 적어두는 비밀 노트예요.",
+    when_appears: 'API 키 설정할 때 꼭 등장해요.',
+    related: ["환경변수", "API", "보안"],
+    level: "beginner",
+  },
+  {
+    id: "readme",
+    term: "README.md",
+    emoji: "📋",
+    category: "파일구조",
+    one_liner: "프로젝트 설명서",
+    analogy: "처음 보는 가전제품 설명서처럼 사용법을 알려줘요.",
+    when_appears: 'GitHub 첫 화면에서 가장 먼저 읽는 파일이에요.',
+    related: ["레포지토리", "설치", "실행"],
+    level: "beginner",
+  },
+  {
+    id: "deploy",
+    term: "배포",
+    emoji: "🚀",
+    category: "배포",
+    one_liner: "내 앱을 인터넷에 공개",
+    analogy: "가게를 실제 거리로 내서 손님을 받는 단계예요.",
+    when_appears: '"이제 서비스 올리자" 할 때 나와요.',
+    related: ["도메인", "HTTPS", "빌드"],
+    level: "beginner",
+  },
+  {
+    id: "domain",
+    term: "도메인",
+    emoji: "📍",
+    category: "배포",
+    one_liner: "서비스 주소",
+    analogy: "가게 주소판처럼 손님이 찾아오는 위치예요.",
+    when_appears: '배포 후 주소 연결할 때 사용해요.',
+    related: ["HTTPS", "배포", "DNS"],
+    level: "beginner",
+  },
+  {
+    id: "https",
+    term: "HTTPS",
+    emoji: "🔐",
+    category: "배포",
+    one_liner: "안전한 통신 방식",
+    analogy: "봉인된 우편처럼 중간에서 보기 어렵게 보호해요.",
+    when_appears: '브라우저 자물쇠 아이콘과 함께 보여요.',
+    related: ["도메인", "보안", "배포"],
+    level: "beginner",
+  },
+  {
+    id: "mcp",
+    term: "MCP",
+    emoji: "🔌",
+    category: "AI도구",
+    one_liner: "AI와 앱을 잇는 플러그",
+    analogy: "멀티탭처럼 AI가 여러 도구를 연결해서 쓰게 해줘요.",
+    when_appears: 'Claude 도구 연동 설명에서 자주 나와요.',
+    related: ["프롬프트", "컨텍스트", "API"],
+    level: "beginner",
+  },
+  {
+    id: "prompt",
+    term: "프롬프트",
+    emoji: "💬",
+    category: "AI도구",
+    one_liner: "AI에게 보내는 요청문",
+    analogy: "직원에게 주는 작업 지시서처럼 결과 품질을 좌우해요.",
+    when_appears: 'AI에게 기능 요청할 때 항상 쓰는 문장이에요.',
+    related: ["MCP", "컨텍스트", "토큰"],
+    level: "beginner",
+  },
+  {
+    id: "token",
+    term: "토큰",
+    emoji: "🪙",
+    category: "AI도구",
+    one_liner: "AI가 읽는 글자 단위",
+    analogy: "교통카드 잔액처럼 많이 쓰면 비용이 늘어요.",
+    when_appears: '사용량 제한이나 비용 계산 이야기에서 나와요.',
+    related: ["프롬프트", "컨텍스트", "API"],
+    level: "beginner",
+  },
+  {
+    id: "cors",
+    term: "CORS",
+    emoji: "🚧",
+    category: "에러",
+    one_liner: "다른 출처 접근 제한 규칙",
+    analogy: "다른 동네 출입을 막는 경비 규칙 같은 거예요.",
+    when_appears: '프론트에서 API 호출이 막힐 때 자주 보이는 에러예요.',
+    related: ["401", "403", "서버"],
+    level: "beginner",
+  },
+]

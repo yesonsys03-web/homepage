@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from fastapi.testclient import TestClient
 
@@ -136,7 +136,7 @@ def test_google_callback_redirects_with_oauth_status_for_pending_user(
     assert "oauth_token=" not in location
 
 
-def test_google_callback_redirects_with_oauth_token_for_active_user(
+def test_google_callback_redirects_with_oauth_code_for_active_user(
     monkeypatch: Any,
 ) -> None:
     _enable_google_oauth(monkeypatch)
@@ -180,12 +180,55 @@ def test_google_callback_redirects_with_oauth_token_for_active_user(
     location = response.headers["location"]
     parsed = urlparse(location)
     query = parse_qs(parsed.query)
-    oauth_token = unquote(query["oauth_token"][0])
-    decoded = decode_token(oauth_token)
+    oauth_code = query["oauth_code"][0]
+    decoded = decode_token(oauth_code)
 
     assert parsed.path == "/"
     assert decoded is not None
+    assert decoded["type"] == "google_oauth_code"
     assert decoded["sub"] == "active-user-id"
+
+
+def test_google_exchange_issues_access_token_and_rejects_replay(
+    monkeypatch: Any,
+) -> None:
+    _enable_google_oauth(monkeypatch)
+    monkeypatch.setattr(main, "consume_oauth_state_token", lambda _: True)
+    monkeypatch.setattr(main, "cleanup_oauth_state_tokens", lambda: None)
+
+    oauth_code = main.create_access_token(
+        data={
+            "type": "google_oauth_code",
+            "sub": "active-user-id",
+            "email": "active@example.com",
+            "nonce": "nonce",
+        }
+    )
+
+    monkeypatch.setattr(
+        main,
+        "get_user_by_id",
+        lambda _: {
+            "id": "active-user-id",
+            "email": "active@example.com",
+            "nickname": "active-user",
+            "role": "user",
+            "status": "active",
+            "token_version": 0,
+        },
+    )
+
+    client = TestClient(main.app)
+    success = client.post("/api/auth/google/exchange", json={"oauth_code": oauth_code})
+    assert success.status_code == 200
+    body = success.json()
+    assert body["access_token"]
+    assert body["user"]["id"] == "active-user-id"
+
+    monkeypatch.setattr(main, "consume_oauth_state_token", lambda _: False)
+    replay = client.post("/api/auth/google/exchange", json={"oauth_code": oauth_code})
+    assert replay.status_code == 400
+    assert replay.json()["detail"] == "만료되었거나 이미 사용된 OAuth 코드입니다"
 
 
 def test_google_callback_rejects_replayed_state(monkeypatch: Any) -> None:

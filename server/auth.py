@@ -9,7 +9,20 @@ from dotenv import load_dotenv
 _ = load_dotenv(".env")
 
 # JWT 설정
-SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+_APP_ENV = os.getenv("APP_ENV", "development").strip().lower()
+_SECRET_KEY_FROM_ENV = os.getenv("SECRET_KEY", "").strip()
+_DEFAULT_DEV_SECRET_KEY = "dev-secret-key-change-in-production"
+
+if _SECRET_KEY_FROM_ENV:
+    SECRET_KEY = _SECRET_KEY_FROM_ENV
+else:
+    SECRET_KEY = _DEFAULT_DEV_SECRET_KEY
+
+if _APP_ENV in {"production", "staging"} and (
+    not _SECRET_KEY_FROM_ENV or SECRET_KEY == _DEFAULT_DEV_SECRET_KEY
+):
+    raise RuntimeError("SECRET_KEY must be set to a strong value in production/staging")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7일
 

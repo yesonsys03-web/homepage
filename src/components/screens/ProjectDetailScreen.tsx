@@ -1,54 +1,29 @@
 import { useEffect, useState } from "react"
+import { Helmet } from "react-helmet-async"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ProjectCoverPlaceholder } from "@/components/ProjectCoverPlaceholder"
-import { TopNav } from "@/components/TopNav"
+import { TopNav, type NavScreen } from "@/components/TopNav"
 import { CommentComposer } from "@/components/CommentComposer"
 import { CommentList } from "@/components/CommentList"
 import { ReportModal } from "@/components/ReportModal"
 import { Toast } from "@/components/Toast"
 import { api, type Project, type Comment } from "@/lib/api"
+import { awardXpWithNotify } from "@/lib/use-xp-award"
+import { isAdminRole } from "@/lib/roles"
+import {
+  hasShowcaseTag,
+  readShowcaseBookmarks,
+  toggleShowcaseBookmark,
+  writeShowcaseBookmarks,
+} from "@/lib/showcase"
 import { useAuth } from "@/lib/use-auth"
-type Screen = 'home' | 'detail' | 'submit' | 'profile' | 'admin' | 'login' | 'register' | 'explore' | 'challenges' | 'about'
-
 interface ScreenProps {
-  onNavigate?: (screen: Screen) => void
+  onNavigate?: (screen: NavScreen) => void
   projectId?: string
   onEditProject?: (projectId: string) => void
-}
-
-
-// 샘플 데이터 (API 실패 시 사용)
-const sampleProject: Project = {
-  id: "1",
-  title: "AI Music Generator",
-  summary: "AI를 활용하여 음악을 생성하는 도구입니다.",
-  description: `이 프로젝트는 AI를 활용하여 사용자가 간단한 프롬프트만으로 나만의 음악을 생성할 수 있게 해줍니다.
-
-## 주요 기능
-- 텍스트 기반 음악 생성
-- 다양한 장르 지원
-- 실시간 미리보기
-- 결과물 다운로드
-
-## 사용 기술
-- React + TypeScript
-- Python (FastAPI)
-- OpenAI API
-- WaveNet`,
-  thumbnail_url: undefined,
-  demo_url: "https://example.com",
-  repo_url: "https://github.com/example",
-  platform: "Web",
-  tags: ["AI", "Music", "Web"],
-  author_id: "1",
-  author_nickname: "devkim",
-  like_count: 128,
-  comment_count: 32,
-  created_at: "2026-02-25T10:00:00Z",
-  updated_at: "2026-02-25T10:00:00Z",
 }
 
 export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: ScreenProps) {
@@ -57,6 +32,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   const [loading, setLoading] = useState(true)
   const [liked, setLiked] = useState(false)
   const [likeCount, setLikeCount] = useState(0)
+  const [bookmarkIds, setBookmarkIds] = useState<string[]>([])
   const [commentText, setCommentText] = useState("")
   const [isSubmittingComment, setIsSubmittingComment] = useState(false)
   const [reportCommentId, setReportCommentId] = useState<string | null>(null)
@@ -64,13 +40,29 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   const [toastTone, setToastTone] = useState<"info" | "success" | "error">("info")
   const [shareMenuOpen, setShareMenuOpen] = useState(false)
   const [shareCopied, setShareCopied] = useState(false)
-  const targetProjectId = projectId ?? "1"
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const targetProjectId = projectId ?? null
   const { user } = useAuth()
 
   useEffect(() => {
+    setBookmarkIds(readShowcaseBookmarks())
+  }, [])
+
+  useEffect(() => {
+    if (!targetProjectId) {
+      setProject(null)
+      setComments([])
+      setLoading(false)
+      setLoadError("프로젝트 ID가 없습니다. 목록에서 프로젝트를 다시 선택해 주세요.")
+      return
+    }
+
+    const resolvedProjectId: string = targetProjectId
+
     const fetchData = async () => {
-      const hasProjectCache = api.hasProjectDetailCache(targetProjectId)
-      const hasCommentsCache = api.hasCommentsCache(targetProjectId)
+      setLoadError(null)
+      const hasProjectCache = api.hasProjectDetailCache(resolvedProjectId)
+      const hasCommentsCache = api.hasCommentsCache(resolvedProjectId)
       if (!(hasProjectCache && hasCommentsCache)) {
         setLoading(true)
       }
@@ -86,21 +78,16 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
       try {
         const [projectData, commentsData] = await Promise.all([
-          api.getProject(targetProjectId, { onRevalidate: applyProject }),
-          api.getComments(targetProjectId, "latest", { onRevalidate: applyComments }),
+          api.getProject(resolvedProjectId, { onRevalidate: applyProject }),
+          api.getComments(resolvedProjectId, "latest", { onRevalidate: applyComments }),
         ])
         applyProject(projectData)
         applyComments(commentsData)
       } catch (error) {
-        // 실패 시 샘플 데이터 사용
-        console.error("API failed, using sample data:", error)
-        setProject(sampleProject)
-        setLikeCount(sampleProject.like_count)
-        setComments([
-          { id: "1", project_id: targetProjectId, author_id: "5", author_nickname: "coder01", content: "정말 amazing해요! 어떻게 만드셨나요?", like_count: 12, status: "visible", created_at: "2026-02-21T10:00:00Z" },
-          { id: "2", project_id: targetProjectId, author_id: "6", author_nickname: "musicfan", content: "음악 생성이 이렇게 쉽게 될 줄이야...", like_count: 8, status: "visible", created_at: "2026-02-21T11:00:00Z" },
-          { id: "3", project_id: targetProjectId, author_id: "7", author_nickname: "aidev", content: "코드 공개해주실 수 있나요?", like_count: 5, status: "visible", created_at: "2026-02-21T12:00:00Z" },
-        ])
+        console.error("Failed to load project detail:", error)
+        setProject(null)
+        setComments([])
+        setLoadError("프로젝트 정보를 불러오지 못했습니다.")
       } finally {
         setLoading(false)
       }
@@ -110,12 +97,14 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   }, [targetProjectId])
 
   const handleLike = async () => {
+    if (!project) return
+
     try {
       if (liked) {
-        const result = await api.unlikeProject(targetProjectId)
+        const result = await api.unlikeProject(project.id)
         setLikeCount(result.like_count)
       } else {
-        const result = await api.likeProject(targetProjectId)
+        const result = await api.likeProject(project.id)
         setLikeCount(result.like_count)
       }
       setLiked(!liked)
@@ -125,6 +114,8 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
   }
 
   const handleCommentSubmit = async () => {
+    if (!project) return
+
     const content = commentText.trim()
     if (!content || isSubmittingComment) return
 
@@ -143,7 +134,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
     const optimisticComment: Comment = {
       id: `temp-${Date.now()}`,
-      project_id: targetProjectId,
+      project_id: project.id,
       author_id: user.id,
       author_nickname: user.nickname,
       content,
@@ -157,9 +148,25 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     setIsSubmittingComment(true)
 
     try {
-      await api.createComment(targetProjectId, content)
-      const commentsData = await api.getComments(targetProjectId, "latest", { force: true })
-      setComments(commentsData.items || [])
+      const createdComment = await api.createComment(project.id, content)
+      void awardXpWithNotify("comment_create", createdComment.id, (msg, tone) => {
+        setToastTone(tone ?? "info")
+        setToastMessage(msg)
+      })
+      setComments((prev) =>
+        prev.map((existing) =>
+          existing.id === optimisticComment.id ? createdComment : existing
+        )
+      )
+
+      try {
+        const commentsData = await api.getComments(project.id, "latest", { force: true })
+        setComments(commentsData.items || [])
+      } catch (refreshError) {
+        console.error("Comment refresh failed after successful create:", refreshError)
+        setToastTone("info")
+        setToastMessage("댓글은 등록되었지만 목록 새로고침에 실패했습니다.")
+      }
     } catch (error) {
       console.error("Comment failed:", error)
       setComments((prev) => prev.filter((comment) => comment.id !== optimisticComment.id))
@@ -195,7 +202,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     return () => window.clearTimeout(timer)
   }, [toastMessage])
 
-  if (loading || !project) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-[#0B1020] px-4 py-10">
         <div className="max-w-7xl mx-auto animate-pulse space-y-4">
@@ -209,6 +216,24 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     )
   }
 
+  if (!project) {
+    return (
+      <div className="min-h-screen bg-[#0B1020] px-4 py-10">
+        <div className="mx-auto max-w-xl rounded-xl border border-[#111936] bg-[#161F42] p-6 text-center">
+          <h2 className="text-xl font-semibold text-[#F4F7FF]">프로젝트를 찾을 수 없습니다</h2>
+          <p className="mt-2 text-sm text-[#B8C3E6]">{loadError ?? "요청한 프로젝트를 불러올 수 없습니다."}</p>
+          <Button
+            type="button"
+            className="mt-4 bg-[#23D5AB] text-[#0B1020] hover:bg-[#23D5AB]/90"
+            onClick={() => onNavigate?.("home")}
+          >
+            홈으로 이동
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString("ko-KR", {
       year: "numeric",
@@ -217,9 +242,42 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
     })
   }
 
-  const canEditProject = !!user && (user.role === "admin" || user.id === project.author_id)
+  const canEditProject = !!user && (isAdminRole(user.role) || user.id === project.author_id)
+  const isShowcaseProject = hasShowcaseTag(project.tags)
+  const isBookmarkedShowcase = bookmarkIds.includes(project.id)
+  const reactionIcon = isShowcaseProject ? "👏" : "❤️"
+  const reactionLabel = isShowcaseProject ? "박수" : "좋아요"
 
-  const shareUrl = `${window.location.origin}${window.location.pathname}?project=${targetProjectId}`
+  const handleToggleShowcaseBookmark = () => {
+    const next = toggleShowcaseBookmark(bookmarkIds, project.id)
+    setBookmarkIds(next)
+    writeShowcaseBookmarks(next)
+    setToastTone("success")
+    setToastMessage(
+      next.includes(project.id)
+        ? "저도 만들어볼게요 목록에 담았어요."
+        : "저도 만들어볼게요 목록에서 뺐어요.",
+    )
+  }
+
+  const shareUrl = `${window.location.origin}/project/${encodeURIComponent(project.id)}`
+  const projectJsonLd = JSON.stringify({
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: project.title,
+    description: project.summary,
+    applicationCategory: project.platform,
+    operatingSystem: "Web",
+    url: shareUrl,
+    image: project.thumbnail_url || undefined,
+    author: {
+      "@type": "Person",
+      name: project.author_nickname,
+    },
+    datePublished: project.created_at,
+    keywords: project.tags.join(", "),
+    sameAs: [project.demo_url, project.repo_url].filter((value): value is string => Boolean(value)),
+  })
 
   const copyShareUrl = async () => {
     if (navigator.clipboard?.writeText) {
@@ -296,6 +354,11 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
 
   return (
     <div className="min-h-screen bg-[#0B1020]">
+      <Helmet>
+        <script id="project-detail-jsonld" type="application/ld+json">
+          {projectJsonLd}
+        </script>
+      </Helmet>
       <TopNav active="home" onNavigate={onNavigate} />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
@@ -316,7 +379,7 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
                 <Button
                   variant="outline"
                   className="border-[#23D5AB] text-[#23D5AB] hover:bg-[#23D5AB]/10"
-                  onClick={() => onEditProject?.(targetProjectId)}
+                  onClick={() => onEditProject?.(project.id)}
                 >
                   수정
                 </Button>
@@ -325,12 +388,22 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
                 variant="outline" 
                 onClick={handleLike}
                 className={`border-[#111936] ${liked ? "bg-[#FF5D8F] text-white" : "text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]"}`}
+                aria-label={`${reactionLabel} ${likeCount}`}
               >
-                ❤️ {likeCount}
+                {reactionIcon} {likeCount}
               </Button>
               <Button variant="outline" className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]">
                 💬 {comments.length}
               </Button>
+              {isShowcaseProject ? (
+                <Button
+                  variant="outline"
+                  className="border-[#111936] text-[#B8C3E6] hover:bg-[#161F42] hover:text-[#F4F7FF]"
+                  onClick={handleToggleShowcaseBookmark}
+                >
+                  🔖 {isBookmarkedShowcase ? "담아뒀어요" : "저도 만들어볼게요"}
+                </Button>
+              ) : null}
               <div className="relative">
                 <Button
                   variant="outline"
@@ -401,12 +474,15 @@ export function ProjectDetailScreen({ onNavigate, projectId, onEditProject }: Sc
               </Badge>
             ))}
           </div>
+          {isShowcaseProject ? (
+            <p className="mt-3 text-sm text-[#8A96BE]">이 자랑 글의 반응은 좋아요 대신 박수로 읽혀요.</p>
+          ) : null}
         </div>
 
         {/* Media Area */}
         <div className="aspect-video bg-gradient-to-br from-[#161F42] to-[#0B1020] rounded-xl mb-8 flex items-center justify-center">
           {project.thumbnail_url ? (
-            <img src={project.thumbnail_url} alt={project.title} className="w-full h-full object-cover rounded-xl" />
+            <img src={project.thumbnail_url} alt={project.title} loading="lazy" decoding="async" className="w-full h-full object-cover rounded-xl" />
           ) : (
             <ProjectCoverPlaceholder
               seedKey={project.id}
